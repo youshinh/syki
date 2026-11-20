@@ -1,0 +1,449 @@
+//! Virtual-origin WebView2 host and single `PostWebMessageAsJson` dispatcher (#01).
+//!
+//! Serves `frontend/` strictly from in-memory `include_bytes!` assets under
+//! `https://app.syki.local/` and routes dynamic endpoints such as
+//! `/api/print/preview.pdf` through an optional `DynamicRouteHandler`.
+
+use std::cell::RefCell;
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::{mpsc, Arc};
+
+use syki_core::rpc::{RpcRequest, RpcResponse};
+use webview2_com::Microsoft::Web::WebView2::Win32::{
+    CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2Controller,
+    ICoreWebView2EnvironmentOptions, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+};
+use webview2_com::{
+    CoTaskMemPWSTR, CreateCoreWebView2ControllerCompletedHandler,
+    CreateCoreWebView2EnvironmentCompletedHandler, WebMessageReceivedEventHandler,
+    WebResourceRequestedEventHandler,
+};
+use windows::core::{PCWSTR, PWSTR};
+use windows::Win32::Foundation::{E_POINTER, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::UpdateWindow;
+use windows::Win32::System::Com::{CoInitializeEx, IStream, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::HiDpi::{SetProcessDpiAwareness, PROCESS_PER_MONITOR_DPI_AWARE};
+use windows::Win32::UI::Shell::SHCreateMemStream;
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW,
+    GetWindowLongPtrW, PostQuitMessage, RegisterClassW, SetWindowLongPtrW, ShowWindow,
+    TranslateMessage, CW_USEDEFAULT, GWLP_USERDATA, MSG, SW_SHOW, WINDOW_EX_STYLE, WM_CLOSE,
+    WM_DESTROY, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+};
+
+pub const VIRTUAL_ORIGIN: &str = "https://app.syki.local/";
+
+pub type DynamicRouteHandler =
+    Box<dyn Fn(&str) -> Option<(u16, &'static str, Vec<u8>)> + Send + Sync>;
+
+#[derive(Debug, Clone)]
+pub struct WebViewHostConfig {
+    pub virtual_origin: &'static str,
+    pub user_data_dir: PathBuf,
+    pub title: String,
+    pub debug: bool,
+}
+
+/// Parses an inbound JSON RPC request and serializes the [`RpcResponse`].
+pub fn dispatch_rpc_message(
+    raw_json: &str,
+    handler: &dyn Fn(&RpcRequest) -> RpcResponse,
+) -> String {
+    match serde_json::from_str::<RpcRequest>(raw_json) {
+        Ok(req) => serde_json::to_string(&handler(&req))
+            .unwrap_or_else(|e| format!("{{\"id\":\"\",\"ok\":false,\"error\":\"{e}\"}}")),
+        Err(err) => {
+            let resp = RpcResponse::err("", format!("invalid rpc request: {err}"));
+            serde_json::to_string(&resp)
+                .unwrap_or_else(|_| "{\"id\":\"\",\"ok\":false,\"error\":\"invalid\"}".into())
+        }
+    }
+}
+
+/// Baseline RPC dispatcher for tracer-bullet boot verification (#01).
+pub fn default_tracer_handler(req: &RpcRequest) -> RpcResponse {
+    match req.method.as_str() {
+        "getAppVersion" => RpcResponse::ok(&req.id, serde_json::json!(syki_core::APP_VERSION)),
+        "uiReady" => RpcResponse::ok(&req.id, serde_json::json!(true)),
+        "getPlatformCapabilities" => RpcResponse::ok(
+            &req.id,
+            serde_json::json!({
+                "os": "win32",
+                "nativeImeSwitch": true,
+                "tray": true,
+                "globalHotkey": true
+            }),
+        ),
+        _ => RpcResponse::err(&req.id, format!("unknown method: {}", req.method)),
+    }
+}
+
+/// Resolves a URI under [`VIRTUAL_ORIGIN`] against dynamic routes first, then bundled assets.
+/// External origins return `None` without fallback.
+pub fn resolve_virtual_request(
+    uri: &str,
+    dynamic_handler: Option<&DynamicRouteHandler>,
+) -> Option<(u16, &'static str, Vec<u8>)> {
+    if !uri.starts_with(VIRTUAL_ORIGIN) {
+        return None;
+    }
+    let rel = &uri[VIRTUAL_ORIGIN.len() - 1..];
+    if let Some(handler) = dynamic_handler {
+        if let Some(resp) = handler(rel) {
+            return Some(resp);
+        }
+    }
+    crate::assets::resolve_static_asset(rel).map(|a| (200, a.mime, a.bytes.to_vec()))
+}
+
+struct WindowState {
+    controller: Rc<RefCell<Option<ICoreWebView2Controller>>>,
+}
+
+fn client_rect_of(hwnd: HWND) -> RECT {
+    let mut rect = RECT::default();
+    unsafe {
+        let _ = GetClientRect(hwnd, &mut rect);
+    }
+    rect
+}
+
+fn reason_phrase_for(status: u16) -> &'static str {
+    match status {
+        200 => "OK",
+        403 => "Forbidden",
+        404 => "Not Found",
+        500 => "Internal Server Error",
+        _ => "Status",
+    }
+}
+
+extern "system" fn host_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    w_param: WPARAM,
+    l_param: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_SIZE => {
+            let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const WindowState;
+            if !ptr.is_null() {
+                let state = unsafe { &*ptr };
+                if let Some(ctrl) = state.controller.borrow().as_ref() {
+                    let bounds = client_rect_of(hwnd);
+                    let _ = unsafe { ctrl.SetBounds(bounds) };
+                }
+            }
+            LRESULT(0)
+        }
+        WM_CLOSE => {
+            unsafe {
+                let _ = DestroyWindow(hwnd);
+            }
+            LRESULT(0)
+        }
+        WM_DESTROY => {
+            let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut WindowState;
+            if !ptr.is_null() {
+                unsafe {
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                    let _ = Box::from_raw(ptr);
+                }
+            }
+            unsafe { PostQuitMessage(0) };
+            LRESULT(0)
+        }
+        _ => unsafe { DefWindowProcW(hwnd, msg, w_param, l_param) },
+    }
+}
+
+/// Launches the single Win32 frame + WebView2 controller loop against `https://app.syki.local/`.
+pub fn run_webview_host(
+    config: WebViewHostConfig,
+    rpc_handler: Arc<dyn Fn(&RpcRequest) -> RpcResponse + Send + Sync>,
+    dynamic_handler: Option<Arc<DynamicRouteHandler>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    unsafe {
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
+    }
+    let _ = unsafe { SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE) };
+
+    let class_name = CoTaskMemPWSTR::from("SykiLiteWindowClass");
+    let title_w = CoTaskMemPWSTR::from(config.title.as_str());
+    let hinstance = unsafe { GetModuleHandleW(None) }
+        .ok()
+        .map(|h| HINSTANCE(h.0));
+
+    let wnd_class = WNDCLASSW {
+        lpfnWndProc: Some(host_wnd_proc),
+        hInstance: hinstance.unwrap_or_default(),
+        lpszClassName: *class_name.as_ref().as_pcwstr(),
+        ..Default::default()
+    };
+    let atom = unsafe { RegisterClassW(&wnd_class) };
+    if atom == 0 {
+        return Err(windows::core::Error::from_thread().into());
+    }
+
+    let hwnd = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            *class_name.as_ref().as_pcwstr(),
+            *title_w.as_ref().as_pcwstr(),
+            WS_OVERLAPPEDWINDOW,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            1280,
+            820,
+            None,
+            None,
+            hinstance,
+            None,
+        )?
+    };
+
+    let controller_slot: Rc<RefCell<Option<ICoreWebView2Controller>>> = Rc::new(RefCell::new(None));
+    let boxed_state = Box::new(WindowState {
+        controller: Rc::clone(&controller_slot),
+    });
+    unsafe {
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(boxed_state) as isize);
+    }
+
+    let user_data_str = config.user_data_dir.to_string_lossy().into_owned();
+    let environment = {
+        let (tx, rx) = mpsc::channel();
+        let user_data_for_env = user_data_str;
+        CreateCoreWebView2EnvironmentCompletedHandler::wait_for_async_operation(
+            Box::new(move |handler| unsafe {
+                let user_data_w = CoTaskMemPWSTR::from(user_data_for_env.as_str());
+                CreateCoreWebView2EnvironmentWithOptions(
+                    PCWSTR::null(),
+                    *user_data_w.as_ref().as_pcwstr(),
+                    None::<&ICoreWebView2EnvironmentOptions>,
+                    &handler,
+                )
+                .map_err(webview2_com::Error::WindowsError)
+            }),
+            Box::new(move |error_code, env| {
+                error_code?;
+                let _ = tx.send(env.ok_or_else(|| windows::core::Error::from(E_POINTER)));
+                Ok(())
+            }),
+        )?;
+        rx.recv()
+            .map_err(|_| webview2_com::Error::SendError)??
+    };
+
+    let controller = {
+        let (tx, rx) = mpsc::channel();
+        let env_ref = environment.clone();
+        CreateCoreWebView2ControllerCompletedHandler::wait_for_async_operation(
+            Box::new(move |handler| unsafe {
+                env_ref
+                    .CreateCoreWebView2Controller(hwnd, &handler)
+                    .map_err(webview2_com::Error::WindowsError)
+            }),
+            Box::new(move |error_code, ctrl| {
+                error_code?;
+                let _ = tx.send(ctrl.ok_or_else(|| windows::core::Error::from(E_POINTER)));
+                Ok(())
+            }),
+        )?;
+        rx.recv()
+            .map_err(|_| webview2_com::Error::SendError)??
+    };
+
+    unsafe {
+        controller.SetBounds(client_rect_of(hwnd))?;
+        controller.SetIsVisible(true)?;
+    }
+    *controller_slot.borrow_mut() = Some(controller.clone());
+
+    let webview = unsafe { controller.CoreWebView2()? };
+    if !config.debug {
+        unsafe {
+            let settings = webview.Settings()?;
+            settings.SetAreDefaultContextMenusEnabled(false)?;
+            settings.SetAreDevToolsEnabled(false)?;
+        }
+    }
+
+    let filter_pattern = CoTaskMemPWSTR::from(format!("{}*", config.virtual_origin).as_str());
+    unsafe {
+        webview.AddWebResourceRequestedFilter(
+            *filter_pattern.as_ref().as_pcwstr(),
+            COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+        )?;
+    }
+
+    let env_for_res = environment.clone();
+    let dyn_for_res = dynamic_handler.clone();
+    let mut res_token: i64 = 0;
+    unsafe {
+        webview.add_WebResourceRequested(
+            &WebResourceRequestedEventHandler::create(Box::new(move |_sender, args| {
+                let Some(args) = args else {
+                    return Ok(());
+                };
+                let req = args.Request()?;
+                let mut uri_raw = PWSTR::null();
+                req.Uri(&mut uri_raw)?;
+                let uri = CoTaskMemPWSTR::from(uri_raw).to_string();
+
+                let (status, mime, body) = match resolve_virtual_request(
+                    &uri,
+                    dyn_for_res.as_deref(),
+                ) {
+                    Some(hit) => hit,
+                    None if !uri.starts_with(VIRTUAL_ORIGIN) => {
+                        (403, "text/plain; charset=utf-8", b"Forbidden".to_vec())
+                    }
+                    None => (404, "text/plain; charset=utf-8", b"Not Found".to_vec()),
+                };
+
+                let stream: Option<IStream> = SHCreateMemStream(Some(&body));
+                let headers = format!("Content-Type: {mime}\r\nCache-Control: no-store");
+                let reason_w = CoTaskMemPWSTR::from(reason_phrase_for(status));
+                let headers_w = CoTaskMemPWSTR::from(headers.as_str());
+                let response = env_for_res.CreateWebResourceResponse(
+                    stream.as_ref(),
+                    status as i32,
+                    *reason_w.as_ref().as_pcwstr(),
+                    *headers_w.as_ref().as_pcwstr(),
+                )?;
+                args.SetResponse(&response)?;
+                Ok(())
+            })),
+            &mut res_token,
+        )?;
+    }
+
+    let webview_for_msg = webview.clone();
+    let rpc_for_msg = rpc_handler.clone();
+    let mut msg_token: i64 = 0;
+    unsafe {
+        webview.add_WebMessageReceived(
+            &WebMessageReceivedEventHandler::create(Box::new(move |_sender, args| {
+                let Some(args) = args else {
+                    return Ok(());
+                };
+                let mut raw_pwstr = PWSTR::null();
+                if args.WebMessageAsJson(&mut raw_pwstr).is_ok() {
+                    let raw_json = CoTaskMemPWSTR::from(raw_pwstr).to_string();
+                    let reply_json = dispatch_rpc_message(&raw_json, rpc_for_msg.as_ref());
+                    let reply_w = CoTaskMemPWSTR::from(reply_json.as_str());
+                    let _ = webview_for_msg.PostWebMessageAsJson(*reply_w.as_ref().as_pcwstr());
+                }
+                Ok(())
+            })),
+            &mut msg_token,
+        )?;
+    }
+
+    let origin_w = CoTaskMemPWSTR::from(config.virtual_origin);
+    unsafe {
+        webview.Navigate(*origin_w.as_ref().as_pcwstr())?;
+        let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = UpdateWindow(hwnd);
+    }
+
+    let mut msg = MSG::default();
+    loop {
+        let res = unsafe { GetMessageW(&mut msg, None, 0, 0).0 };
+        match res {
+            -1 => return Err(windows::core::Error::from_thread().into()),
+            0 => break,
+            _ => unsafe {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            },
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dispatch_rpc_message_handles_tracer_methods_and_errors() {
+        let version_reply = dispatch_rpc_message(
+            r#"{"id":"1","method":"getAppVersion","params":{}}"#,
+            &default_tracer_handler,
+        );
+        let parsed: RpcResponse = serde_json::from_str(&version_reply).expect("valid response");
+        assert!(parsed.ok);
+        assert_eq!(parsed.id, "1");
+        assert_eq!(parsed.result, Some(serde_json::json!(syki_core::APP_VERSION)));
+
+        let ready_reply = dispatch_rpc_message(
+            r#"{"id":"2","method":"uiReady","params":{}}"#,
+            &default_tracer_handler,
+        );
+        let ready: RpcResponse = serde_json::from_str(&ready_reply).expect("valid response");
+        assert!(ready.ok);
+        assert_eq!(ready.result, Some(serde_json::json!(true)));
+
+        let unknown_reply = dispatch_rpc_message(
+            r#"{"id":"3","method":"nope","params":{}}"#,
+            &default_tracer_handler,
+        );
+        let unknown: RpcResponse = serde_json::from_str(&unknown_reply).expect("valid response");
+        assert!(!unknown.ok);
+        assert_eq!(unknown.error.as_deref(), Some("unknown method: nope"));
+
+        let bad_json = dispatch_rpc_message("{not json", &default_tracer_handler);
+        let bad: RpcResponse = serde_json::from_str(&bad_json).expect("valid error envelope");
+        assert!(!bad.ok);
+        assert!(bad
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("invalid rpc request:"));
+    }
+
+    #[test]
+    fn resolve_virtual_request_enforces_origin_and_routes_dynamic_paths() {
+        let dynamic: DynamicRouteHandler = Box::new(|path| {
+            if path == "/api/print/preview.pdf" {
+                Some((200, "application/pdf", b"%PDF-1.4".to_vec()))
+            } else {
+                None
+            }
+        });
+
+        let root = resolve_virtual_request("https://app.syki.local/", Some(&dynamic))
+            .expect("root index serves");
+        assert_eq!(root.0, 200);
+        assert_eq!(root.1, "text/html; charset=utf-8");
+
+        let proxy = resolve_virtual_request(
+            "https://app.syki.local/js/backend_proxy.js?v=1.0.0",
+            Some(&dynamic),
+        )
+        .expect("backend_proxy.js serves");
+        assert_eq!(proxy.0, 200);
+        assert_eq!(proxy.1, "application/javascript; charset=utf-8");
+
+        let pdf = resolve_virtual_request(
+            "https://app.syki.local/api/print/preview.pdf",
+            Some(&dynamic),
+        )
+        .expect("dynamic pdf route serves");
+        assert_eq!(pdf, (200, "application/pdf", b"%PDF-1.4".to_vec()));
+
+        assert!(
+            resolve_virtual_request("https://evil.example/index.html", Some(&dynamic)).is_none(),
+            "external origins must never fall through"
+        );
+        assert!(
+            resolve_virtual_request("http://app.syki.local/index.html", Some(&dynamic)).is_none(),
+            "non-https origin must be rejected"
+        );
+    }
+}

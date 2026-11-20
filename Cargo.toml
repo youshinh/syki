@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/syki-core",
+    "crates/syki-win",
+    "crates/syki-gui",
+    "crates/syki-cli",
+]
+
+[workspace.package]
+version = "2.0.0-alpha.1"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+syki-core = { path = "crates/syki-core" }
+syki-win = { path = "crates/syki-win" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+webview2-com = "0.39.1"
+windows = "0.62"
+windows-core = "0.62"

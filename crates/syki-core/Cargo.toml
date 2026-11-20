@@ -1,0 +1,10 @@
+[package]
+name = "syki-core"
+version.workspace = true
+edition.workspace = true
+description = "Shared RPC contracts and runtime environment helpers for Syki Lite."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

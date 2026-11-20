@@ -1,0 +1,13 @@
+[package]
+name = "syki-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "syki"
+path = "src/main.rs"
+
+[dependencies]
+syki-core.workspace = true
+syki-win.workspace = true
