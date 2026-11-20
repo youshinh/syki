@@ -11,7 +11,7 @@ use syki_core::storage::{
     ActiveFileWatcher, ConfigStore, JsonConfigStore, LoadedNote, NoteFileStore, SessionStore,
 };
 
-use crate::dialogs;
+use crate::{assets_store, clipboard, dialogs, ime};
 
 pub type EventSender = Arc<dyn Fn(RpcEvent) + Send + Sync>;
 
@@ -311,6 +311,48 @@ impl CoreState {
                 }
             }
 
+            "saveAsset" => {
+                let base_dir = param_str(&req.params, 0, "baseDir").unwrap_or_default();
+                let ext = param_str(&req.params, 1, "ext").unwrap_or_default();
+                let data_b64 = param_str(&req.params, 2, "dataBase64").unwrap_or_default();
+                match assets_store::save_asset(&self.env.data_dir, &base_dir, &ext, &data_b64) {
+                    Ok(res) => RpcResponse::ok(&req.id, serde_json::to_value(res).unwrap_or(Value::Null)),
+                    Err(e) => RpcResponse::err(&req.id, e),
+                }
+            }
+
+            "importAssetFile" => {
+                let base_dir = param_str(&req.params, 0, "baseDir").unwrap_or_default();
+                let file_name = param_str(&req.params, 1, "fileName").unwrap_or_default();
+                let data_b64 = param_str(&req.params, 2, "dataBase64").unwrap_or_default();
+                match assets_store::import_asset_file(&self.env.data_dir, &base_dir, &file_name, &data_b64) {
+                    Ok(res) => RpcResponse::ok(&req.id, serde_json::to_value(res).unwrap_or(Value::Null)),
+                    Err(e) => RpcResponse::err(&req.id, e),
+                }
+            }
+
+            "copyPNGToClipboard" => {
+                let data_url = param_str(&req.params, 0, "dataUrl").unwrap_or_default();
+                match clipboard::copy_png_to_clipboard(&data_url) {
+                    Ok(()) => RpcResponse::ok(&req.id, json!(true)),
+                    Err(e) => RpcResponse::err(&req.id, e),
+                }
+            }
+
+            "setIMEMode" => {
+                let enable = param_bool(&req.params, 0, "enableJapanese").unwrap_or(false);
+                ime::set_ime_mode(enable);
+                RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "retypeWithImeAsync" => {
+                let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
+                let romaji = param_str(&req.params, 1, "romaji").unwrap_or_default();
+                let sender = self.event_sender.lock().expect("event_sender mutex").clone();
+                ime::retype_with_ime_async(req_id, romaji, sender);
+                RpcResponse::ok(&req.id, json!(true))
+            }
+
             other => RpcResponse::err(&req.id, format!("not_implemented_yet: {other}")),
         }
     }
@@ -366,6 +408,14 @@ fn param_u64(params: &Value, idx: usize, key: &str) -> Option<u64> {
     match params {
         Value::Array(arr) => arr.get(idx).and_then(|v| v.as_u64()),
         Value::Object(map) => map.get(key).and_then(|v| v.as_u64()),
+        _ => None,
+    }
+}
+
+fn param_bool(params: &Value, idx: usize, key: &str) -> Option<bool> {
+    match params {
+        Value::Array(arr) => arr.get(idx).and_then(|v| v.as_bool()),
+        Value::Object(map) => map.get(key).and_then(|v| v.as_bool()),
         _ => None,
     }
 }
@@ -700,6 +750,32 @@ mod tests {
         let unimpl = state.dispatch(&req("searchScraps", json!(["query"])));
         assert!(!unimpl.ok);
         assert!(unimpl.error.unwrap().starts_with("not_implemented_yet:"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn save_asset_import_asset_and_retype_ime_dispatch() {
+        let (root, state) = temp_env("assets-ime");
+        let saved = state.dispatch(&req("saveAsset", json!([root.to_string_lossy(), "png", "aGVsbG8="])));
+        assert!(saved.ok);
+        let rel = saved.result.unwrap()["relPath"].as_str().unwrap().to_string();
+        assert!(rel.starts_with("./assets/"));
+
+        let imported = state.dispatch(&req("importAssetFile", json!([root.to_string_lossy(), "pic.png", "aGVsbG8="])));
+        assert!(imported.ok);
+        assert_eq!(imported.result.unwrap()["relPath"], "./assets/pic.png");
+
+        let (tx, rx) = std::sync::mpsc::channel::<RpcEvent>();
+        state.set_event_sender(Arc::new(move |ev| {
+            let _ = tx.send(ev);
+        }));
+        let retype = state.dispatch(&req("retypeWithImeAsync", json!(["req-1", "INVALID!"])));
+        assert!(retype.ok);
+        let ev = rx.recv_timeout(Duration::from_secs(2)).expect("ime:retype event");
+        assert_eq!(ev.topic, "ime:retype");
+        assert_eq!(ev.payload["reqId"], "req-1");
+        assert!(!ev.payload["error"].as_str().unwrap().is_empty());
+
         let _ = std::fs::remove_dir_all(root);
     }
 }
