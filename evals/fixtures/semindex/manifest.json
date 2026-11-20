@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "embedder": "fixture-4d",
+  "dim": 4,
+  "chunker_version": 4,
+  "max_chars": 150,
+  "header": false,
+  "include_ai": false,
+  "metas": 3,
+  "metas_bytes": 788,
+  "vecs": 3,
+  "files": {
+    "2026-09-17.md": {
+      "size": 403,
+      "mod_ns": 1789632000000000000,
+      "metas": [
+        0,
+        1
+      ]
+    },
+    "2026-09-15.md": {
+      "size": 199,
+      "mod_ns": 1789459200000000000,
+      "metas": [
+        2
+      ]
+    }
+  },
+  "updated": "2026-09-18T10:24:00Z"
+}

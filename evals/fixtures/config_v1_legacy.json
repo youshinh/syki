@@ -1,0 +1,117 @@
+{
+  "general": {
+    "language": "ja",
+    "theme": "olive",
+    "autoSave": true,
+    "pasteImageOcr": true,
+    "restoreSession": true,
+    "trayResident": true,
+    "splitViewOnStartup": false,
+    "imeGuardian": true,
+    "aiCorrection": true,
+    "scrapDir": "~/Documents/syki-sok/scraps"
+  },
+  "text": {
+    "baseUrl": "http://localhost:8080/v1",
+    "model": "qwen3.8-flash-next",
+    "apiKey": "",
+    "systemPrompt": "You are a concise Markdown assistant."
+  },
+  "autocomplete": {
+    "enabled": true,
+    "baseUrl": "http://localhost:8080/v1",
+    "model": "qwen3.8-flash-next",
+    "apiKey": "",
+    "delayMs": 450,
+    "maxTokens": 32
+  },
+  "vision": {
+    "baseUrl": "https://generativelanguage.googleapis.com",
+    "model": "gemini-flash-lite-latest",
+    "apiKey": "FIXTURE-DUMMY-KEY-NOT-SECRET",
+    "prompt": "Transcribe all visible text, tables, and diagrams accurately into Markdown."
+  },
+  "image": {
+    "baseUrl": "https://generativelanguage.googleapis.com",
+    "model": "gemini-3.1-flash-lite-image",
+    "apiKey": "FIXTURE-DUMMY-KEY-NOT-SECRET",
+    "aspectRatio": "16:9",
+    "resolution": "1024"
+  },
+  "semantic": {
+    "enabled": true,
+    "model": {
+      "baseUrl": "http://localhost:11434",
+      "model": "bge-m3"
+    }
+  },
+  "speech": {
+    "provider": "whisper-local",
+    "model": "haas-ja-v1.0-q8_0",
+    "language": "ja"
+  },
+  "voice": {
+    "model": "haas-ja-v1.0-q8_0",
+    "apiStyle": "auto",
+    "languageCodes": [
+      "ja-JP"
+    ],
+    "mode": "smart",
+    "silence_timeout_sec": 5,
+    "baseUrl": "http://127.0.0.1:8178/v1",
+    "apiKey": ""
+  },
+  "cli": {
+    "openResultInNewTab": true,
+    "openErrorInNewTab": true
+  },
+  "webView": {
+    "idleTrimMs": 30000,
+    "idleDetachMs": 300000
+  },
+  "shortcuts": {
+    "previewToSide": "Ctrl+Alt+V",
+    "inlineRewrite": "Ctrl+K"
+  },
+  "ocr": {
+    "onDevice": true
+  },
+  "ollama": {
+    "autoStart": true,
+    "managedModel": "gemma4:e2b"
+  },
+  "gitSync": {
+    "enabled": true,
+    "debounceSeconds": 30,
+    "branch": "main",
+    "remoteUrl": "https://example.invalid/repo.git"
+  },
+  "cfBridge": {
+    "enabled": false,
+    "tunnelUrl": ""
+  },
+  "inbox": {
+    "enabled": true,
+    "folder": "C:\\Users\\demo\\Inbox"
+  },
+  "lessons": {
+    "autoPropose": true
+  },
+  "mobileDrop": {
+    "idleTimeoutSeconds": 60
+  },
+  "slotAgent": {
+    "default_agent": "claude-code"
+  },
+  "stickyNotes": {
+    "enabled": true
+  },
+  "scraps": {
+    "scrapDir": "~/Documents/syki-sok/scraps",
+    "gitSyncEnabled": true,
+    "gitSyncDebounceSeconds": 30,
+    "gitRemoteBranch": "main",
+    "gitRemoteUrl": "https://example.invalid/scraps.git",
+    "maxPipeSizeMB": 10
+  }
+}

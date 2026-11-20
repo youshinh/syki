@@ -3,6 +3,7 @@
 *.pdb
 node_modules/
 .scratch/
-scraps/
+/scraps/
 *.local
 .env
+evals/reports/

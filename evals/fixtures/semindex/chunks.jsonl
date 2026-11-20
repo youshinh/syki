@@ -1,0 +1,3 @@
+{"rel":"2026-09-17.md","entry":0,"line":4,"end":5,"date":"2026-09-17","heading":"10:12 API 設計メモ #work #idea","kind":"note","text":"Batch upload endpoint design and Rust zero-copy search engine notes.","hash":"1922fb209b42bd346c49f294d75a7b18","v":0}
+{"rel":"2026-09-17.md","entry":1,"line":12,"end":12,"date":"2026-09-17","heading":"15:40 リリース準備 #work","kind":"note","text":"Verify CP932 legacy notes and semindex vectors.bin compatibility.","hash":"076b6150fb1042d165206502d987a2c1","v":1}
+{"rel":"2026-09-15.md","entry":0,"line":4,"end":5,"date":"2026-09-15","heading":"09:30 セキュリティ監査メモ #urgent #work","kind":"note","text":"IPC session token uses constant-time comparison and never leaks tokens.","hash":"f3af671f32fcefbacfd8808ac6cb8e7a","v":2}

@@ -1,0 +1,110 @@
+{
+  "session_example": {
+    "pid": 4242,
+    "port": 49152,
+    "token": "fixture-secret-token-0123456789abcdef",
+    "started_at": "2026-09-18T10:24:00Z"
+  },
+  "error_codes": {
+    "unauthorized": -32000,
+    "conflict": -32001,
+    "not_found": -32002,
+    "no_selection": -32003
+  },
+  "read_only_methods": [
+    "buffer.get",
+    "buffer.get_selection",
+    "tab.list"
+  ],
+  "protected_methods": [
+    "buffer.set",
+    "tab.open",
+    "ui.set",
+    "pty.exec",
+    "ocr.run",
+    "speech.transcribe"
+  ],
+  "cases": [
+    {
+      "name": "read_no_auth_allowed",
+      "method": "buffer.get",
+      "auth": "",
+      "expect_ok": true
+    },
+    {
+      "name": "read_sel_no_auth_allowed",
+      "method": "buffer.get_selection",
+      "auth": "",
+      "expect_ok": true
+    },
+    {
+      "name": "tab_list_no_auth_allowed",
+      "method": "tab.list",
+      "auth": "",
+      "expect_ok": true
+    },
+    {
+      "name": "read_wrong_auth_denied",
+      "method": "buffer.get",
+      "auth": "wrong-token",
+      "expect_ok": false,
+      "expect_code": -32000,
+      "must_not_leak": true
+    },
+    {
+      "name": "write_no_auth_denied",
+      "method": "buffer.set",
+      "auth": "",
+      "expect_ok": false,
+      "expect_code": -32000,
+      "must_not_leak": true
+    },
+    {
+      "name": "write_wrong_auth_denied",
+      "method": "buffer.set",
+      "auth": "wrong-token",
+      "expect_ok": false,
+      "expect_code": -32000,
+      "must_not_leak": true
+    },
+    {
+      "name": "write_valid_auth_allowed",
+      "method": "buffer.set",
+      "auth": "fixture-secret-token-0123456789abcdef",
+      "expect_ok": true
+    },
+    {
+      "name": "ui_set_valid_auth_allowed",
+      "method": "ui.set",
+      "auth": "fixture-secret-token-0123456789abcdef",
+      "expect_ok": true
+    },
+    {
+      "name": "pty_exec_no_auth_denied",
+      "method": "pty.exec",
+      "auth": "",
+      "expect_ok": false,
+      "expect_code": -32000,
+      "must_not_leak": true
+    },
+    {
+      "name": "ocr_run_no_auth_denied",
+      "method": "ocr.run",
+      "auth": "",
+      "expect_ok": false,
+      "expect_code": -32000,
+      "must_not_leak": true
+    },
+    {
+      "name": "legacy_pipe_no_auth_allowed",
+      "legacy_message": {
+        "action": "pipe",
+        "content": "echo hello",
+        "command": "echo",
+        "cwd": "C:\\Users\\demo",
+        "timestamp": "2026-09-18T10:24:00Z"
+      },
+      "expect_ok": true
+    }
+  ]
+}
