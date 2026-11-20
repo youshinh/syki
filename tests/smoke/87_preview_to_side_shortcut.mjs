@@ -1,6 +1,6 @@
 // "Open the preview to the side" has a shortcut of its own (Ctrl+Alt+V, Cmd+Option+V on a Mac), listed in Settings > Shortcuts next to
 // the split view's, and the person can change it. It used to be a fixed key that Settings did not show.
-import { assert, focusEditor, settle, shown, waitHidden, waitShown } from './lib.mjs';
+import { assert, click, focusEditor, settle, shown, waitHidden, waitShown } from './lib.mjs';
 
 const secondaryOpen = (s) => shown(s, 'secondary-pane');
 
@@ -14,6 +14,8 @@ export default {
     assert.equal(cfg.previewToSide, 'Ctrl+Alt+V');
     await s.key(',', { ctrl: true });
     await waitShown(s, 'settings-modal');
+    await click(s, 'tab-btn-shortcuts');
+    await s.waitFor("document.querySelectorAll('#shortcuts-list-body tr').length > 0");
     const row = await s.ev(`Array.from(document.querySelectorAll('#shortcuts-list-body tr')).map(function (tr) { return tr.textContent; }).filter(function (x) { return x.indexOf('Ctrl+Alt+V') !== -1; })`);
     assert.equal(row.length, 1, 'exactly one row shows Ctrl+Alt+V in the shortcut list');
     assert.ok(/プレビュー|Preview/.test(row[0]), `that row is the preview one: ${row[0]}`);

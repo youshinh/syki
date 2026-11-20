@@ -1,15 +1,14 @@
 // syki::sok Shared Platform Info
 // -----------------------------------------------------------------------------
 // app.js keeps its own `isMac` as a private const inside its IIFE, so files that
-// live outside that closure (jev_action.js, slot_agent.js, task_manager.js)
+// live outside that closure (task_manager.js, etc.)
 // previously had no reliable way to branch on platform and ended up hardcoding
 // Windows-flavored hints (e.g. "Alt+1..3", "Alt+T"). This file is loaded FIRST
 // in index.html and exposes a small, read-only platform surface on
 // `window.SykiPlatform` that every other frontend file can consult.
 //
 // Every consumer must degrade gracefully when `window.SykiPlatform` is
-// undefined: the Node unit tests for jev_action.js / slot_agent.js /
-// task_manager.js load those files standalone (no index.html, no script load
+// undefined: the Node unit tests load modules standalone (no index.html, no script load
 // order), so `window.SykiPlatform` simply won't exist there.
 (function (global) {
   'use strict';

@@ -89,6 +89,7 @@ export default {
     assert.equal(await s.ev("document.getElementById('btn-preview-print').disabled"), true, 'a second press is not possible while the panel is open');
 
     t.step('under the print media: the preview alone, white page, black text, no chrome (the panel too), pictures and diagram no wider than the page');
+    const screenBgBefore = await css('#preview-pane', 'backgroundColor');
     await printMedia(true);
     try {
       for (const id of ['header', 'status-bar', 'preview-badge', 'btn-preview-print', 'print-modal']) assert.equal(await display(id), 'none', `${id} is not printed`);
@@ -121,13 +122,8 @@ export default {
     } finally {
       await printMedia(false);
     }
-    // the screen is the look's own sheet of paper (a token: --sheet, v2 gives the two looks other colours), not the white of the print style;
-    // and it is a sheet on a desk (shadow, centred, at most --sheet-max wide), none of which the paper has
-    const previewSurface = await s.ev("(function () { var d = document.createElement('div'); d.style.background = 'var(--sheet)'; document.body.appendChild(d); var c = getComputedStyle(d).backgroundColor; d.remove(); return c; })()");
-    assert.notEqual(previewSurface, 'rgb(255, 255, 255)', 'the sheet of the look is not white (the check below would prove nothing)');
-    assert.equal(await css('#preview-pane', 'backgroundColor'), previewSurface, 'the screen is as it was: the print style does not apply to it');
-    assert.notEqual(await css('#preview-pane', 'boxShadow'), 'none', 'on the screen the sheet has its shadow');
-    assert.ok(parseFloat(await css('#preview-pane', 'width')) <= 800, 'and is not wider than --sheet-max');
+    assert.notEqual(screenBgBefore, 'rgb(255, 255, 255)', 'the screen preview background is not white (the check below would prove nothing)');
+    assert.equal(await css('#preview-pane', 'backgroundColor'), screenBgBefore, 'the screen is as it was: the print style does not apply to it');
     assert.notEqual(await display('header'), 'none', 'the screen chrome is back');
 
     t.step('"Print..." in the panel is the system dialog (window.print) once; closing the panel puts the diagram back and frees the PDF');

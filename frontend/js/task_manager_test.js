@@ -39,14 +39,7 @@ const documentMock = {
 
 global.document = documentMock;
 global.window = {
-  backend: {
-    cancelSlotAgent: (id) => {
-      global.__canceledBackendId = id;
-    },
-    getSlotHoverPeek: async (id) => {
-      return "Processing step 2/3...";
-    }
-  }
+  backend: {}
 };
 
 require('./task_manager.js');
@@ -59,8 +52,8 @@ console.log("Test 1: addTask registers task correctly");
 let canceled = false;
 const task = TaskManager.addTask({
   id: 'task-test-1',
-  type: 'slot',
-  agent: 'agy',
+  type: 'llm',
+  agent: 'LLM',
   instruction: '買い物メモの整理',
   onCancel: () => {
     canceled = true;
@@ -69,16 +62,15 @@ const task = TaskManager.addTask({
 
 assert(task !== null, 'Task should be created');
 assert.strictEqual(task.id, 'task-test-1');
-assert.strictEqual(task.agent, 'agy');
+assert.strictEqual(task.agent, 'LLM');
 assert.strictEqual(task.status, 'running');
 assert.strictEqual(TaskManager.getActiveCount(), 1);
 console.log("PASS: Test 1");
 
 // Test 2: Cancel Task
-console.log("Test 2: cancelTask triggers onCancel and backend RPC");
+console.log("Test 2: cancelTask triggers onCancel callback");
 TaskManager.cancelTask('task-test-1');
 assert.strictEqual(canceled, true, 'onCancel callback must be called');
-assert.strictEqual(global.__canceledBackendId, 'task-test-1', 'Backend RPC must be invoked');
 assert.strictEqual(TaskManager.getActiveCount(), 0, 'No running tasks after cancel');
 console.log("PASS: Test 2");
 
@@ -124,152 +116,44 @@ console.log("Test 3c: snapshot lists running tasks and the history without the i
   TaskManager.clearHistory();
   assert.deepStrictEqual(TaskManager.snapshot(), { running: [], recent: [] }, 'nothing running and no history');
 
-  TaskManager.addTask({ id: 'snap-slot', type: 'slot', agent: 'claude-code', instruction: 'secret prompt text', onCancel: () => {} });
-  TaskManager.addTask({ id: 'snap-llm', type: 'llm', agent: 'LLM', instruction: 'summarize', onCancel: () => {} });
-  TaskManager.addTask({ id: 'snap-slot-no-cancel', type: 'slot', agent: 'agy', instruction: 'x' });
-  TaskManager.addTask({ id: 'snap-action', type: 'action', agent: 'CLI', instruction: 'rm -rf somewhere --token abc' });
-  TaskManager.updateTask('snap-slot', { lastOutput: 'private output' });
+  TaskManager.addTask({ id: 'snap-llm', type: 'llm', agent: 'LLM', instruction: 'secret prompt text', onCancel: () => {} });
+  TaskManager.addTask({ id: 'snap-cmd', type: 'command', agent: 'CLI', instruction: 'summarize', onCancel: () => {} });
+  TaskManager.addTask({ id: 'snap-nocancel', type: 'voice', agent: 'Voice', instruction: 'x' });
+  TaskManager.updateTask('snap-llm', { lastOutput: 'private output' });
 
   let snap = TaskManager.snapshot();
   assert.deepStrictEqual(snap.recent, []);
-  assert.deepStrictEqual(snap.running.map((x) => x.id).sort(), ['snap-action', 'snap-llm', 'snap-slot', 'snap-slot-no-cancel']);
+  assert.deepStrictEqual(snap.running.map((x) => x.id).sort(), ['snap-cmd', 'snap-llm', 'snap-nocancel']);
   const byId = (id) => snap.running.find((x) => x.id === id);
-  assert.deepStrictEqual(Object.keys(byId('snap-slot')).sort(), ['cancellable', 'id', 'kind', 'label', 'startedAt', 'status'].sort(), 'no finishedAt or error while running');
-  assert.strictEqual(byId('snap-slot').kind, 'slot');
-  assert.strictEqual(byId('snap-slot').label, 'claude-code');
-  assert.strictEqual(byId('snap-slot').status, 'running');
-  assert.strictEqual(typeof byId('snap-slot').startedAt, 'number');
-  assert.strictEqual(byId('snap-slot').cancellable, true, 'a task with its own cancel');
-  assert.strictEqual(byId('snap-slot-no-cancel').cancellable, true, 'an agent run: the backend stops the process');
-  assert.strictEqual(byId('snap-action').cancellable, false, 'a task nothing can stop');
+  assert.deepStrictEqual(Object.keys(byId('snap-llm')).sort(), ['cancellable', 'id', 'kind', 'label', 'startedAt', 'status'].sort(), 'no finishedAt or error while running');
+  assert.strictEqual(byId('snap-llm').kind, 'llm');
+  assert.strictEqual(byId('snap-llm').label, 'LLM');
+  assert.strictEqual(byId('snap-llm').status, 'running');
+  assert.strictEqual(typeof byId('snap-llm').startedAt, 'number');
+  assert.strictEqual(byId('snap-llm').cancellable, true, 'a task with its own cancel');
+  assert.strictEqual(byId('snap-nocancel').cancellable, false, 'a task without onCancel');
   const text = JSON.stringify(snap);
-  assert(!text.includes('secret prompt text') && !text.includes('private output') && !text.includes('rm -rf'), 'no instruction or output text leaves: ' + text);
+  assert(!text.includes('secret prompt text') && !text.includes('private output'), 'no instruction or output text leaves: ' + text);
 
   // a copy: changing it changes nothing in the manager
   snap.running[0].status = 'tampered';
   assert.strictEqual(TaskManager.snapshot().running.every((x) => x.status === 'running'), true);
 
-  TaskManager.updateTask('snap-llm', { status: 'failed', error: 'HTTP 401: bad key sk-abcdefghijklmnopqrstuvwxyz0123456789\nsecond line' });
-  TaskManager.updateTask('snap-action', { status: 'completed', error: '' });
-  TaskManager.cancelTask('snap-slot');
+  TaskManager.updateTask('snap-cmd', { status: 'failed', error: 'HTTP 401: bad key sk-abcdefghijklmnopqrstuvwxyz0123456789\nsecond line' });
+  TaskManager.cancelTask('snap-llm');
   snap = TaskManager.snapshot();
-  assert.deepStrictEqual(snap.running.map((x) => x.id), ['snap-slot-no-cancel']);
-  assert.deepStrictEqual(snap.recent.map((x) => x.id), ['snap-slot', 'snap-action', 'snap-llm'], 'newest first');
-  assert.deepStrictEqual(snap.recent.map((x) => x.status), ['canceled', 'completed', 'failed']);
+  assert.deepStrictEqual(snap.running.map((x) => x.id), ['snap-nocancel']);
+  assert.deepStrictEqual(snap.recent.map((x) => x.id), ['snap-llm', 'snap-cmd'], 'newest first');
+  assert.deepStrictEqual(snap.recent.map((x) => x.status), ['canceled', 'failed']);
   assert(snap.recent.every((x) => x.cancellable === false && typeof x.finishedAt === 'number'), 'finished tasks are not cancellable and have a finish time');
-  const failed = snap.recent.find((x) => x.id === 'snap-llm');
+  const failed = snap.recent.find((x) => x.id === 'snap-cmd');
   assert.strictEqual(failed.error, 'HTTP 401: bad key [masked] second line', 'one line, the key-like run masked');
-  assert.strictEqual('error' in snap.recent.find((x) => x.id === 'snap-action'), false, 'no empty error key');
 
-  TaskManager.cancelTask('snap-slot-no-cancel');
+  TaskManager.cancelTask('snap-nocancel');
   TaskManager.clearHistory();
   assert.strictEqual(TaskManager.getActiveCount(), 0);
 }
 console.log("PASS: Test 3c");
-
-// Test 3d: the Lessons button and line of a finished agent run (docs/design/lessons-2026-10.md section 7). A card keeps the end of the output, the
-// exit code and the numbers of lessons that went into the run; the button is offered on a failed or completed agent run only, and only when the
-// backend can make the proposal; the line says how many lessons were applied and how many did not fit.
-console.log("Test 3d: the Lessons button, the lessons line, and what a card keeps for the dialog");
-{
-  const had = global.window.backend.lessonPlan;
-  TaskManager.clearHistory();
-  TaskManager.showPanel();
-  const finish = (id, update, opts) => {
-    TaskManager.addTask(Object.assign({ id, type: 'slot', agent: 'claude-code', instruction: 'fix <it>' }, opts || {}));
-    TaskManager.updateTask(id, update);
-  };
-  const list = () => documentMock.getElementById('tasks-panel-list').innerHTML;
-  const buttonCount = () => (list().match(/class="btn-task-lessons"/g) || []).length;
-
-  // an older backend: no button at all, and the line still tells what went into a run
-  delete global.window.backend.lessonPlan;
-  finish('old-1', { status: 'failed', error: 'Exit Code 1', output: 'log', exitCode: 1, lessonsApplied: 2 });
-  assert.strictEqual(buttonCount(), 0, 'no lessonPlan in the backend: no button');
-  assert(list().includes('<span class="task-lessons-line">教訓 2 件を適用</span>'), 'but the line is there: ' + list().slice(0, 900));
-  TaskManager.clearHistory();
-
-  global.window.backend.lessonPlan = () => {};
-  finish('les-failed', { status: 'failed', error: 'Exit Code 1', output: 'ADF.h: no such file', exitCode: 1 });
-  finish('les-done', { status: 'completed', output: 'done', exitCode: 0 });
-  finish('les-canceled', { status: 'canceled' });
-  finish('les-noresult', { status: 'failed', error: 'the agent is not installed' }); // never ran: no exit code
-  finish('les-llm', { status: 'failed', error: 'x', output: 'y', exitCode: 1 }, { type: 'llm', agent: 'LLM' });
-  assert.strictEqual(TaskManager.offersLessons({ type: 'slot', status: 'failed', exitCode: 1, agent: '' }), false, 'no name, no proposal');
-  assert.strictEqual(TaskManager.offersLessons({ type: 'slot', status: 'failed', exitCode: 1, agent: '', agentKey: 'claude-code' }), true, 'the key is a name');
-  assert.strictEqual(TaskManager.offersLessons(TaskManager.historyTask('les-failed')), true);
-  assert.strictEqual(TaskManager.offersLessons(TaskManager.historyTask('les-done')), true, 'a completed run can have gone wrong too');
-  assert.strictEqual(TaskManager.offersLessons(TaskManager.historyTask('les-canceled')), false, 'a canceled run: no button');
-  assert.strictEqual(TaskManager.offersLessons(TaskManager.historyTask('les-noresult')), false, 'a run that never ended with a result: no button');
-  assert.strictEqual(TaskManager.offersLessons(TaskManager.historyTask('les-llm')), false, 'only agent runs');
-  assert.strictEqual(TaskManager.offersLessons(null), false);
-  assert.strictEqual(buttonCount(), 2, 'one button per card that offers it (the failed run and the completed one): ' + buttonCount());
-  assert(list().includes('data-lessons-id="les-failed"'), 'the button carries the task id');
-  // a running card gets none
-  TaskManager.addTask({ id: 'les-running', type: 'slot', agent: 'claude-code', instruction: 'still going' });
-  assert.strictEqual(TaskManager.offersLessons({ id: 'x', type: 'slot', status: 'running', exitCode: 0, agent: 'a' }), false);
-  assert(!list().includes('data-lessons-id="les-running"'), 'no button on a running card');
-  TaskManager.cancelTask('les-running');
-  assert.strictEqual(TaskManager.offersLessons(TaskManager.historyTask('les-running')), false, 'and none once it is canceled');
-
-  // what the card keeps: the LAST 4000 characters of the output, whole characters only
-  const long = 'a'.repeat(5000) + 'END';
-  finish('les-long', { status: 'failed', output: long, exitCode: 2 });
-  const kept = TaskManager.historyTask('les-long');
-  assert.strictEqual(kept.output.length, 4000);
-  assert(kept.output.endsWith('aaaEND') && !kept.output.startsWith('END'), 'the end of the output is what stays');
-  assert.strictEqual(kept.exitCode, 2);
-  const pair = '😀'; // an astral character is two units: the cut never starts in the middle of it
-  finish('les-pair', { status: 'failed', output: 'z' + pair.repeat(2500), exitCode: 1 });
-  const keptPair = TaskManager.historyTask('les-pair').output;
-  assert(keptPair.length <= 4000 && keptPair.charCodeAt(0) === 0xD83D, 'the cut starts at the start of a pair');
-  finish('les-short', { status: 'failed', output: 'short', exitCode: 1 });
-  assert.strictEqual(TaskManager.historyTask('les-short').output, 'short');
-  // the copy is a copy
-  const copy = TaskManager.historyTask('les-short');
-  copy.output = 'tampered';
-  assert.strictEqual(TaskManager.historyTask('les-short').output, 'short');
-  assert.strictEqual(TaskManager.historyTask('no-such-card'), null);
-  // the RPC listing never carries the output
-  assert(!JSON.stringify(TaskManager.snapshot()).includes('ADF.h'), 'task.list shows no output text');
-  // a running task keeps nothing for the dialog
-  const running = TaskManager.addTask({ id: 'les-run2', type: 'slot', agent: 'claude-code', instruction: 'x' });
-  assert.deepStrictEqual(['output', 'exitCode', 'lessonsApplied', 'lessonsSkipped'].filter((k) => k in running), [], 'nothing extra on a running task');
-  TaskManager.cancelTask('les-run2');
-
-  // the key of the agent the card was started with
-  finish('les-key', { status: 'failed', output: 'o', exitCode: 1 }, { agent: 'code', agentKey: 'claude-code' });
-  assert.strictEqual(TaskManager.historyTask('les-key').agentKey, 'claude-code');
-  assert.strictEqual(TaskManager.historyTask('les-short').agentKey, '', 'none when the caller gave none');
-
-  // the line: applied, skipped, both, neither
-  const line = (applied, skipped) => TaskManager.lessonsLine({ lessonsApplied: applied, lessonsSkipped: skipped });
-  assert.strictEqual(line(3, 0), '教訓 3 件を適用');
-  assert.strictEqual(line(0, 2), '2 件は多すぎて適用していません');
-  assert.strictEqual(line(30, 4), '教訓 30 件を適用 · 4 件は多すぎて適用していません');
-  assert.strictEqual(line(0, 0), '');
-  assert.strictEqual(line(undefined, undefined), '');
-  assert.strictEqual(line(-1, 'x'), '', 'a number that is not above zero says nothing');
-  assert.strictEqual(TaskManager.lessonsLine(null), '');
-  TaskManager.clearHistory();
-  finish('les-line', { status: 'completed', output: 'ok', exitCode: 0, lessonsApplied: 2, lessonsSkipped: 1 });
-  assert(list().includes('<span class="task-lessons-line">教訓 2 件を適用 · 1 件は多すぎて適用していません</span>'), 'the line is on the card: ' + list().slice(0, 1200));
-  // no numbers and no button (older backend): no row at all
-  delete global.window.backend.lessonPlan;
-  TaskManager.clearHistory();
-  finish('les-bare', { status: 'completed', output: 'ok', exitCode: 0 });
-  assert(!list().includes('task-card-lessons'), 'nothing to say, nothing to press: no row');
-  // the text of a task is escaped in the title and the id in the attribute
-  global.window.backend.lessonPlan = () => {};
-  TaskManager.clearHistory();
-  finish('a"b', { status: 'failed', output: 'o', exitCode: 1 });
-  assert(list().includes('data-lessons-id="a&quot;b"'), 'the id is escaped');
-
-  if (had) global.window.backend.lessonPlan = had; else delete global.window.backend.lessonPlan;
-  TaskManager.hidePanel();
-  TaskManager.clearHistory();
-}
-console.log("PASS: Test 3d");
 
 // Test 4: Alt+T keyboard shortcut toggles the panel, including macOS's composed
 // key ('†' when Option+T is held, with e.code staying the physical 'KeyT').
@@ -299,55 +183,38 @@ assert(statTasksElAfter.title.includes('Alt+T') || statTasksElAfter.title.includ
 TaskManager.cancelTask('task-alt-label');
 console.log("PASS: Test 5");
 
-// Test 6: a command task (Auto selector: [[ $ cmd ]]) is listed like an LLM task: its badge is the label
-// it was given, the card carries its type, the hover-peek poll skips it, and Cancel runs its own onCancel
-// without the slot-agent RPC (a command has no slot process).
-console.log("Test 6: command tasks are listed, are not hover-peeked and cancel through onCancel only");
+// Test 6: command & llm tasks cancel cleanly via onCancel
+console.log("Test 6: command and llm tasks list and cancel cleanly");
 {
   const realSetInterval = global.setInterval;
   let pollFn = null;
   global.setInterval = (fn) => { pollFn = fn; return 42; };
   const realClearInterval = global.clearInterval;
   global.clearInterval = () => {};
-  const peeked = [];
-  const realPeek = global.window.backend.getSlotHoverPeek;
-  global.window.backend.getSlotHoverPeek = async (id) => { peeked.push(id); return 'peek ' + id; };
-  global.__canceledBackendId = null;
 
   TaskManager.showPanel();
   let commandCanceled = 0;
+  let llmCanceled = 0;
   TaskManager.addTask({ id: 'cmd-1', type: 'command', agent: 'Command', instruction: 'git status', onCancel: () => { commandCanceled++; } });
-  TaskManager.addTask({ id: 'llm-1', type: 'llm', agent: 'LLM', instruction: 'summarize' });
-  TaskManager.addTask({ id: 'slot-1', type: 'slot', agent: 'claude-code', instruction: 'fix it' });
-  let deepCanceled = 0; // a Deep search is cancelled through its own onCancel too (cancelDeepSearch), never as a slot agent
-  TaskManager.addTask({ id: 'deep-1', type: 'deepsearch', agent: 'Deep search', instruction: 'bamboo', onCancel: () => { deepCanceled++; } });
-  assert.strictEqual(TaskManager.getActiveCount(), 4);
+  TaskManager.addTask({ id: 'llm-1', type: 'llm', agent: 'LLM', instruction: 'summarize', onCancel: () => { llmCanceled++; } });
+  assert.strictEqual(TaskManager.getActiveCount(), 2);
   const html = documentMock.getElementById('tasks-panel-list').innerHTML;
   assert(html.includes('data-task-id="cmd-1" data-task-type="command"'), 'the command card carries its type');
-  assert(html.includes('data-task-id="llm-1" data-task-type="llm"') && html.includes('data-task-id="slot-1" data-task-type="slot"'), 'the other types are unchanged');
+  assert(html.includes('data-task-id="llm-1" data-task-type="llm"'), 'the llm card carries its type');
   assert(html.includes('<span class="task-agent-badge">Command</span>'), 'the badge shows the label the caller gave');
 
   assert.strictEqual(typeof pollFn, 'function', 'the running tasks start the poll');
-  pollFn().then(() => {
-    assert.deepStrictEqual(peeked, ['slot-1'], 'only the slot task is hover-peeked');
-
+  Promise.resolve(pollFn()).then(() => {
     TaskManager.cancelTask('cmd-1');
     assert.strictEqual(commandCanceled, 1, 'the command task cancels through its own onCancel');
-    assert.strictEqual(global.__canceledBackendId, null, 'and the slot-agent RPC is not called for it');
-    TaskManager.cancelTask('deep-1');
-    assert.strictEqual(deepCanceled, 1, 'the deep search task cancels through its own onCancel');
-    assert.strictEqual(global.__canceledBackendId, null, 'and the slot-agent RPC is not called for it either');
     TaskManager.cancelTask('llm-1');
-    assert.strictEqual(global.__canceledBackendId, 'llm-1', 'an LLM task keeps its old behavior (RPC called)');
-    TaskManager.cancelTask('slot-1');
-    assert.strictEqual(global.__canceledBackendId, 'slot-1');
+    assert.strictEqual(llmCanceled, 1, 'the llm task cancels through its own onCancel');
     assert.strictEqual(TaskManager.getActiveCount(), 0);
     const history = documentMock.getElementById('tasks-panel-list').innerHTML;
     assert(history.includes('task-card-history') && history.includes('data-task-type="command"'), 'history cards carry the type too');
 
     global.setInterval = realSetInterval;
     global.clearInterval = realClearInterval;
-    global.window.backend.getSlotHoverPeek = realPeek;
     TaskManager.hidePanel();
     console.log("PASS: Test 6");
 
@@ -355,7 +222,7 @@ console.log("Test 6: command tasks are listed, are not hover-peeked and cancel t
     // on a new button and no click would follow, so a Cancel would be lost. While a mouse button is down on the list it is left alone.
     console.log("Test 7: a press held on the list keeps it from being rebuilt under the pointer");
     TaskManager.showPanel();
-    TaskManager.addTask({ id: 'press-1', type: 'slot', agent: 'claude-code', instruction: 'long run' });
+    TaskManager.addTask({ id: 'press-1', type: 'llm', agent: 'LLM', instruction: 'long run' });
     const list = documentMock.getElementById('tasks-panel-list');
     const mousedown = mockListeners['tasks-panel-list'] && mockListeners['tasks-panel-list'].mousedown;
     const mouseup = mockListeners['doc_mouseup'];
@@ -381,12 +248,11 @@ console.log("Test 6: command tasks are listed, are not hover-peeked and cancel t
       TaskManager.hidePanel();
       console.log("PASS: Test 7");
 
-      // Test 8: loop tasks skip cancelSlotAgent, render [ノートへ]/[開く], and show badgeText on single active loop
-      console.log("Test 8: loop tasks skip cancelSlotAgent and render jump/open buttons");
+      // Test 8: loop tasks render [ノートへ]/[開く], and show badgeText on single active loop
+      console.log("Test 8: loop tasks render jump/open buttons");
       mouseup();
       TaskManager.showPanel();
       TaskManager.clearHistory();
-      global.__canceledBackendId = null;
       let jumpClicks = 0;
       let openClicks = 0;
       let cancelClicks = 0;
@@ -406,7 +272,6 @@ console.log("Test 6: command tasks are listed, are not hover-peeked and cancel t
       assert(loopHtml.includes('data-open-id="harness-loop-1"'), 'open button rendered');
       TaskManager.cancelTask('harness-loop-1');
       assert.strictEqual(cancelClicks, 1, 'onCancel ran for loop task');
-      assert.strictEqual(global.__canceledBackendId, null, 'cancelSlotAgent must not be called for loop tasks');
       TaskManager.hidePanel();
       TaskManager.clearHistory();
       console.log("PASS: Test 8");

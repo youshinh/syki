@@ -19,20 +19,13 @@
   const SECTION_TOGGLES = {
     sectionAutocomplete: 'cfg-auto-enabled',
     sectionVisionOCR: 'cfg-paste-image-ocr',
-    sectionSemantic: 'cfg-semantic-enabled',
-    sectionAutoSelector: 'cfg-autosel-enabled',
-    sectionAgentSuggestions: 'cfg-action-enabled',
-    sectionGitHub: 'cfg-git-sync-enabled',
-    sectionCFBridge: 'cfg-cf-enabled',
-    sectionInbox: 'cfg-inbox-enabled'
+    sectionSemantic: 'cfg-semantic-enabled'
   };
 
   const DEFAULT_OVERRIDE_VALUES = new Set([
     'http://localhost:11434',
     'https://generativelanguage.googleapis.com',
     'https://openrouter.ai/api/v1',
-    'gemini-decision-1',
-    'jev-latest',
     'bge-m3',
     'gemini-flash-lite-latest',
     'gemini-3.1-flash-lite-image'

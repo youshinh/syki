@@ -82,7 +82,7 @@
         '## Ask the AI',
         '',
         '- Put the cursor on a line (or select some text) and press `{ask}`. Type what you want, for example "translate to English", then press Enter. The answer is written below.',
-        '- The AI needs a model. The first time you press `{ask}`, syki::sok lets you pick one: run it on this computer (Ollama) or use a cloud key. You can change it any time in Settings > AI Models (`{settings}`).',
+        '- The AI needs a model. The first time you press `{ask}`, syki::sok lets you pick one: run a local endpoint (Ollama / llama.cpp) or use a cloud key. You can change it any time in Settings > AI Models (`{settings}`).',
         '',
         '## Find your way around',
         '',
@@ -93,8 +93,8 @@
         '## Where your notes are',
         '',
         '- A note you save is an ordinary .md file, wherever you save it.',
-        '- Daily notes are one file per day in `{scrapDir}`. Text you send in from the terminal or your phone is added to today\'s file. You can change the folder in Settings > Sync.',
-        '- Your notes stay on this computer unless you set up a cloud model, Git sync or Mobile Drop.',
+        '- Daily notes are one file per day in `{scrapDir}`. Text you send in from the terminal is added to today\'s file. You can change the folder in Settings > Sync.',
+        '- Your notes stay on this computer unless you set up a cloud model.',
         ''
       ].join('\n')
     },
@@ -114,7 +114,7 @@
         '## AI に聞く',
         '',
         '- 行にカーソルを置く（または文章を選ぶ）と、`{ask}` で聞けます。やりたいことを、たとえば「英語に翻訳」のように入力して Enter を押すと、答えがその下に書き込まれます。',
-        '- AI にはモデルが必要です。初めて `{ask}` を押したときに、このパソコンで動かす（Ollama）か、クラウドのキーを使うかを選べます。あとから、設定 > AIモデル（`{settings}`）でいつでも変えられます。',
+        '- AI にはモデルが必要です。初めて `{ask}` を押したときに、ローカル推論エンドポイント（Ollama / llama.cpp）か、クラウドのキーを使うかを選べます。あとから、設定 > AIモデル（`{settings}`）でいつでも変えられます。',
         '',
         '## 使い方の入口',
         '',
@@ -125,8 +125,8 @@
         '## ノートの保存先',
         '',
         '- 保存したノートは、選んだ場所にある普通の .md ファイルです。',
-        '- 日付ノートは、`{scrapDir}` に 1 日 1 ファイルで置かれます。ターミナルやスマホから送った文章が、その日のファイルに追記されます。フォルダは 設定 > 同期 で変えられます。',
-        '- クラウドのモデル、Git 同期、Mobile Drop を設定しない限り、ノートはこのパソコンの外に出ません。',
+        '- 日付ノートは、`{scrapDir}` に 1 日 1 ファイルで置かれます。ターミナルから送った文章が、その日のファイルに追記されます。フォルダは 設定 > 同期 で変えられます。',
+        '- クラウドのモデルを設定しない限り、ノートはこのパソコンの外に出ません。',
         ''
       ].join('\n')
     }

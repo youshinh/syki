@@ -67,29 +67,6 @@ check('localize: two openings in a row (a dialog error that wraps a read error) 
   assert.strictEqual(out, 'File dialog error: Could not read the file: boom');
 });
 
-check('localize: the Ollama set-up lines of the Go side (ollama_ops.go) are said in English, step by step', () => {
-  const en = tr('en');
-  const lines = [
-    'Ollamaのインストール状況を確認しています...',
-    'Ollamaを自動インストールしています (数分かかる場合があります)...',
-    'Ollamaはすでにインストールされています',
-    'Ollamaサービスを起動・ヘルスチェックしています...',
-    'Gemma 4 E2B モデルを取得しています (約2.5GB、ダウンロード進行中)...',
-    'Ollama & Gemma 4 E2B のセットアップが完了しました！',
-    'Ollamaのインストールに失敗しました',
-    'Ollamaサービスの起動に失敗しました',
-    'Gemma 4 E2B モデルのダウンロードに失敗しました'
-  ];
-  for (const line of lines) {
-    const said = GoText.localize(line, 'en', en);
-    assert.ok(!CJK.test(said), 'no Japanese is left: ' + said);
-    assert.ok(said.length > 10, said);
-  }
-  assert.strictEqual(GoText.localize('Ollamaサービスの起動待機がタイムアウトしました (25s)', 'en', en), 'Timed out waiting for the Ollama service to start (25s)');
-  // the same lines in a Japanese UI are the Go side's own words
-  for (const line of lines) assert.strictEqual(GoText.localize(line, 'ja', tr('ja')), line);
-});
-
 check('localize: the Japanese UI keeps the Japanese; a two-language string loses its English half', () => {
   assert.strictEqual(GoText.localize('ファイルの保存に失敗しました: x', 'ja', tr('ja')), 'ファイルの保存に失敗しました: x');
   assert.strictEqual(GoText.localize('コマンドが空です (Empty command)', 'ja', tr('ja')), 'コマンドが空です');
@@ -111,14 +88,6 @@ check('every phrase the table points to exists in both languages; the English ho
   for (const [prefix, key] of GoText.PREFIXES) {
     assert.ok(I18N.en[key] && I18N.ja[key], key + ' (for "' + prefix + '") is in both tables');
     assert.ok(!CJK.test(I18N.en[key]), key + ' in English holds no Japanese: ' + I18N.en[key]);
-  }
-});
-
-check('every opening in the table is still what the Go sources say (a reworded Go message must come here too)', () => {
-  const root = path.join(__dirname, '..', '..');
-  const go = ['cmd/syki-gui/app_files.go', 'cmd/syki-gui/ollama_ops.go'].map((f) => fs.readFileSync(path.join(root, f), 'utf8')).join('\n');
-  for (const [prefix] of GoText.PREFIXES) {
-    assert.ok(go.includes(prefix), 'not in app_files.go / ollama_ops.go any more: ' + prefix);
   }
 });
 

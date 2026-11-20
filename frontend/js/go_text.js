@@ -15,7 +15,7 @@
   const SLASH_FORM = /^([\s\S]+?) \/ ([^:\n]+?)(?:: ([\s\S]*))?$/; // "日本語 / English" or "日本語 / English: detail" (packErr in app_pack.go)
   const PAREN_FORM = /^([\s\S]*?)\s*\(([^()]+)\)$/; // "日本語 (English)" (the reasons of pkg/jev)
 
-  // The Japanese openings of the messages of app_files.go and ollama_ops.go that reach the screen, and the i18n key of the phrase
+  // The Japanese openings of backend messages that reach the screen, and the i18n key of the phrase
   // that replaces each in an English UI.
   const PREFIXES = [
     ['ファイルの保存に失敗しました', 'goFileSaveFailed'],
@@ -30,17 +30,7 @@
     ['テキストエクスポートに失敗しました', 'goExportTextFailed'],
     ['開くファイルのパスが空です', 'goPathEmpty'],
     ['パスが空です', 'goPathEmpty'],
-    ['指定されたフォルダにアクセスできません', 'goFolderDenied'],
-    ['Ollamaのインストール状況を確認しています...', 'goOllamaChecking'],
-    ['Ollamaを自動インストールしています (数分かかる場合があります)...', 'goOllamaInstalling'],
-    ['Ollamaはすでにインストールされています', 'goOllamaInstalled'],
-    ['Ollamaサービスを起動・ヘルスチェックしています...', 'goOllamaStarting'],
-    ['Gemma 4 E2B モデルを取得しています (約2.5GB、ダウンロード進行中)...', 'goOllamaPulling'],
-    ['Ollama & Gemma 4 E2B のセットアップが完了しました！', 'goOllamaDone'],
-    ['Ollamaのインストールに失敗しました', 'goOllamaInstallFailed'],
-    ['Ollamaサービスの起動に失敗しました', 'goOllamaStartFailed'],
-    ['Ollamaサービスの起動待機がタイムアウトしました', 'goOllamaStartTimeout'],
-    ['Gemma 4 E2B モデルのダウンロードに失敗しました', 'goOllamaPullFailed']
+    ['指定されたフォルダにアクセスできません', 'goFolderDenied']
   ].sort((a, b) => b[0].length - a[0].length);
 
   function pickLang(text, lang) {

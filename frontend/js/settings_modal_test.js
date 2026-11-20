@@ -103,7 +103,6 @@ function makeEl(initialClasses = []) {
   modal.cancel();
   assert.strictEqual(config.general.language, 'ja');
   assert.strictEqual(config.general.theme, 'light');
-  assert.strictEqual(config.default_agent, 'claude-code');
   assert.strictEqual(config.shortcuts.save, 'Ctrl+S');
   assert.deepStrictEqual(config.general.toolbarLayout.order, ['a']);
   assert.strictEqual(settingsModal.classList.contains('hidden'), true);
@@ -157,7 +156,6 @@ function makeEl(initialClasses = []) {
   assert.strictEqual(inferBaseUrlForModel('text-embedding-3-small', { kind: 'embed' }), 'https://api.openai.com/v1');
   assert.strictEqual(inferBaseUrlForModel('google/gemini-3.8-flash'), 'https://openrouter.ai/api/v1');
   assert.strictEqual(inferBaseUrlForModel('anthropic/claude-sonnet-5-5'), 'https://openrouter.ai/api/v1');
-  assert.strictEqual(inferBaseUrlForModel('jev-latest', { kind: 'action' }), 'https://api.typesafe.ai');
   assert.strictEqual(inferBaseUrlForModel('gemma4:latest'), 'http://localhost:11434');
   assert.strictEqual(inferBaseUrlForModel('qwen3-vl:latest'), 'http://localhost:11434');
   assert.strictEqual(inferBaseUrlForModel('bge-m3', { kind: 'embed' }), 'http://localhost:11434');
@@ -173,11 +171,8 @@ function makeEl(initialClasses = []) {
   assert.strictEqual(inferBaseUrlForModel('gpt'), 'https://api.openai.com/v1');
   assert.strictEqual(inferBaseUrlForModel('chatgpt-4o-latest'), 'https://api.openai.com/v1');
   assert.strictEqual(inferBaseUrlForModel('claude-sonnet-4'), 'https://openrouter.ai/api/v1');
-  assert.strictEqual(inferBaseUrlForModel('jev', { kind: 'action' }), 'https://api.typesafe.ai');
-  assert.strictEqual(inferBaseUrlForModel('typesafe/jev-1.13', { kind: 'action' }), 'https://api.typesafe.ai');
-  assert.strictEqual(inferBaseUrlForModel('~typesafe/jev-latest', { kind: 'action' }), 'https://api.typesafe.ai');
 
-  // 5. open() infers baseUrl for action/text/vision when saved config leaves baseUrl empty
+  // 5. open() infers baseUrl for text/vision when saved config leaves baseUrl empty
   {
     const docEls = { 'settings-modal': makeEl(['hidden']) };
     const getOrCreateEl = (id) => {
@@ -194,14 +189,12 @@ function makeEl(initialClasses = []) {
         general: {},
         text: { model: 'gemini-4-argon', baseUrl: '' },
         vision: { model: 'qwen3-vl:latest', baseUrl: '' },
-        action: { model: 'gpt-6-luna', baseUrl: '' },
       }),
       getElements: () => ({ settingsModal: getOrCreateEl('settings-modal') }),
     });
     modal.open();
     assert.strictEqual(docEls['cfg-base-url'].value, 'https://generativelanguage.googleapis.com');
     assert.strictEqual(docEls['cfg-vision-base-url'].value, 'http://localhost:11434');
-    assert.strictEqual(docEls['cfg-action-base-url'].value, 'https://api.openai.com/v1');
   }
 
   console.log('settings_modal_test: 5 passed');

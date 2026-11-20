@@ -14,14 +14,10 @@
 
     let settingsTabTaskTimer = null;
     let modelTabInitialized = false;
-    let syncTabInitialized = false;
-    let agentTabInitialized = false;
     let providerDetectReqToken = 0;
 
     function resetTabInit() {
       modelTabInitialized = false;
-      syncTabInitialized = false;
-      agentTabInitialized = false;
     }
 
     function switchTab(tabName) {
@@ -104,25 +100,6 @@
                 oneLine: deps.oneLineFailure,
               });
               win.SemanticSettings.load(config);
-            }
-          }
-          const prov = (config.text && config.text.provider) || '';
-          const url = (config.text && config.text.baseUrl) || '';
-          if (prov === 'ollama' || url.includes('11434')) {
-            if (deps.updateOllamaStatus) deps.updateOllamaStatus();
-          }
-        } else if (tabName === 'agent') {
-          if (!agentTabInitialized) {
-            agentTabInitialized = true;
-            if (deps.checkActiveAgentsConfigStatus) deps.checkActiveAgentsConfigStatus();
-          }
-        } else if (tabName === 'sync') {
-          if (!syncTabInitialized) {
-            syncTabInitialized = true;
-            if (deps.checkGitInstalledStatusUI) deps.checkGitInstalledStatusUI();
-            const scrapDirInput = doc.getElementById('cfg-scrap-dir');
-            if (scrapDirInput && deps.updateGitRepoStatusUI) {
-              deps.updateGitRepoStatusUI(scrapDirInput.value.trim());
             }
           }
         }
@@ -327,15 +304,6 @@
       if (deps.cliResultPlacement) setVal('cfg-cli-result-placement', deps.cliResultPlacement());
       setChecked('cfg-cli-open-error-tab', config.cli ? (config.cli.openErrorInNewTab !== false) : true);
 
-      setChecked('cfg-action-enabled', config.action ? (config.action.enabled !== false) : true);
-      setChecked('cfg-action-manual-only', config.action ? !!config.action.manualOnly : false);
-      setVal('cfg-action-delay', (config.action && typeof config.action.delaySec === 'number') ? config.action.delaySec : 1.5);
-      const actModel = (config.action && config.action.model) || 'gemini-decision-1';
-      const actBaseUrl = (config.action && config.action.baseUrl) || inferBaseUrlForModel(actModel, { kind: 'action' }) || '';
-      setVal('cfg-action-base-url', actBaseUrl);
-      setVal('cfg-action-model', actModel);
-      setVal('cfg-action-api-key', (config.action && config.action.apiKey) || '');
-
       setVal('cfg-image-api-key', (config.image && config.image.apiKey) || '');
       const imgModelInput = byId('cfg-image-model');
       if (imgModelInput) {
@@ -383,47 +351,10 @@
       if (deps.updateCheckAtStartup) setChecked('cfg-check-updates', deps.updateCheckAtStartup());
       if (deps.renderCloudConsentRow) deps.renderCloudConsentRow();
 
-      setVal('cfg-slot-timeout', config.timeout_seconds || 180);
-      setVal('cfg-slot-ghost-diff-ms', config.ghost_diff_duration_ms || 4000);
-      setChecked('cfg-slot-hover-peek', config.hover_peek_enabled !== false);
-      setVal('cfg-default-agent', config.default_agent || 'claude-code');
-      if (deps.checkActiveAgentsConfigStatus) deps.checkActiveAgentsConfigStatus();
-
-      if (deps.getAutoSelectorConfig) {
-        const autoSel = deps.getAutoSelectorConfig();
-        setChecked('cfg-autosel-enabled', autoSel.enabled);
-        setChecked('cfg-autosel-agent-confirm', autoSel.agentConfirm);
-      }
-      if (deps.updateAutoSelectorFieldStates) deps.updateAutoSelectorFieldStates();
-
       setVal('cfg-scrap-dir', (config.scraps && config.scraps.scrapDir) || config.scrap_dir || '~/Documents/syki-sok/scraps');
-      setChecked('cfg-git-sync-enabled', config.scraps ? (config.scraps.gitSyncEnabled !== false) : (config.git_sync_enabled !== false));
-      setVal('cfg-git-debounce', (config.scraps && config.scraps.gitSyncDebounceSeconds) || config.git_sync_debounce_seconds || 30);
-      setVal('cfg-git-remote-branch', (config.scraps && config.scraps.gitRemoteBranch) || config.git_remote_branch || 'main');
-      setVal('cfg-git-remote-url', (config.scraps && config.scraps.gitRemoteUrl) || '');
       setVal('cfg-max-pipe-size', (config.scraps && config.scraps.maxPipeSizeMB) || config.max_pipe_size_mb || 10);
 
-      setChecked('cfg-cf-enabled', !!(config.cfBridge && config.cfBridge.enabled));
-      setVal('cfg-cf-endpoint', (config.cfBridge && config.cfBridge.endpoint) || '');
-      setVal('cfg-cf-token', (config.cfBridge && config.cfBridge.token) || '');
-      setVal('cfg-cf-poll-interval', (config.cfBridge && config.cfBridge.pollIntervalSeconds) || 30);
-      const cfHintEl = byId('cf-test-result-hint');
-      if (cfHintEl) cfHintEl.textContent = '';
-      if (deps.updateCFBridgeFieldStates) deps.updateCFBridgeFieldStates();
-
-      setChecked('cfg-inbox-enabled', !!(config.inbox && config.inbox.enabled));
-      setVal('cfg-inbox-dir', (config.inbox && config.inbox.dir) || '');
-      const ocrOnDeviceEl = byId('cfg-ocr-on-device');
-      if (ocrOnDeviceEl) {
-        ocrOnDeviceEl.checked = !!(config.vision && config.vision.ocrMode === 'on-device');
-        const ocrGroup = ocrOnDeviceEl.closest ? ocrOnDeviceEl.closest('.form-group') : null;
-        const caps = deps.getPlatformCapabilities ? deps.getPlatformCapabilities() : {};
-        const mac = deps.isMac ? deps.isMac() : false;
-        if (ocrGroup && ocrGroup.classList) ocrGroup.classList.toggle('hidden', mac || caps.os === 'darwin');
-      }
-
       switchTab('general');
-      if (deps.updateQuickActionsFieldStates) deps.updateQuickActionsFieldStates();
       updateProviderDetection();
       if (win.SettingsCompact && win.SettingsCompact.refresh) {
         win.SettingsCompact.refresh(doc);
@@ -477,12 +408,6 @@
           themeChanged = true;
         }
       }
-      if (config.default_agent !== snap.default_agent) {
-        config.default_agent = snap.default_agent;
-        if (win.SlotAgent && win.SlotAgent.updateConfig) {
-          win.SlotAgent.updateConfig(config);
-        }
-      }
       if (snap.shortcuts && JSON.stringify(config.shortcuts) !== JSON.stringify(snap.shortcuts)) {
         config.shortcuts = Object.assign({}, snap.shortcuts);
         if (deps.clearShortcutParseCache) deps.clearShortcutParseCache();
@@ -533,7 +458,6 @@
     'https://api.deepseek.com/v1',
     'https://api.mistral.ai/v1',
     'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
-    'https://api.typesafe.ai',
   ]);
 
   const LOCAL_EMBED_MODELS = new Set([
@@ -587,12 +511,6 @@
     }
     if (m.startsWith('qwen-') && !m.includes(':')) {
       return 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
-    }
-    if (
-      kind === 'action' &&
-      (m === 'jev' || m.startsWith('jev-') || m.startsWith('typesafe/') || m.startsWith('~typesafe/'))
-    ) {
-      return 'https://api.typesafe.ai';
     }
     if (m.includes(':') || LOCAL_EMBED_MODELS.has(m)) {
       return 'http://localhost:11434';

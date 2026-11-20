@@ -1,5 +1,5 @@
-// Scraps Search, Meaning Search, and Deep Search workbench module (Editor Canvas Ring 1).
-// Encapsulates modal state, debounce/staleness guards, tag filters, semantic search, and Deep Search planning.
+// Scraps Search and Meaning Search workbench module (Editor Canvas Ring 1).
+// Encapsulates modal state, debounce/staleness guards, tag filters, and semantic search.
 (function (global) {
   'use strict';
 
@@ -18,14 +18,8 @@
     const findTabByPath = deps.findTabByPath;
     const createTab = deps.createTab;
     const selectTab = deps.selectTab;
-    const showTab = deps.showTab;
-    const renderTabs = deps.renderTabs;
-    const saveSessionDebounced = deps.saveSessionDebounced;
     const gotoLineNumber = deps.gotoLineNumber;
     const flashEditorLine = deps.flashEditorLine;
-    const openAiModelsSettings = deps.openAiModelsSettings;
-    const rememberCloudConsent = deps.rememberCloudConsent;
-    const onDeepDialogChange = deps.onDeepDialogChange || function () {};
     const dom = deps.dom || {};
     const isMac = typeof deps.isMac === 'function'
       ? !!deps.isMac()
@@ -39,11 +33,6 @@
     const scrapsSearchResults = dom.scrapsSearchResults || null;
     const btnSearchScraps = dom.btnSearchScraps || null;
 
-    function setDeepDialogOpen(v) {
-      deepDialogOpen = !!v;
-      onDeepDialogChange(deepDialogOpen);
-    }
-
     // --- Feature 4: Ultra-fast Scraps In-Memory Search Modal (Ctrl+Shift+F) ---
     let scrapsSearchDebounceTimer = null;
     let scrapsSearchFlattened = [];
@@ -55,21 +44,14 @@
     // True from an edit of the query until the answer for it is shown: the list on screen answers an older query, so Enter / Tab
     // must not open one of its lines (the query box says something else).
     let scrapsSearchStale = false;
-    // Meaning search and Deep search (docs/design/deep-search-2026-10.md): all inert until Settings > Semantic search is on. The markup
-    // stays hidden and nothing is wired until the panel first opens with it on (wireScrapsSemanticUi).
+    // Meaning search: inert until Settings > Semantic search is on.
     const SCRAPS_MODE_KEY = 'syki_scraps_search_mode'; // sessionStorage: the choice lasts for this session only
     const SCRAPS_MORE_LIMIT = 30;       // "Show more" asks for this many notes (the first ask is 10)
-    const DEEP_CONFIRM_GUARD_MS = 350;  // an Enter this soon after the dialog appeared is the key that raised it, not an answer
     let scrapsSemanticWired = false;
     let scrapsSearchMode = 'exact';     // 'exact' | 'meaning'
     let scrapsSearchModeLoaded = false;
     let scrapsSearchLimit = 10;         // how many notes the meaning search asks for: 10, then SCRAPS_MORE_LIMIT
     let scrapsStatusShown = false;
-    let deepSearchToken = 0;            // counts the Deep search plans: one that comes back after the panel closed or the text changed is dropped
-    let deepSearchPlanning = false;     // a plan is being prepared (the button says so and waits)
-    let deepDialogOpen = false;
-    let deepDialogShownAt = 0;
-    let deepDialogHeld = null;          // { plan, query, needsConsent, key } of the dialog on screen
     // The filter row (a period and tags that narrow every search; frontend/js/scraps_filter.js). Nothing of it is built until it is opened.
     const scrapsFilterBox = typeof document !== 'undefined' ? document.getElementById('scraps-filter') : null;
     let scrapsFilterState = null;       // { period, tags }: made when the row first shows, kept while the app is open (not saved)
@@ -78,7 +60,6 @@
     let scrapsFilterLoad = { status: 'idle', options: null, message: '' }; // the tag list of this opening of the panel
     let scrapsFilterLoadSeq = 0;
     let scrapsSearchFilterSent = null;  // the filter (object, or null) the list on screen was searched with
-    let deepPlanFilter = null;          // the filter of the Deep search being prepared: a plan that expired is prepared again with it
 
     function runScrapsSearch(q) {
       if (scrapsMeaningMode()) { runScrapsSemanticSearch(q); return; }
@@ -196,11 +177,6 @@
             scrapsSearchSelectedIndex = (scrapsSearchSelectedIndex - 1 + scrapsSearchFlattened.length) % scrapsSearchFlattened.length;
             updateScrapsSearchSelection();
           }
-        } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey && scrapsMeaningMode()) {
-          // Meaning mode only: Ctrl+Enter is Deep search (everywhere else it opens the note, like Enter)
-          e.preventDefault();
-          e.stopPropagation();
-          startDeepSearch();
         } else if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
           if (!scrapsSearchStale && scrapsSearchFlattened.length > 0 && scrapsSearchFlattened[scrapsSearchSelectedIndex]) {
@@ -239,8 +215,6 @@
           });
         }
       });
-      if (scrapsSemanticWired) updateScrapsDeepButton();
-
       if (!scrapsSearchResults) return;
       // Meaning search: the counts the backend sends as numbers are said here, in the UI language; its own notes (English: what has no
       // count, such as why the model could not answer) follow them.
@@ -463,15 +437,12 @@
           if (sessionStorage.getItem(SCRAPS_MODE_KEY) === 'meaning') scrapsSearchMode = 'meaning';
         } catch (e) { /* no storage: the panel starts in Exact, as it always does */ }
       }
-      invalidateDeepPlan();
       setScrapsSearchStatus('');
       paintScrapsSearchMode();
     }
 
     function closeScrapsSearchExtras() {
-      invalidateDeepPlan();
       setScrapsSearchStatus('');
-      if (deepDialogOpen) closeDeepSearchDialog(false);
     }
 
     function wireScrapsSemanticUi() {
@@ -483,14 +454,7 @@
       };
       on('scraps-mode-exact', () => setScrapsSearchMode('exact'));
       on('scraps-mode-meaning', () => setScrapsSearchMode('meaning'));
-      on('btn-scraps-deep', () => startDeepSearch());
-      on('deep-search-cancel', cancelDeepSearchDialog);
-      on('deep-search-close', cancelDeepSearchDialog);
-      on('deep-search-run', confirmDeepSearchDialog);
-      const modal = document.getElementById('deep-search-modal');
-      if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) cancelDeepSearchDialog(e); });
-      // Esc on one of the panel's buttons (the switch, Deep search, Show more) closes the panel, as it does in the box (which handles
-      // it itself and stops it there)
+      // Esc on one of the panel's buttons closes the panel, as it does in the box
       if (scrapsSearchModal) {
         scrapsSearchModal.addEventListener('keydown', (e) => {
           if (e.key !== 'Escape' || e.isComposing) return;
@@ -501,7 +465,7 @@
       }
     }
 
-    // Shows or hides the switch, and brings the label, hint, placeholder and button in step with the mode.
+    // Shows or hides the switch, and brings the label, hint and placeholder in step with the mode.
     function paintScrapsSearchMode() {
       const bar = document.getElementById('scraps-search-mode');
       if (!bar) return;
@@ -519,9 +483,6 @@
       if (scrapsSearchInput) scrapsSearchInput.placeholder = t(meaning ? 'scrapsSearchPlaceholderMeaning' : 'scrapsSearchPlaceholder');
       const hint = document.getElementById('scraps-search-hint');
       if (hint) hint.textContent = meaning ? t('scrapsSearchHintMeaning', { mod: mod }) : t('scrapsSearchHint');
-      const deep = document.getElementById('btn-scraps-deep');
-      if (deep) deep.title = t('deepSearchButtonTitle', { mod: mod });
-      updateScrapsDeepButton();
     }
 
     function setScrapsSearchMode(mode) {
@@ -535,7 +496,6 @@
       scrapsSearchLimit = 10;
       clearTimeout(scrapsSearchDebounceTimer);
       scrapsSearchSeq++; // an answer still on its way belongs to the other kind of search
-      invalidateDeepPlan();
       setScrapsSearchStatus('');
       paintScrapsSearchMode();
       scrapsSearchFlattened = [];
@@ -547,16 +507,12 @@
       }
       if (scrapsSearchResults) scrapsSearchResults.innerHTML = ''; // the other kind's list (and its "Show more") must not stay
       scrapsSearchStale = true;
-      updateScrapsDeepButton();
       runScrapsSearch(q);
     }
 
-    // The query was edited: what was prepared for the old text is dropped, and the button waits for the new list.
     function scrapsSearchTyped() {
       scrapsSearchLimit = 10;
-      invalidateDeepPlan();
       setScrapsSearchStatus('');
-      updateScrapsDeepButton();
     }
 
     // The quiet line under the header: a failure of Deep search, or the way to set the AI model up (action: { label, run }). '' clears it.
@@ -622,7 +578,6 @@
       scrapsSearchFlattened = [];
       scrapsSearchSelectedIndex = 0;
       scrapsSearchStale = false;
-      updateScrapsDeepButton();
       if (scrapsSearchResults) {
         scrapsSearchResults.innerHTML = `<div class="scraps-search-empty scraps-search-error" role="alert">${escapeHtml(text)}</div>`;
       }
@@ -633,484 +588,20 @@
       if (!q || !scrapsMeaningMode()) return;
       scrapsSearchLimit = SCRAPS_MORE_LIMIT;
       scrapsSearchStale = true; // the list on screen is the shorter one until the longer one arrives
-      updateScrapsDeepButton();
       if (scrapsSearchInput) scrapsSearchInput.focus();
       runScrapsSemanticSearch(q);
     }
 
-    // ---- Deep search: excerpts of the hits go to the AI, the answer with source links goes into a NEW note --------------------------
-
-    function populateDeepSearchModelSelect() {
-      const sel = document.getElementById('scraps-deep-model');
-      if (!sel) return;
-      const baseModel = (getConfig().text && getConfig().text.model) ? String(getConfig().text.model).trim() : '';
-      const baseUrl = (getConfig().text && getConfig().text.baseUrl) ? String(getConfig().text.baseUrl).trim() : '';
-      let prov = 'gemini';
-      if (baseUrl.includes('openrouter.ai')) prov = 'openrouter';
-      else if (baseUrl.includes('openai.com')) prov = 'openai';
-      else if (baseUrl.includes('11434')) prov = 'ollama';
-      else if (baseUrl.includes('1234')) prov = 'lmstudio';
-      else if (baseUrl.includes('groq.com')) prov = 'groq';
-      else if (baseUrl.includes('deepseek.com')) prov = 'deepseek';
-      else if (baseUrl.includes('dashscope')) prov = 'qwen';
-
-      const opts = [];
-      const seen = new Set();
-      const addOpt = (val, label) => {
-        if (seen.has(val)) return;
-        seen.add(val);
-        opts.push({ val, label });
-      };
-      addOpt('', baseModel ? `Default (${baseModel})` : 'Default (Settings)');
-      const preset = (typeof TEXT_PROVIDER_PRESETS !== 'undefined' && TEXT_PROVIDER_PRESETS[prov]) ? TEXT_PROVIDER_PRESETS[prov] : null;
-      if (preset && Array.isArray(preset.models)) {
-        preset.models.forEach((m) => addOpt(m.id, m.id));
-      }
-      if (prov === 'gemini' || !baseUrl) {
-        addOpt('gemini-4-argon', 'gemini-4-argon');
-        addOpt('gemini-4-hydrogen', 'gemini-4-hydrogen');
-        addOpt('gemini-3.8-flash', 'gemini-3.8-flash');
-      }
-
-      let saved = '';
-      try { saved = localStorage.getItem('syki_deep_model') || ''; } catch (_) {}
-      if (saved && !seen.has(saved)) addOpt(saved, saved);
-
-      sel.textContent = '';
-      opts.forEach((o) => {
-        const opt = document.createElement('option');
-        opt.value = o.val;
-        opt.textContent = o.label;
-        sel.appendChild(opt);
-      });
-      sel.value = saved;
-      if (!sel.dataset.wired) {
-        sel.dataset.wired = '1';
-        sel.addEventListener('change', () => {
-          try { localStorage.setItem('syki_deep_model', sel.value || ''); } catch (_) {}
-        });
-      }
-    }
-
-    function getSelectedDeepModel() {
-      const sel = document.getElementById('scraps-deep-model');
-      return sel ? String(sel.value || '').trim() : '';
-    }
-
-    function isDeepSkipConfirmEnabled() {
-      const chk = document.getElementById('chk-deep-skip-confirm');
-      return !!(chk && chk.checked);
-    }
-
-    function getSelectedDeepLength() {
-      const grp = document.getElementById('scraps-deep-length');
-      if (!grp) return 'standard';
-      const active = grp.querySelector('.scraps-mode-btn.active');
-      const v = active ? String(active.getAttribute('data-length') || '') : '';
-      return (v === 'short' || v === 'long') ? v : 'standard';
-    }
-
-    function syncDeepLengthButtons() {
-      const grp = document.getElementById('scraps-deep-length');
-      if (!grp) return;
-      let saved = 'standard';
-      try {
-        const s = localStorage.getItem('syki_deep_length');
-        if (s === 'short' || s === 'standard' || s === 'long') saved = s;
-      } catch (_) {}
-      const btns = grp.querySelectorAll('.scraps-mode-btn[data-length]');
-      btns.forEach((b) => {
-        const on = b.getAttribute('data-length') === saved;
-        b.classList.toggle('active', on);
-        b.setAttribute('aria-pressed', on ? 'true' : 'false');
-      });
-      if (!grp.dataset.wired) {
-        grp.dataset.wired = '1';
-        btns.forEach((b) => {
-          b.addEventListener('click', () => {
-            const val = b.getAttribute('data-length') || 'standard';
-            try { localStorage.setItem('syki_deep_length', val); } catch (_) {}
-            btns.forEach((x) => {
-              const on = x === b;
-              x.classList.toggle('active', on);
-              x.setAttribute('aria-pressed', on ? 'true' : 'false');
-            });
-          });
-        });
-      }
-    }
-
-    // The button is for a fresh meaning list that has at least one hit.
-    function updateScrapsDeepButton() {
-      const btn = document.getElementById('btn-scraps-deep');
-      if (!btn) return;
-      const visible = !!(scrapsMeaningMode() && !scrapsSearchStale && scrapsSearchFlattened.length > 0);
-      btn.classList.toggle('hidden', !visible);
-      btn.disabled = deepSearchPlanning;
-      btn.textContent = t(deepSearchPlanning ? 'deepSearchPreparing' : 'deepSearchButton');
-
-      const sel = document.getElementById('scraps-deep-model');
-      if (sel) {
-        if (visible) populateDeepSearchModelSelect();
-        sel.classList.toggle('hidden', !visible);
-        sel.disabled = deepSearchPlanning;
-      }
-      const lenGrp = document.getElementById('scraps-deep-length');
-      if (lenGrp) {
-        if (visible) syncDeepLengthButtons();
-        lenGrp.classList.toggle('hidden', !visible);
-      }
-      const skipWrap = document.getElementById('scraps-deep-skip-wrap');
-      const skipChk = document.getElementById('chk-deep-skip-confirm');
-      if (skipWrap && skipChk) {
-        if (!skipChk.dataset.wired) {
-          skipChk.dataset.wired = '1';
-          try { skipChk.checked = localStorage.getItem('syki_deep_skip_confirm') === '1'; } catch (_) {}
-          skipChk.addEventListener('change', () => {
-            try { localStorage.setItem('syki_deep_skip_confirm', skipChk.checked ? '1' : '0'); } catch (_) {}
-          });
-        }
-        skipWrap.classList.toggle('hidden', !visible);
-      }
-    }
-
-    // Whatever is being prepared is no longer wanted (the panel closed, the mode or the text changed): its answer will be dropped.
-    function invalidateDeepPlan() {
-      deepSearchToken++;
-      if (deepSearchPlanning) {
-        deepSearchPlanning = false;
-        updateScrapsDeepButton();
-      }
-    }
-
-    // Button / Ctrl+Enter: ask the backend for the plan (it searches and builds the excerpts; nothing is sent to the AI yet), then
-    // show what would be sent and to whom.
-    async function startDeepSearch() {
-      if (deepSearchPlanning || deepDialogOpen || !scrapsMeaningMode() || scrapsSearchStale || scrapsSearchFlattened.length === 0) return;
-      const q = scrapsSearchInput ? scrapsSearchInput.value.trim() : '';
-      if (!q || !(window.backend && window.backend.deepSearchPlan)) return;
-      const token = ++deepSearchToken;
-      deepSearchPlanning = true;
-      setScrapsSearchStatus('');
-      updateScrapsDeepButton();
-      const limit = scrapsSearchLimit;
-      deepPlanFilter = scrapsSearchFilterSent; // the filter the list on screen was searched with: the excerpts come from the same notes
-      const got = await fetchDeepPlan(q, limit, deepPlanFilter);
-      if (token !== deepSearchToken) return; // the panel was closed or the text edited meanwhile: nobody waits for this plan any more
-      deepSearchPlanning = false;
-      updateScrapsDeepButton();
-      // (the button was disabled while the plan was prepared, which takes the focus from it: it goes back to the box)
-      if (scrapsSearchInput && (got.failure || deepPlanBlocker(got.plan))) scrapsSearchInput.focus();
-      if (got.failure) {
-        setScrapsSearchStatus(t('deepSearchFailed', { message: got.failure }));
-        return;
-      }
-      const blocker = deepPlanBlocker(got.plan);
-      if (blocker === 'model') {
-        // The same words and the same way out as the ask bar when no model is set up
-        setScrapsSearchStatus(t('askSetupNeeded'), {
-          label: t('askSetupButton'),
-          run: () => { closeScrapsSearchModal(); openAiModelsSettings('text'); }
-        });
-        return;
-      }
-      if (blocker === 'none') {
-        setScrapsSearchStatus(t('deepSearchNoSources'));
-        return;
-      }
-      const selectedModel = getSelectedDeepModel();
-      const selectedLength = getSelectedDeepLength();
-      const dest = got.plan.destination || {};
-      const cloud = dest.local !== true;
-      const alreadyApproved = !cloud || dest.consent_given === true;
-      if (isDeepSkipConfirmEnabled() && alreadyApproved) {
-        runDeepSearch(got.plan, q, limit, selectedModel, selectedLength);
-        return;
-      }
-      showDeepSearchDialog(got.plan, q, false, limit, selectedModel, selectedLength);
-    }
-
-    // The plan from the backend: { plan } or { failure: the reason in one line }.
-    async function fetchDeepPlan(query, limit, filter) {
-      try {
-        let plan = await window.backend.deepSearchPlan(query, limit, filter || null);
-        if (typeof plan === 'string') plan = JSON.parse(plan);
-        return plan && typeof plan === 'object' ? { plan: plan } : { failure: '?' };
-      } catch (err) {
-        return { failure: oneLineFailure(err, false) || '?' };
-      }
-    }
-
-    // Why a plan cannot be run: 'model' (no text model is set up), 'none' (no note to send: the backend then gives plan_id "" and no sources), or ''.
-    function deepPlanBlocker(plan) {
-      if (plan.model_configured === false) return 'model';
-      if (!plan.plan_id || !Array.isArray(plan.sources) || plan.sources.length === 0) return 'none';
-      return '';
-    }
-
-    // The confirmation: how many notes and characters, to which model and host, what was left out, the sources (folded), and for a
-    // cloud host that is not allowed yet the question itself. Cancel has the focus; an Enter right after it appeared is ignored.
-    function showDeepSearchDialog(plan, query, forceConsent, limit, modelOverride, lengthOverride) {
-      const modal = document.getElementById('deep-search-modal');
-      if (!modal) return;
-      const dest = plan.destination || {};
-      const effectiveModel = String(modelOverride || dest.model || '');
-      const stats = plan.stats || {};
-      const sources = plan.sources || [];
-      const ja = (getConfig().general && getConfig().general.language) === 'ja';
-      const fmt = (n) => (Number(n) || 0).toLocaleString(ja ? 'ja-JP' : 'en-US');
-      const cloud = dest.local !== true;
-      const needsConsent = cloud && (dest.consent_given !== true || forceConsent === true);
-      const key = String(dest.consent_key || dest.host || '');
-      const host = String(dest.host || dest.consent_key || '');
-      const el = (id) => document.getElementById(id);
-
-      const chars = Number(stats.total_chars) > 0 ? stats.total_chars : sources.reduce((sum, s) => sum + (Number(s.chars) || 0), 0);
-      const destText = cloud
-        ? t('deepSearchDestCloud', { model: effectiveModel, host: host })
-        : t('deepSearchDestLocal', { model: effectiveModel });
-      const summary = el('deep-search-summary');
-      summary.textContent = t('deepSearchSummary', { count: fmt(sources.length), chars: fmt(chars), dest: destText });
-      summary.setAttribute('data-kind', cloud ? 'cloud' : 'local');
-      const q = String(query || '').replace(/\s+/g, ' ').trim();
-      el('deep-search-query').textContent = t('deepSearchQuery', { query: q.length > 160 ? q.substring(0, 160) + '…' : q });
-
-      el('deep-search-sources-summary').textContent = t('deepSearchSources', { count: fmt(sources.length) });
-      const list = el('deep-search-source-list');
-      list.textContent = '';
-      sources.forEach((src) => {
-        const li = document.createElement('li');
-        const label = String(src.label || src.rel || '');
-        const date = src.date && label.indexOf(String(src.date)) === -1 ? String(src.date) : '';
-        li.appendChild(document.createTextNode(label));
-        const meta = document.createElement('span');
-        meta.className = 'deep-search-source-meta';
-        meta.textContent = ' · ' + (date ? date + ' · ' : '') + t('deepSearchSourceChars', { chars: fmt(src.chars) });
-        li.appendChild(meta);
-        list.appendChild(li);
-      });
-      el('deep-search-sources').open = false;
-
-      const facts = [];
-      if (Number(stats.masked) > 0) facts.push(t('deepSearchMasked', { n: fmt(stats.masked) }));
-      const left = [];
-      [['ignored', 'deepSearchLeftIgnored'], ['ai', 'deepSearchLeftAi'], ['unreadable', 'deepSearchLeftUnreadable'], ['budget', 'deepSearchLeftBudget']].forEach(([field, textKey]) => {
-        if (Number(stats[field]) > 0) left.push(t(textKey, { n: fmt(stats[field]) }));
-      });
-      if (left.length) facts.push(t('deepSearchLeftOut', { list: left.join(ja ? '、' : ', ') }));
-      if (plan.semantic === false) facts.push(t('deepSearchWordsOnly'));
-      if (Number(plan.est_tokens) > 0) facts.push(t('deepSearchTokens', { tokens: fmt(plan.est_tokens) }));
-      (Array.isArray(plan.notes) ? plan.notes : []).forEach((n) => { if (typeof n === 'string' && n.trim()) facts.push(n); });
-      const factsBox = el('deep-search-facts');
-      factsBox.textContent = '';
-      facts.forEach((text) => {
-        const line = document.createElement('div');
-        line.textContent = text;
-        factsBox.appendChild(line);
-      });
-
-      const consent = el('deep-search-consent');
-      consent.classList.toggle('hidden', !needsConsent);
-      consent.textContent = needsConsent ? t('deepSearchConsent', { host: host }) : '';
-      const run = el('deep-search-run');
-      run.textContent = t(needsConsent ? 'deepSearchAllowRun' : 'deepSearchRun');
-      run.disabled = false;
-
-      deepDialogHeld = { plan: plan, query: query, limit: limit, needsConsent: needsConsent, key: key, modelOverride: modelOverride || '', lengthOverride: lengthOverride || '' };
-      deepDialogShownAt = Date.now();
-      setDeepDialogOpen(true);
-      modal.classList.remove('hidden');
-      document.addEventListener('keydown', deepSearchKeydown, true);
-      el('deep-search-cancel').focus();
-    }
-
-    // While the dialog is up (added when it opens, removed when it closes): Esc cancels, and an Enter that arrives within the guard
-    // time is swallowed (a key still held from the shortcut that raised the dialog must not answer it).
-    function deepSearchKeydown(e) {
-      if (!deepDialogOpen) return;
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        closeDeepSearchDialog(true);
-      } else if (e.key === 'Enter' && Date.now() - deepDialogShownAt < DEEP_CONFIRM_GUARD_MS) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
-    }
-
-    // refocus: put the caret back in the search box (the panel is still there), or in the note when the panel has gone.
-    function closeDeepSearchDialog(refocus) {
-      const modal = document.getElementById('deep-search-modal');
-      if (modal) modal.classList.add('hidden');
-      document.removeEventListener('keydown', deepSearchKeydown, true);
-      setDeepDialogOpen(false);
-      deepDialogHeld = null;
-      if (!refocus) return;
-      if (scrapsSearchModal && !scrapsSearchModal.classList.contains('hidden') && scrapsSearchInput) {
-        scrapsSearchInput.focus();
-      } else {
-        const editor = getActiveEditor();
-        if (editor) editor.focus();
-      }
-    }
-
-    function cancelDeepSearchDialog(evt) {
-      if (!deepDialogOpen) return;
-      if (evt && evt.detail === 0 && Date.now() - deepDialogShownAt < DEEP_CONFIRM_GUARD_MS) return;
-      closeDeepSearchDialog(true);
-    }
-
-    async function confirmDeepSearchDialog(evt) {
-      if (!deepDialogOpen || !deepDialogHeld) return;
-      if (evt && evt.detail === 0 && Date.now() - deepDialogShownAt < DEEP_CONFIRM_GUARD_MS) return;
-      const held = deepDialogHeld;
-      if (held.needsConsent) {
-        // "Allow and run": the host is remembered like an answer in the ask bar (general.cloudConsent), and the answer is in getConfig().json
-        // before the run asks the backend, which reads it from there and refuses (consent_required) otherwise.
-        const run = document.getElementById('deep-search-run');
-        if (run) run.disabled = true;
-        let saved = true;
-        if (held.key) {
-          try {
-            saved = (await rememberCloudConsent(held.key)) !== false;
-          } catch (e) {
-            saved = false;
-          }
-        }
-        if (!deepDialogOpen || deepDialogHeld !== held) return; // cancelled while it was being saved
-        if (!saved) {
-          // getConfig().json could not be written (the save has said so): the backend would refuse, so nothing is sent. The dialog stays.
-          if (run) run.disabled = false;
-          return;
-        }
-      }
-      closeDeepSearchDialog(false);
-      runDeepSearch(held.plan, held.query, held.limit, held.modelOverride || '', held.lengthOverride || '');
-    }
-
-    // The tab's name: the backend's title without characters a file name cannot hold, ".md" added.
-    function deepSearchTabTitle(title) {
-      const base = String(title || '').replace(/[\\/:*?"<>|\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().replace(/\.md$/i, '').substring(0, 80).trim();
-      return (base || t('deepSearchDefaultTitle')) + '.md';
-    }
-
-    // The run: a background task (listed in the task panel, cancellable) that ends in ONE new, unsaved tab holding the answer. The
-    // search panel gives way at once, since the AI may take a while; nothing is created when it is cancelled or fails.
     global.__onSemanticIdleProgress = function (p) {
       if (!p || !scrapsSearchModal || scrapsSearchModal.classList.contains('hidden')) return;
       if (!scrapsMeaningMode()) return;
+      const statusTextEl = document.getElementById('scraps-search-status-text');
       if (p.running) {
         setScrapsSearchStatus(t('semanticIdleProgress', { files: String(p.filesDone || 0), filesTotal: String(p.filesTotal || 0) }));
-      } else if (scrapsSearchStatusText && scrapsSearchStatusText.textContent && scrapsSearchStatusText.textContent.indexOf('/') !== -1) {
+      } else if (statusTextEl && statusTextEl.textContent && statusTextEl.textContent.indexOf('/') !== -1) {
         setScrapsSearchStatus('');
       }
     };
-
-    function runDeepSearch(plan, query, limit, modelOverride, lengthOverride) {
-      const planId = String(plan.plan_id);
-      const taskId = genReqId('deepsearch_');
-      const lang = (getConfig().general && getConfig().general.language) === 'ja' ? 'ja' : 'en';
-      const state = { canceled: false };
-      const effectiveModel = String(modelOverride || (plan.destination && plan.destination.model) || '');
-      const srcCount = Array.isArray(plan.sources) ? plan.sources.length : 0;
-      const finish = (status, error) => {
-        if (window.__onDeepSearchProgress === onProgress) window.__onDeepSearchProgress = null;
-        if (window.TaskManager && window.TaskManager.updateTask) window.TaskManager.updateTask(taskId, { status: status, error: error });
-      };
-      const onProgress = (p) => {
-        if (state.canceled || !p) return;
-        const msg = t('deepSearchProgress', {
-          model: String(p.model || effectiveModel || ''),
-          sec: String(p.elapsedSec || 0),
-          sources: String(p.sources || srcCount)
-        });
-        showMessage(msg, 2500);
-        if (window.TaskManager && window.TaskManager.updateTask) {
-          window.TaskManager.updateTask(taskId, { instruction: msg });
-        }
-      };
-      window.__onDeepSearchProgress = onProgress;
-      if (window.TaskManager && window.TaskManager.addTask) {
-        window.TaskManager.addTask({
-          id: taskId,
-          type: 'deepsearch',
-          agent: t('deepSearchButton'),
-          instruction: String(query || '').replace(/\s+/g, ' ').trim().substring(0, 80),
-          onCancel: () => {
-            state.canceled = true;
-            try {
-              const stopped = window.backend.cancelDeepSearch(planId);
-              if (stopped && typeof stopped.catch === 'function') stopped.catch(() => {});
-            } catch (e) { /* nothing left to stop */ }
-          }
-        });
-      }
-      closeScrapsSearchModal();
-      onProgress({ elapsedSec: 0, sources: srcCount, model: effectiveModel });
-
-      let call;
-      try {
-        call = Promise.resolve(window.backend.deepSearchRun(planId, lang, modelOverride || '', lengthOverride || ''));
-      } catch (err) {
-        call = Promise.reject(err);
-      }
-      call.then((res) => {
-        if (state.canceled) return; // cancelled in the task list: the answer is thrown away
-        const markdown = res && typeof res.markdown === 'string' ? res.markdown : '';
-        if (!markdown.trim()) throw new Error(t('llmEmptyAnswer'));
-        const tab = createTab(deepSearchTabTitle(res.title), markdown, '', undefined, true);
-        tab.cursorPos = 0; // the answer is read from its top
-        tab.isDirty = true; // not a file yet: closing it asks first, and the person chooses where it is saved
-        showTab(tab.id);
-        renderTabs();
-        saveSessionDebounced();
-        finish('completed');
-        showMessage(t('deepSearchDone'), 5000);
-      }).catch((err) => {
-        if (state.canceled) return;
-        const code = backendErrorCode(err);
-        if (code === 'cancelled' || code === 'canceled') {
-          finish('canceled');
-          return;
-        }
-        if (code === 'consent_required') {
-          // Nothing was sent: the backend has no answer for that host. Ask again, in the dialog.
-          finish('failed', t('deepSearchConsent', { host: String((plan.destination && (plan.destination.host || plan.destination.consent_key)) || '') }));
-          showDeepSearchDialog(plan, query, true, limit);
-          return;
-        }
-        if (code === 'plan_expired') {
-          finish('failed', t('deepSearchExpired'));
-          replanDeepSearch(query, limit);
-          return;
-        }
-        if (code === 'model_not_configured') {
-          finish('failed', t('askLlmNotConfigured'));
-          showMessage(t('askLlmNotConfigured'), 6000);
-          return;
-        }
-        const line = oneLineFailure(err, true);
-        finish('failed', line);
-        showMessage(t('deepSearchFailed', { message: line }), 8000, { important: true });
-      });
-    }
-
-    // The plan went stale (it lives 15 minutes, and a run uses it up): prepare it again from the same text and ask again.
-    async function replanDeepSearch(query, limit) {
-      showMessage(t('deepSearchExpired'), 4000);
-      const got = await fetchDeepPlan(query, limit || 10, deepPlanFilter);
-      if (deepDialogOpen) return;
-      if (got.failure) {
-        showMessage(t('deepSearchFailed', { message: got.failure }), 8000, { important: true });
-        return;
-      }
-      const blocker = deepPlanBlocker(got.plan);
-      if (blocker) {
-        showMessage(t(blocker === 'model' ? 'askLlmNotConfigured' : 'deepSearchNoSources'), 6000);
-        return;
-      }
-      showDeepSearchDialog(got.plan, query, false, limit);
-    }
 
     async function jumpToScrap(filePath, fileName, lineNumber) {
       // The tab that shows THIS file (same path), never another note that only has the same name: the date-named scrap exists in every folder.
@@ -1156,7 +647,6 @@
       if (query && scrapsSearchInput) {
         scrapsSearchInput.value = query;
         scrapsSearchStale = true;
-        updateScrapsDeepButton();
         runScrapsSearch(query);
       }
       return scrapsMeaningMode() ? 'meaning' : 'exact';
@@ -1167,7 +657,6 @@
       close: closeScrapsSearchModal,
       setMode: setScrapsSearchMode,
       openForRpc: openForRpc,
-      isDeepDialogOpen: function () { return !!deepDialogOpen; },
       jumpToScrap: jumpToScrap
     };
   }

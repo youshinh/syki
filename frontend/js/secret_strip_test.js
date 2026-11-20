@@ -5,27 +5,18 @@ const path = require('path');
 
 global.window = global;
 const SS = require('./secret_strip.js');
-const CP = require('./config_pack.js');
 
 const read = (p) => fs.readFileSync(path.resolve(__dirname, p), 'utf-8').replace(/\r\n/g, '\n');
 
-// ---- the rule is the Go side's rule ---------------------------------------------------------------
-(function testWordListMatchesGoAndConfigPack() {
-  const go = read('../../pkg/configpack/secrets.go');
-  const m = go.match(/var secretWords = \[\.\.\.\]string\{([^}]*)\}/);
-  assert.ok(m, 'secretWords not found in pkg/configpack/secrets.go: the pattern needs updating');
-  const goWords = m[1].split(',').map((s) => s.trim().replace(/^"|"$/g, '')).filter(Boolean);
-  assert.deepStrictEqual(SS.SECRET_WORDS, goWords, 'secret_strip.js and pkg/configpack/secrets.go must list the same words');
-
-  // config_pack.js keeps its own copy of the rule: both must answer alike for every name.
-  const names = goWords.concat(goWords.map((w) => w.toUpperCase()), goWords.map((w) => 'my_' + w + '_x'),
-    ['apiKey', 'API_KEY', 'botToken', 'OPENAI_API_KEY', 'maxTokens', 'passwordHash', 'Secret', 'x-api-key', 'authorization',
-      'model', 'baseUrl', 'monkey', 'keyword', 'key', '', null, undefined, 'tok', 'pass']);
-  names.forEach((n) => {
-    assert.strictEqual(SS.isSecretKey(n), CP.isSecretKey(n), 'isSecretKey disagrees with config_pack.js for ' + JSON.stringify(n));
+// ---- secret key classification ----------------------------------------------------------------------
+(function testSecretKeyWords() {
+  assert.ok(Array.isArray(SS.SECRET_WORDS) && SS.SECRET_WORDS.length > 0, 'SECRET_WORDS is populated');
+  const names = SS.SECRET_WORDS.concat(SS.SECRET_WORDS.map((w) => w.toUpperCase()), SS.SECRET_WORDS.map((w) => 'my_' + w + '_x'),
+    ['apiKey', 'API_KEY', 'botToken', 'OPENAI_API_KEY', 'passwordHash', 'Secret', 'x-api-key']);
+  names.forEach((n) => assert.strictEqual(SS.isSecretKey(n), true, 'expected secret key: ' + n));
+  ['authorization', 'model', 'baseUrl', 'monkey', 'keyword', 'key', '', null, undefined, 'tok', 'pass'].forEach((n) => {
+    assert.strictEqual(SS.isSecretKey(n), false, 'expected non-secret key: ' + JSON.stringify(n));
   });
-  assert.strictEqual(SS.isSecretKey('apiKey'), true);
-  assert.strictEqual(SS.isSecretKey('model'), false);
 })();
 
 // ---- stripSecrets ----------------------------------------------------------------------------------
@@ -119,44 +110,37 @@ const settings = () => ({
 })();
 
 // ---- the value of a secret query parameter (https://host/v1?key=SECRET) ------------------------------------
-// The third copy of the rule (Go: RedactQuerySecrets / StripJSON; config_pack.js only reads the result): it is run against the very
-// cases the Go tests use, taken from pkg/configpack/secrets_url_test.go, so the two cannot drift apart.
-(function testQuerySecretsMatchTheGoCorpus() {
-  const goTest = read('../../pkg/configpack/secrets_url_test.go');
-  const section = (from, to) => {
-    const a = goTest.indexOf(from);
-    const b = goTest.indexOf(to, a + 1);
-    assert.ok(a >= 0 && b > a, 'pkg/configpack/secrets_url_test.go: ' + from + ' not found: the pattern needs updating');
-    return goTest.slice(a, b);
-  };
-  // one row of the Go table: {"in", "repl", "want", changed},
-  const row = /\{("(?:[^"\\]|\\.)*"), ("(?:[^"\\]|\\.)*"), ("(?:[^"\\]|\\.)*"), (true|false)\},/g;
-  const rows = Array.from(section('func TestRedactQuerySecrets', 'func TestStripURLSecrets').matchAll(row));
-  assert.ok(rows.length >= 15, 'the Go corpus was not read: ' + rows.length + ' rows');
-  rows.forEach((m) => {
-    const input = JSON.parse(m[1]);
-    const repl = JSON.parse(m[2]);
-    const want = JSON.parse(m[3]);
-    const changed = m[4] === 'true';
+// Golden corpus aligned with legacy v1 query-secret stripping semantics.
+(function testQuerySecretsGoldenCorpus() {
+  const rows = [
+    ['https://host/x?key=SECRET', '', 'https://host/x?key=', true],
+    ['https://host/x?key=SECRET', '<set>', 'https://host/x?key=<set>', true],
+    ['https://host/x?a=1&api_key=SECRET&b=2', '', 'https://host/x?a=1&api_key=&b=2', true],
+    ['https://host/x?token=S&Access_Token=T', '', 'https://host/x?token=&Access_Token=', true],
+    ['https://host/x?sig=S#frag', '', 'https://host/x?sig=#frag', true],
+    ['https://host/x?%6bey=SECRET', '', 'https://host/x?%6bey=', true],
+    ['HTTPS://host/x?Key=SECRET', '', 'HTTPS://host/x?Key=', true],
+    ['https://host/x?authorization=Bearer%20abc', '', 'https://host/x?authorization=', true],
+    ['https://host/x?keyword=fine&monkey=1', '', 'https://host/x?keyword=fine&monkey=1', false],
+    ['https://host/x?key=', '', 'https://host/x?key=', false],
+    ['https://host/x?key=<set>', '<set>', 'https://host/x?key=<set>', false],
+    ['https://host/x?empty=&key', '', 'https://host/x?empty=&key', false],
+    ['https://host/x#key=SECRET', '', 'https://host/x#key=SECRET', false],
+    ['https://host/x', '', 'https://host/x', false],
+    ['file:///C:/x?key=SECRET', '', 'file:///C:/x?key=SECRET', false],
+    ['plain ?key=SECRET', '', 'plain ?key=SECRET', false],
+    ['', '', '', false],
+  ];
+  rows.forEach(([input, repl, want, changed]) => {
     const got = SS.redactQuerySecrets(input, repl);
-    assert.strictEqual(got, want, 'redactQuerySecrets(' + m[1] + ', ' + m[2] + ')');
-    assert.strictEqual(got !== input, changed, 'changed flag of ' + m[1]);
+    assert.strictEqual(got, want, 'redactQuerySecrets(' + JSON.stringify(input) + ', ' + JSON.stringify(repl) + ')');
+    assert.strictEqual(got !== input, changed, 'changed flag of ' + JSON.stringify(input));
   });
 
-  // StripJSON's own cases: the same file, blanked the same way, and a clean one left alone.
-  const blocks = goTest.split('\nfunc ');
-  const block = (name) => blocks.find((b) => b.startsWith(name));
-  // a Go raw string: name := `...` or name := []byte(`...`)
-  const tick = (b, name) => {
-    const at = b.indexOf(name + ' := ');
-    const open = b.indexOf('`', at);
-    const close = b.indexOf('`', open + 1);
-    assert.ok(at >= 0 && open > at && close > open, name + ' not found');
-    return b.slice(open + 1, close);
-  };
-  const blank = block('TestStripJSON_QuerySecretsAreBlanked');
-  assert.strictEqual(JSON.stringify(SS.stripSecrets(JSON.parse(tick(blank, 'in')))), tick(blank, 'want'), 'the settings file of the Go test comes out the same');
-  const clean = tick(block('TestStripJSON_QueryLeavesHarmlessParametersAndBlankOnesAlone'), 'clean');
+  const blankIn = '{"text":{"baseUrl":"https://h.example/v1?key=K2","apiKey":"sk-x"},"scraps":{"gitRemoteUrl":"https://github.com/a/b.git?token=Q1"},"other":{"u":"https://u:pw@h.example/p?sig=S3&auth=A4&x=1#frag"}}';
+  const blankWant = '{"text":{"baseUrl":"https://h.example/v1?key=","apiKey":""},"scraps":{"gitRemoteUrl":"https://github.com/a/b.git?token="},"other":{"u":"https://h.example/p?sig=&auth=&x=1#frag"}}';
+  assert.strictEqual(JSON.stringify(SS.stripSecrets(JSON.parse(blankIn))), blankWant, 'query and userinfo secrets blanked consistently');
+  const clean = '{"a":"https://h.example/v1?alt=json&keyword=fine&monkey=1","b":"https://h.example/v1?key=","c":"https://h.example/v1?empty=&key","d":"not a url ?key=SECRET","e":"ftp://h/x?key=SECRET"}';
   assert.strictEqual(JSON.stringify(SS.stripSecrets(JSON.parse(clean))), clean, 'harmless parameters, blank ones and non-URLs are left as they are');
 })();
 

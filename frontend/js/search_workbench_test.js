@@ -47,7 +47,7 @@ test('create returns SearchWorkbench interface without app.js', () => {
   assert.strictEqual(typeof wb.close, 'function');
   assert.strictEqual(typeof wb.setMode, 'function');
   assert.strictEqual(typeof wb.openForRpc, 'function');
-  assert.strictEqual(wb.isDeepDialogOpen(), false);
+  assert.strictEqual(wb.isDeepDialogOpen, undefined);
 });
 
 test('open and close are safe when modal DOM is absent', () => {
@@ -56,7 +56,6 @@ test('open and close are safe when modal DOM is absent', () => {
   wb.open();
   wb.close();
   assert.strictEqual(wb.openForRpc(), null);
-  assert.strictEqual(wb.isDeepDialogOpen(), false);
 });
 
 test('openForRpc rejects meaning mode when semantic search is off', () => {

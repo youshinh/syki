@@ -18,21 +18,6 @@
   const initialWindowSplitAgent = !!(urlParams && urlParams.get('split') === 'agent');
   const initialWindowFile = (urlParams && urlParams.get('file')) || '';
 
-  function openNewWindow(opts) {
-    const o = opts || {};
-    if (platformCapabilities && platformCapabilities.multiWindow === false) return;
-    if (window.backend && typeof window.backend.openNewWindow === 'function') {
-      window.backend.openNewWindow(JSON.stringify({
-        filePath: o.filePath || '',
-        splitAgent: !!o.splitAgent
-      })).catch((err) => {
-        if (typeof showMessage === 'function') {
-          showMessage(String((err && err.message) || err || 'Failed to open window'), 3500, { important: true });
-        }
-      });
-    }
-  }
-
   let secondaryClosePromptOpen = false;
   if (typeof window !== 'undefined') {
     window.__sykiRequestCloseWindow = async function () {
@@ -218,26 +203,7 @@
     },
     scraps: {
       scrapDir: '~/Documents/syki-sok/scraps',
-      gitSyncEnabled: true,
-      gitSyncDebounceSeconds: 30,
-      gitRemoteBranch: 'main',
-      gitRemoteUrl: '',
       maxPipeSizeMB: 10
-    },
-    cfBridge: {
-      enabled: false,
-      endpoint: '',
-      token: '',
-      pollIntervalSeconds: 30
-    },
-    inbox: {
-      enabled: false,
-      dir: ''
-    },
-    // Ctrl+Enter's "do what I mean" dispatch (read by slot_agent.js through SykiBridge.getAutoSelectorConfig).
-    autoSelector: {
-      enabled: true,
-      agentConfirm: true
     },
     shortcuts: {}
   };
@@ -331,7 +297,6 @@
     inlinePrompt: 'Ctrl+L',
     rewriteSelection: 'Ctrl+K',
     aiCorrection: 'Alt+C',
-    quickActions: 'Ctrl+J',
     convertMermaid: '',
     mermaidToImage: '',
     moveLineUp: 'Alt+ArrowUp',
@@ -353,7 +318,6 @@
     commandBar: 'Ctrl+E',
     runCliFilter: '',
     runAiCli: '',
-    mobileDrop: 'Ctrl+Shift+U',
     voiceInput: 'Ctrl+Shift+R',
     voiceInputRaw: 'Ctrl+Shift+Alt+R',
     voiceRefineToggle: 'Ctrl+Alt+R',
@@ -392,7 +356,6 @@
     inlinePrompt: 'Cmd+L',
     rewriteSelection: 'Cmd+K',
     aiCorrection: 'Cmd+Shift+C',
-    quickActions: 'Cmd+J',
     convertMermaid: '',
     mermaidToImage: '',
     moveLineUp: 'Option+ArrowUp',
@@ -411,7 +374,6 @@
     commandBar: 'Cmd+E',
     runCliFilter: '',
     runAiCli: '',
-    mobileDrop: 'Cmd+Shift+U',
     voiceInput: 'Cmd+Shift+R',
     voiceInputRaw: 'Cmd+Shift+Option+R',
     voiceRefineToggle: 'Cmd+Option+R',
@@ -720,7 +682,6 @@
     if (btnTogglePreview) btnTogglePreview.title = isPreviewMode ? t('edit') : t('togglePreviewTitle');
     if (btnToggleSplit) btnToggleSplit.title = t('splitViewTitle');
     renderProviderDetectLine(); // Settings > AI Models "Protocol: ...", written once when the dialog opened
-    if (typeof updateGitSyncStatusUI === 'function') updateGitSyncStatusUI();
     updateShortcutLabels();
     // The editor's row labels are translated text: redraw them if it is open.
     if (layoutSectionOpen()) renderLayoutEditors();
@@ -775,14 +736,6 @@
   const secondaryEditorPane = document.getElementById('secondary-editor-pane');
   const secondaryLineNumbers = document.getElementById('secondary-line-numbers');
   const editorSecondary = document.getElementById('editor-secondary');
-  // SlotAgent was previously only ever attached to the primary editor (from
-  // selectTab), so the secondary pane had no {{ }} trigger detection, quick
-  // selector, or Ctrl+Enter slot execution. The attach guard on the SlotAgent
-  // side (__slotAgentAttached) makes this idempotent, so it's safe to wire up
-  // once here rather than repeating it at every split/tab-select call site.
-  if (window.SlotAgent && window.SlotAgent.attachEditor && editorSecondary) {
-    window.SlotAgent.attachEditor(editorSecondary);
-  }
   const secondaryPreviewPane = document.getElementById('secondary-preview-pane');
   const secondaryAgentPane = document.getElementById('secondary-agent-pane');
   let agentController = null;
@@ -832,57 +785,6 @@
   const paneShortcuts = document.getElementById('pane-shortcuts');
   const shortcutsListBody = document.getElementById('shortcuts-list-body');
   const btnResetShortcuts = document.getElementById('btn-reset-shortcuts');
-
-  // Scraps & Git Sync Elements
-  const statGitSync = document.getElementById('stat-gitsync');
-  let currentGitSyncStatus = null;
-
-  function updateGitSyncStatusUI(statusInfo) {
-    if (!statGitSync) return;
-    if (statusInfo) {
-      currentGitSyncStatus = statusInfo;
-    }
-    const isEnabled = config.scraps ? (config.scraps.gitSyncEnabled !== false) : (config.git_sync_enabled !== false);
-    if (!isEnabled) {
-      statGitSync.textContent = t('gitSyncStatusDisabled');
-      statGitSync.title = t('gitSyncDisabledTooltip');
-      statGitSync.style.color = 'var(--text-muted)';
-      statGitSync.style.opacity = '0.55';
-      statGitSync.classList.add('status-disabled');
-      return;
-    }
-
-    statGitSync.classList.remove('status-disabled');
-    statGitSync.style.opacity = '1';
-
-    const info = currentGitSyncStatus;
-    // The label and the lead of the tooltip are in the UI language; the engine's own message (English detail such as
-    // "Synced at 12:00:01" or the reason of a failure) follows in brackets.
-    const detail = info && info.message ? ' (' + info.message + ')' : '';
-    if (!info || info.status === 'ready') {
-      statGitSync.textContent = t('gitStatusReady');
-      statGitSync.title = t('gitSyncReadyTooltip');
-      statGitSync.style.color = '';
-    } else if (info.status === 'syncing') {
-      statGitSync.textContent = t('gitStatusSyncing');
-      statGitSync.title = t('gitSyncSyncingTooltip') + detail;
-      statGitSync.style.color = 'var(--status-warn)';
-    } else if (info.status === 'synced') {
-      statGitSync.textContent = t('gitStatusSynced');
-      statGitSync.title = t('gitSyncSyncedTooltip') + detail;
-      statGitSync.style.color = 'var(--status-ok)';
-    } else if (info.status === 'error') {
-      statGitSync.textContent = t('gitStatusError');
-      statGitSync.title = t('gitSyncErrorTooltip') + detail;
-      statGitSync.style.color = 'var(--status-error)';
-    } else if (info.status === 'disabled') {
-      statGitSync.textContent = t('gitSyncStatusDisabled');
-      statGitSync.title = t('gitSyncDisabledTooltip');
-      statGitSync.style.color = 'var(--text-muted)';
-      statGitSync.style.opacity = '0.55';
-      statGitSync.classList.add('status-disabled');
-    }
-  }
 
   const btnSearchScraps = document.getElementById('btn-search-scraps');
   const scrapsSearchModal = document.getElementById('scraps-search-modal');
@@ -940,10 +842,6 @@
   const btnCliFilterExpand = document.getElementById('btn-cli-filter-expand');
   const cliFilterPreview = document.getElementById('cli-filter-preview');
 
-  // Settings Export / Import Elements
-  const btnExportSettings = document.getElementById('btn-export-settings');
-  const btnImportSettings = document.getElementById('btn-import-settings');
-
   // Go to Line Elements
   const gotoLineModal = document.getElementById('goto-line-modal');
   const gotoLineInput = document.getElementById('goto-line-input');
@@ -956,31 +854,12 @@
   const quickPickList = document.getElementById('quick-pick-list');
   const statAmbientContainer = document.getElementById('stat-ambient-container');
 
-  // Mobile Drop QR Sync Elements (Ctrl+Shift+U / Cmd+Shift+U)
-  const mobileDropModal = document.getElementById('mobile-drop-modal');
-  const mobileDropLoading = document.getElementById('mobile-drop-loading');
-  const mobileDropContent = document.getElementById('mobile-drop-content');
-  const mobileDropErrorEl = document.getElementById('mobile-drop-error');
-  const mobileDropQrImg = document.getElementById('mobile-drop-qr');
-  const mobileDropUrlEl = document.getElementById('mobile-drop-url');
-  const mobileDropCountdownEl = document.getElementById('mobile-drop-countdown');
-  const mobileDropHintEl = document.getElementById('mobile-drop-hint');
-  const mobileDropSharedPreviewEl = document.getElementById('mobile-drop-shared-preview');
-  const modalMobileDropClose = document.getElementById('modal-mobile-drop-close');
-  const btnMobileDropCancel = document.getElementById('btn-mobile-drop-cancel');
-  const btnMobileDropTunnel = document.getElementById('btn-mobile-drop-tunnel');
-  const mobileDropTunnelStatusEl = document.getElementById('mobile-drop-tunnel-status');
-  const btnMobileDrop = document.getElementById('btn-mobile-drop');
   const btnVoiceInput = document.getElementById('btn-voice-input');
   const btnQuickCapture = document.getElementById('btn-quick-capture');
   const layoutDetailsEl = document.getElementById('cfg-layout-details');
   const layoutToolbarHostEl = document.getElementById('cfg-layout-toolbar');
   const layoutContextHostEl = document.getElementById('cfg-layout-context');
   const btnLayoutReset = document.getElementById('btn-layout-reset');
-  const mobileDropInstallEl = document.getElementById('mobile-drop-install');
-  const mobileDropInstallCmdEl = document.getElementById('mobile-drop-install-cmd');
-  const btnMobileDropInstallCopy = document.getElementById('btn-mobile-drop-install-copy');
-  const mobileDropInstallCopyLabelEl = document.getElementById('mobile-drop-install-copy-label');
 
   // Custom In-App Confirm Dialog (Eliminates Browser 127.0.0.1 Prompt)
   const confirmModal = document.getElementById('confirm-modal');
@@ -1533,9 +1412,6 @@
   });
   window.addEventListener('focus', () => {
     clearTimeout(memoryTrimTimer);
-    if (window.backend && typeof window.backend.pollCFBridgeNow === 'function') {
-      window.backend.pollCFBridgeNow();
-    }
   });
 
   // Chromium drops the space that follows the insertion point when the inserted text itself
@@ -1758,7 +1634,6 @@
       return label !== '' && text.indexOf(label) !== -1;
     };
     for (const info of pendingLLMRequests.values()) if (holds(info)) return true;
-    for (const info of pendingCommandTasks.values()) if (holds(info)) return true;
     return false;
   }
 
@@ -2118,167 +1993,6 @@
     }));
   }
 
-  // --- Tags (tag_edit.js: palette "Add a tag to this entry", "Add a tag to the whole note", "Remove a tag") ---
-  // The rules of where a tag goes are the backend's (window.backend.tagEdit answers with a patch of lines); tag_edit.js, loaded on the first
-  // use, is the page's side: the request, the picker, the sentence. The three commands are offered only when the backend has tagEdit.
-  let tagPickerOpen = false; // the tag picker is up (isDialogOpen)
-  function tagEditPaletteCommands() {
-    if (!(window.backend && typeof window.backend.tagEdit === 'function')) return [];
-    const svg = (inner) => '<svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + inner + '</svg>';
-    const tag = '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>';
-    return [
-      ['entry', 'cmd_tag_entry', 'cmdPaletteTagEntry', 'cmdPaletteTagEntryDesc'],
-      ['note', 'cmd_tag_note', 'cmdPaletteTagNote', 'cmdPaletteTagNoteDesc'],
-      ['remove', 'cmd_tag_remove', 'cmdPaletteTagRemove', 'cmdPaletteTagRemoveDesc']
-    ].map((e) => ({
-      id: e[1],
-      title: t(e[2]),
-      desc: t(e[3]),
-      iconSvg: svg(tag),
-      action: () => openTagPicker(e[0])
-    }));
-  }
-
-  async function openTagPicker(kind) {
-    const editor = getActiveEditor();
-    if (!editor) return;
-    // With the preview over the editor there is no caret to take the entry from.
-    if (editor === editorEl && isPreviewMode) {
-      showMessage(t('tagEditNeedsEditor'), 3000);
-      return;
-    }
-    try {
-      if (!window.TagEdit) await loadScript('js/tag_edit.js?v=1.0.1');
-    } catch (err) {
-      showMessage(t('tagEditFailed', { message: oneLineFailure(err, false) }), 5000, { important: true });
-      return;
-    }
-    tagPickerOpen = true;
-    const opened = window.TagEdit.openPicker({
-      kind: kind, editor: editor, backend: window.backend, t: t, showMessage: showMessage,
-      apply: applyTagChange,
-      onClose: () => { tagPickerOpen = false; }
-    });
-    if (!opened) tagPickerOpen = false;
-  }
-
-  // Puts a change of the tags (TagEdit.changeOf) into the editor as ONE undo step, with the caret where TagEdit worked it out and the
-  // scroll where it was: the editing command keeps the browser's undo history, and the band marks the new text for a moment.
-  function applyTagChange(editor, change, selection, view) {
-    const expected = editor.value.slice(0, change.start) + change.rep + editor.value.slice(change.end);
-    try { editor.focus({ preventScroll: true }); } catch (e) { editor.focus(); }
-    editor.setSelectionRange(change.start, change.end);
-    try {
-      if (change.rep) insertTextWithUndo(change.rep, editor);
-      else document.execCommand('delete');
-    } catch (e) { /* checked below */ }
-    if (editor.value !== expected) editor.value = expected;
-    editor.setSelectionRange(selection[0], selection[1]);
-    editor.scrollTop = view.scrollTop;
-    editor.scrollLeft = view.scrollLeft;
-    onEditorInput(editor);
-    hideCursorAura(true);
-    triggerCursorAuraDebounced();
-    if (change.rep) flashGhostDiff(editor, change.start, change.start + change.rep.length);
-  }
-
-  // --- Lessons (lessons.js: the Lessons button of a finished task's card, and the palette command "Open the lessons file") ---
-  // A finished agent run becomes a short rule the person approves, kept in a file the backend puts in front of that agent's instruction
-  // from the next run on (docs/design/lessons-2026-10.md). The backend does the work (window.backend.lessonPlan / lessonRun / cancelLesson /
-  // lessonSave / lessonsInfo); lessons.js, loaded on the first use, is the page's side. Nothing here runs until a button or the command is
-  // used, and both are offered only when the backend has the calls.
-  async function ensureLessons() {
-    if (window.Lessons) return true;
-    try {
-      await loadScript('js/lessons.js?v=1.0.1');
-      return true;
-    } catch (err) {
-      showMessage(t('lessonsOpenFailed', { message: oneLineFailure(err, false) }), 5000, { important: true });
-      return false;
-    }
-  }
-
-  // info: { task (TaskManager.historyTask), opener (the button that was pressed) }. The task panel is rebuilt every second while tasks run, so
-  // when the dialog closes the focus goes to the same card's new button (or, with the panel gone, back to the note).
-  async function openLessonsDialog(info) {
-    if (!info || !info.task || !(window.backend && typeof window.backend.lessonPlan === 'function')) return;
-    if (!(await ensureLessons())) return;
-    const taskId = info.task.id;
-    window.Lessons.open({
-      task: info.task,
-      backend: window.backend,
-      t: t,
-      lang: (config.general && config.general.language) === 'ja' ? 'ja' : 'en',
-      mod: isMac ? 'Cmd' : 'Ctrl',
-      opener: info.opener || document.activeElement,
-      showMessage: showMessage,
-      rememberConsent: (key) => rememberCloudConsent(key),
-      openModelSettings: () => openAiModelsSettings('text'),
-      failureText: (err, llm) => oneLineFailure(err, llm),
-      restoreFocus: (opener) => {
-        const panel = document.getElementById('running-tasks-panel');
-        let back = opener && opener.isConnected ? opener : null;
-        if (!back && panel && !panel.classList.contains('hidden')) {
-          back = Array.from(document.querySelectorAll('#tasks-panel-list [data-lessons-id]')).find((b) => b.getAttribute('data-lessons-id') === taskId) || null;
-        }
-        if (!back) back = getActiveEditor();
-        if (back && typeof back.focus === 'function') back.focus({ preventScroll: true });
-      }
-    });
-  }
-  window.__openLessons = openLessonsDialog;
-
-  function lessonsPaletteCommands() {
-    if (!(window.backend && typeof window.backend.lessonsInfo === 'function')) return [];
-    const bulb = '<path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.3h6c0-1 .4-1.8 1-2.3A7 7 0 0 0 12 2z"/>';
-    return [{
-      id: 'cmd_lessons_file',
-      title: t('cmdPaletteLessonsFile'),
-      desc: t('cmdPaletteLessonsFileDesc'),
-      iconSvg: '<svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + bulb + '</svg>',
-      action: () => openLessonsFile()
-    }];
-  }
-
-  // One agent has lessons: its file opens as a note. Several: a small picker. None: a sentence.
-  async function openLessonsFile() {
-    if (!(await ensureLessons())) return;
-    let rows;
-    try {
-      rows = window.Lessons.fileList(await window.backend.lessonsInfo(''));
-    } catch (err) {
-      showMessage(t('lessonsInfoFailed', { message: oneLineFailure(err, false) }), 5000, { important: true });
-      return;
-    }
-    if (rows.length === 0) {
-      showMessage(t('lessonsNoneYet', { alt: (window.SykiPlatform && window.SykiPlatform.altLabel) || 'Alt' }), 6000);
-      return;
-    }
-    if (rows.length === 1) {
-      await openLessonsPath(rows[0].path);
-      return;
-    }
-    window.Lessons.openPicker({
-      rows: rows,
-      t: t,
-      openFile: (row) => openLessonsPath(row.path),
-      restoreFocus: () => { const editor = getActiveEditor(); if (editor) editor.focus({ preventScroll: true }); }
-    });
-  }
-
-  // The lessons file as an ordinary tab: the person edits it as any note (a rule is a line that starts with "- ").
-  async function openLessonsPath(filePath) {
-    try {
-      const res = await window.backend.readFileByPath(filePath);
-      if (!res || typeof res.content !== 'string') throw new Error('?');
-      if (isPreviewMode) await togglePreview();
-      createTab(res.title || String(filePath).split(/[\\/]/).pop(), res.content, filePath, res.encoding);
-      editorEl.focus();
-    } catch (err) {
-      showMessage(t('lessonsOpenFailed', { message: oneLineFailure(err, false) }), 5000, { important: true });
-    }
-  }
-
   // Ctrl+/ (Cmd+/): the lines of the selection become HTML comments, or back. comment_toggle.js decides (style:
   // general.commentStyle, 'line' or 'block'); the edit is one undo step. Lines left alone and refusals are told.
   function executeToggleComment(editor) {
@@ -2468,10 +2182,6 @@
       }
     }
 
-    if (window.SlotAgent && window.SlotAgent.attachEditor) {
-      window.SlotAgent.attachEditor(editorEl);
-    }
-
     if (editorEl) {
       editorEl.focus();
     }
@@ -2483,8 +2193,6 @@
     return tab ? (tab.path || '') : '';
   };
 
-  // Public resolver for sibling frontend modules (SlotAgent / JevAction) so they
-  // route to the pane the user is actually in instead of always #editor.
   window.getActiveEditorEl = function () {
     return getActiveEditor();
   };
@@ -2606,9 +2314,6 @@
       finishLlmTask(reqId, info, 'canceled');
     });
     updateLLMIndicator();
-    Array.from(pendingCommandTasks.entries()).forEach(([reqId, info]) => {
-      if (info && info.tabId === tabId) cancelCommandTask(reqId);
-    });
   }
 
   // Takes a tab out without asking anything (closeTab asks; the RPC tab.close decides for itself). The index is
@@ -3915,16 +3620,7 @@
             svg = res && res.svg ? res.svg : String(res || '');
           } catch (firstErr) {
             removeMermaidLeftovers(id);
-            const fixed = window.MermaidRepair ? window.MermaidRepair.repair(code).code : code;
-            if (fixed === code) throw firstErr;
-            drawn = fixed;
-            try {
-              const res2 = await window.mermaid.render(id + 'r', drawn);
-              svg = res2 && res2.svg ? res2.svg : String(res2 || '');
-            } catch (secondErr) {
-              removeMermaidLeftovers(id + 'r');
-              throw firstErr;
-            }
+            throw firstErr;
           }
           pre.dataset.mermaidSrc = drawn;
           pre.innerHTML = svg;
@@ -4384,22 +4080,16 @@
     }
 
     const hasDollar = rawText.indexOf('$') !== -1;
-    const needsAutoStrip = !!(window.AutoSelector && typeof window.AutoSelector.stripMarkers === 'function' && rawText.indexOf('syki:') !== -1);
     const codeSnippets = [];
     const mathPlaceholders = [];
 
-    if (hasDollar || needsAutoStrip) {
+    if (hasDollar) {
       // 1. Protect fenced code blocks (```...``` / ~~~...~~~) and inline code (`...`)
       rawText = rawText.replace(/(`{3,}[\s\S]*?`{3,}|~{3,}[\s\S]*?~{3,}|`[^`\n]+`)/g, (match) => {
         const token = `KATEXCODESNIPPET${codeSnippets.length}XYZ`;
         codeSnippets.push(match);
         return token;
       });
-
-      // 1b. The marker lines a task run leaves in the note are bookkeeping: the preview shows the answer only
-      if (needsAutoStrip) {
-        rawText = window.AutoSelector.stripMarkers(rawText);
-      }
 
       if (hasDollar) {
         // 2. Extract Block Math ($$...$$)
@@ -4490,17 +4180,8 @@
             try {
               svg = (await window.mermaid.render(id, drawn)).svg;
             } catch (firstErr) {
-              // not drawn: the usual slips are put right by rule and it is drawn once more (the note itself is not changed)
               removeMermaidLeftovers(id);
-              const fixed = window.MermaidRepair ? window.MermaidRepair.repair(diagramCode).code : diagramCode;
-              if (fixed === diagramCode) throw firstErr;
-              drawn = fixed;
-              try {
-                svg = (await window.mermaid.render(id + 'r', drawn)).svg;
-              } catch (secondErr) {
-                removeMermaidLeftovers(id + 'r');
-                throw firstErr; // the message of the diagram as it was written
-              }
+              throw firstErr;
             }
             container.dataset.mermaidSrc = drawn;
             container.innerHTML = svg;
@@ -5403,15 +5084,6 @@
     return ok;
   }
 
-  // Settings -> Integration -> Auto selector, with the defaults an old config (no such group) gets.
-  function getAutoSelectorConfig() {
-    const cfg = (config.autoSelector && typeof config.autoSelector === 'object') ? config.autoSelector : {};
-    return {
-      enabled: cfg.enabled !== false,
-      agentConfirm: cfg.agentConfirm !== false
-    };
-  }
-
   // The live text of a note, wherever it is shown (null when the tab is gone).
   function getTabText(tabId) {
     const tab = getTab(tabId);
@@ -5534,154 +5206,6 @@
     }
     finishLlmTask(reqId, info, 'canceled');
     showMessage(t('llmTaskCanceled'), 2500);
-    return true;
-  }
-
-  // --- Command tasks (Auto selector: [[ $ command ]]): a shell command whose output replaces an anchor in the note ---
-
-  // The command bar's safety gate, without touching the note: false when the command is refused (blocked, or a
-  // warning the user declines); true when it may run (also when no validator is available).
-  async function confirmCommand(cmd) {
-    const cmdStr = String(cmd || '').trim();
-    if (!cmdStr) return false;
-    if (!window.backend || !window.backend.validateCliCommand) return true;
-    let val = null;
-    try {
-      val = await window.backend.validateCliCommand(cmdStr);
-    } catch (e) { /* handled below: no verdict */ }
-    // A check that failed or said nothing proves nothing: ask as for a risky command instead of running it unchecked.
-    // (The backend still refuses a forbidden command when it runs.)
-    if (!val || typeof val !== 'object') val = { isWarning: true, reason: t('cliCheckFailed') };
-    if (val.isBlocked) {
-      showMessage(t('cliBlockedError', { reason: goErr(val.reason) }), 6000, { important: true });
-      return false;
-    }
-    if (val.isWarning) {
-      // A dangerous command: Cancel has the focus, a repeated or held Enter never answers, and the reason keeps its line breaks.
-      const proceed = await customConfirm(t('cliWarningConfirm', { reason: goErr(val.reason), cmd: cmdStr }), { okLabel: t('agentRiskRun'), multiline: true, safeDefault: true });
-      if (!proceed) {
-        showMessage(t('cliCancelled'), 2000);
-        return false;
-      }
-    }
-    return true;
-  }
-
-  // The agent safety gate, without touching the note: before an agent that acts without asking for permission runs, asks
-  // once per agent and exact command line (agent_risk.js); the answer is kept in config.agentAck. Promise<boolean>.
-  async function confirmAgentRun(agentKey, def) {
-    if (!window.AgentRisk) return true; // only in harnesses that leave agent_risk.js out; the page always loads it
-    return window.AgentRisk.confirmRun({
-      getAcks: () => config.agentAck,
-      setAcks: (acks) => {
-        config.agentAck = acks;
-        savePersistentConfig().catch(() => {});
-      },
-      ask: (text) => customConfirm(text, { okLabel: t('agentRiskRun'), multiline: true, safeDefault: true }),
-      t: (key) => t(key)
-    }, String(agentKey || ''), def);
-  }
-
-  const pendingCommandTasks = new Map(); // reqId -> { isTask, tabId, anchorId, wrapResult, wrapError, cancelReplacement, onFinish, timer }
-  const COMMAND_TASK_TIMEOUT_MS = 40000; // the backend stops a command after 30 s and always answers; this only guards a lost answer
-
-  function settleCommandTask(reqId, result, errStr) {
-    const info = pendingCommandTasks.get(reqId);
-    if (!info) return;
-    pendingCommandTasks.delete(reqId);
-    clearTimeout(info.timer);
-    if (window.__cliCallbacks) window.__cliCallbacks.delete(reqId);
-
-    if (!getTab(info.tabId)) {
-      finishLlmTask(reqId, info, 'canceled');
-      return;
-    }
-    const code = result && typeof result.exitCode === 'number' ? result.exitCode : 0;
-    const failed = !result || code !== 0;
-    const message = String((!result ? errStr : (result.error || `exit code ${code}`)) || 'no response').replace(/\s+/g, ' ').trim().substring(0, 300);
-    const fallback = failed ? `[${message}]` : String(result.output || '').trim();
-    const wrap = failed ? info.wrapError : info.wrapResult;
-    let replacement = fallback;
-    if (typeof wrap === 'function') {
-      try {
-        const wrapped = failed ? wrap(message, result || null) : wrap(result);
-        if (typeof wrapped === 'string') replacement = wrapped;
-      } catch (e) { /* the plain text stays */ }
-    }
-    applyAnchorReplacement(info.tabId, info.anchorId, replacement);
-    finishLlmTask(reqId, info, failed ? 'failed' : 'completed', failed ? message : undefined);
-    showMessage(failed ? t('cliError', { err: message }) : t('autoSelCommandDone'), failed ? 5000 : 3000, failed ? { important: true } : undefined);
-  }
-
-  // Runs opts.command with no input and, when it ends, replaces opts.anchorText (already in the note) with the answer.
-  //   opts: { tabId, command, anchorText, label?, wrapResult?(result) -> string, wrapError?(message, result|null) -> string,
-  //           cancelReplacement?: string (what a cancel leaves in place of the anchor, default ''),
-  //           onFinish?(status: 'completed' | 'failed' | 'canceled') }
-  //   result is { output, error, exitCode }; wrapResult is called for exit code 0, wrapError for anything else.
-  // Returns the request id, or null when it cannot start (the note is left alone). Desktop app only.
-  function runCommandTask(opts) {
-    const o = opts || {};
-    const command = typeof o.command === 'string' ? o.command.trim() : '';
-    if (!o.tabId || !getTab(o.tabId) || !o.anchorText || !command) return null;
-    if (!window.backend || !window.backend.runCommandFilterAsync) {
-      showMessage(t('autoSelCommandNativeOnly'), 4500);
-      return null;
-    }
-
-    const reqId = genReqId('cmdtask_');
-    const info = {
-      isTask: true,
-      tabId: o.tabId,
-      anchorId: o.anchorText,
-      wrapResult: o.wrapResult,
-      wrapError: o.wrapError,
-      cancelReplacement: typeof o.cancelReplacement === 'string' ? o.cancelReplacement : '',
-      onFinish: o.onFinish,
-      timer: null
-    };
-    pendingCommandTasks.set(reqId, info);
-    window.__cliCallbacks.set(reqId, (result, errStr) => settleCommandTask(reqId, result, errStr));
-    info.timer = setTimeout(() => settleCommandTask(reqId, null, t('autoSelCommandTimeout')), COMMAND_TASK_TIMEOUT_MS);
-
-    if (window.TaskManager && window.TaskManager.addTask) {
-      window.TaskManager.addTask({
-        id: reqId,
-        type: 'command',
-        agent: t('autoSelCommandLabel'),
-        instruction: String(o.label || command).replace(/\s+/g, ' ').trim().substring(0, 80),
-        onCancel: () => cancelCommandTask(reqId)
-      });
-    }
-
-    try {
-      const started = window.backend.runCommandFilterAsync(reqId, command, '');
-      if (started && typeof started.catch === 'function') {
-        started.catch((err) => settleCommandTask(reqId, null, (err && err.message) || String(err)));
-      }
-    } catch (err) {
-      settleCommandTask(reqId, null, (err && err.message) || String(err));
-    }
-    return reqId;
-  }
-
-  // Stops the command, removes the anchor and forgets the task: the answer that may still arrive finds no callback.
-  function cancelCommandTask(reqId) {
-    const info = pendingCommandTasks.get(reqId);
-    if (!info) return false;
-    pendingCommandTasks.delete(reqId);
-    clearTimeout(info.timer);
-    if (window.__cliCallbacks) window.__cliCallbacks.delete(reqId);
-    if (window.backend && window.backend.cancelCommandFilter) {
-      try {
-        window.backend.cancelCommandFilter(reqId);
-      } catch (e) { /* already finished */ }
-    }
-    const text = getTabText(info.tabId);
-    if (text !== null && text.indexOf(info.anchorId) !== -1) {
-      applyAnchorReplacement(info.tabId, info.anchorId, info.cancelReplacement || '');
-    }
-    finishLlmTask(reqId, info, 'canceled');
-    showMessage(t('autoSelCommandCanceled'), 2500);
     return true;
   }
 
@@ -5833,7 +5357,7 @@
   }
 
   // Register a pending LLM request together with its watchdog timer.
-  // Mirrors the per-request timer used by jev_action.js's jevExecuteAsync.
+  // Per-request watchdog timer so stalled LLM calls always settle cleanly.
   function registerPendingLLMRequest(reqId, info) {
     pendingLLMRequests.set(reqId, info);
     clearPendingLLMTimer(reqId);
@@ -6083,7 +5607,6 @@
     } else if (reqId.startsWith('mermaid_') && !errorText) {
       // the usual slips of the AI (fence tagged ```timeline, a label with parentheses, ...) are put right by rule (mermaid_repair.js)
       cleanedResult = stripMarkdownCodeFences(cleanedResult, true);
-      if (window.MermaidRepair) cleanedResult = window.MermaidRepair.repairAnswer(cleanedResult).text;
     } else {
       cleanedResult = stripMarkdownCodeFences(cleanedResult, true);
     }
@@ -6754,24 +6277,11 @@
     return config.action;
   }
 
-  // Suggestions (Quick Actions): hands the setting to the suggestion engine and redraws the AI item, whose switches show it.
   function updateActionStatus() {
-    const isEn = ensureActionConfig().enabled !== false;
-    if (window.JevAction && window.JevAction.updateConfig) {
-      window.JevAction.updateConfig({
-        enabled: isEn,
-        manualOnly: !!config.action.manualOnly,
-        delaySec: typeof config.action.delaySec === 'number' ? config.action.delaySec : 1.5
-      });
-    } else if (window.JevAction && window.JevAction.setEnabled) {
-      window.JevAction.setEnabled(isEn);
-    }
+    ensureActionConfig();
     refreshStatusAI();
   }
 
-  // Suggestions have three real states behind two switches in the AI popover: 'auto' (suggests while you type), 'manual'
-  // (only on its shortcut, no auto-popup) and 'off'. They are the enabled / manualOnly pair that the two switches of
-  // Settings control (see updateQuickActionsFieldStates), so both places stay in step.
   function actionMode() {
     const isEn = ensureActionConfig().enabled !== false;
     return !isEn ? 'off' : (config.action.manualOnly ? 'manual' : 'auto');
@@ -6784,21 +6294,13 @@
 
     updateActionStatus();
 
-    const cfgActEnabledEl = document.getElementById('cfg-action-enabled');
-    if (cfgActEnabledEl) cfgActEnabledEl.checked = config.action.enabled !== false;
-    const cfgActManualOnlyEl = document.getElementById('cfg-action-manual-only');
-    if (cfgActManualOnlyEl) cfgActManualOnlyEl.checked = !!config.action.manualOnly;
-    // Keep the settings modal's muted/disabled field states correct if it happens to be open.
-    if (typeof updateQuickActionsFieldStates === 'function') updateQuickActionsFieldStates();
-
-    // Naming the actual key (its configured shortcut, not a fixed "Ctrl+J") stays right if the user rebinds quickActions.
     const toastKey = mode === 'off' ? 'toastSuggestionsOff' : (mode === 'manual' ? 'toastSuggestionsManual' : 'toastSuggestionsOn');
     showMessage(t(toastKey, { key: suggestionsKeyLabel() }), 2500);
     savePersistentConfig();
   }
 
   function suggestionsKeyLabel() {
-    return getShortcutDisplay('quickActions', isMac ? 'Cmd+J' : 'Ctrl+J');
+    return isMac ? 'Cmd+J' : 'Ctrl+J';
   }
 
   function toggleSuggestions() {
@@ -8353,18 +7855,17 @@
     closeAskBarForSettings();
     openSettings();
     switchSettingsTab('model');
-    const cloud = part === 'cloud' || part === 'text';
-    const anchor = document.getElementById(cloud ? 'cfg-base-url' : 'local-ai-card');
+    const anchor = document.getElementById('cfg-base-url');
     if (anchor) {
       for (let n = anchor; n; n = n.parentElement) {
         if (n.tagName === 'DETAILS') n.open = true;
       }
-      const block = cloud && anchor.parentElement ? anchor.parentElement : anchor;
-      if (typeof block.scrollIntoView === 'function') block.scrollIntoView({ block: cloud ? 'start' : 'nearest' });
+      const block = anchor.parentElement ? anchor.parentElement : anchor;
+      if (typeof block.scrollIntoView === 'function') block.scrollIntoView({ block: 'start' });
     }
     // openSettings() moves focus to its first tab after 50 ms; the field the person asked for gets it after that.
     setTimeout(() => {
-      const field = document.getElementById(part === 'text' ? 'cfg-base-url' : cloud ? 'cfg-api-key' : 'btn-setup-ollama');
+      const field = document.getElementById(part === 'cloud' ? 'cfg-api-key' : 'cfg-base-url');
       if (field) field.focus({ preventScroll: true });
     }, 80);
   }
@@ -8865,43 +8366,9 @@
     return (typeof navigator !== 'undefined' && /win/i.test(navigator.platform || navigator.userAgent || '')) ? 'win' : 'unix';
   }
 
-  // agents.yaml `snippets`, fetched when the bar opens (only when the snippet library is loaded at all).
-  let commandUserSnippets = [];
+  function refreshCommandUserSnippets() {}
 
-  function refreshCommandUserSnippets() {
-    if (!(window.SlotSnippets && window.backend && window.backend.getActiveSlotConfigJSON)) return;
-    Promise.resolve(window.backend.getActiveSlotConfigJSON()).then((raw) => {
-      const cfg = raw ? JSON.parse(raw) : null;
-      commandUserSnippets = (cfg && Array.isArray(cfg.snippets)) ? cfg.snippets : [];
-      refreshCliSnippetsDatalist();
-    }).catch(() => {});
-  }
-
-  // Presets for the manual mode: the agents.yaml snippets of the user first, then the fixed filters above (what the bar
-  // pipes the selection through: sort -u, jq ., ...), then the shared built-in command snippets when the library is loaded.
-  // A body that still holds a ${...} / $0 placeholder is a task template that needs a value, not a command that can run
-  // as it is: it is skipped. "$$0" and "$${" are the library's escapes for a literal "$0" / "${".
   function commandPresetItems() {
-    if (window.SlotSnippets && typeof window.SlotSnippets.list === 'function') {
-      try {
-        const mine = [];
-        const shared = [];
-        window.SlotSnippets.list({
-          kind: 'command',
-          os: currentCommandOs(),
-          lang: (config.general && config.general.language) || 'en',
-          user: commandUserSnippets
-        }).forEach((snip) => {
-          const body = String((snip && snip.body) || '').trim();
-          if (!body || /\$\{[^}]*\}|\$0/.test(body.replace(/\$\$0|\$\$\{/g, ''))) return;
-          const value = body.replace(/\$\$0/g, () => '$0').replace(/\$\$\{/g, () => '${');
-          (snip.builtin === false ? mine : shared).push({ value: value, label: snip.label || value });
-        });
-        return mine.concat(cliPresetSnippets(), shared);
-      } catch (e) {
-        console.warn('Command presets from SlotSnippets failed:', e);
-      }
-    }
     return cliPresetSnippets();
   }
 
@@ -9430,43 +8897,10 @@
       return;
     }
 
-    // Safety Validation Check. The in-flight flag goes up before the first await: an Enter pressed again while the check (or the
-    // question it leads to) is still open would otherwise start the same command once more.
+    // Direct CLI execution for syki-lite (Ctrl+E).
     cliBadgeVerdict = '';
     isCliFilterRunning = true;
     updateCliFilterBarModeUI();
-    let mayRun = false;
-    try {
-      if (window.backend && window.backend.validateCliCommand) {
-        let check = null;
-        try {
-          check = await window.backend.validateCliCommand(cmdStr);
-        } catch (e) { /* handled below: no verdict */ }
-        // A check that failed or said nothing proves nothing: ask as for a risky command instead of running it unchecked.
-        // (The backend still refuses a forbidden command when it runs.)
-        if (!check || typeof check !== 'object') check = { isWarning: true, reason: t('cliCheckFailed') };
-        if (check.isBlocked) {
-          showMessage(t('cliBlockedError', { reason: goErr(check.reason) }), 6000, { important: true });
-          cliBadgeVerdict = 'blocked';
-          resetCliFilterUI();
-          return;
-        }
-        if (check.isWarning) {
-          // Same question as confirmCommand: Cancel is the default, so an Enter that is still held down cannot run the command.
-          const proceed = await customConfirm(t('cliWarningConfirm', { reason: goErr(check.reason), cmd: cmdStr }), { okLabel: t('agentRiskRun'), multiline: true, safeDefault: true });
-          if (!proceed) {
-            showMessage(t('cliCancelled'), 2000);
-            return;
-          }
-        }
-      }
-      mayRun = true;
-    } finally {
-      // Refused (or the question failed): the bar is usable again. A refusal that already reset it keeps its badge.
-      if (!mayRun && isCliFilterRunning) resetCliFilterUI();
-    }
-    // Esc or the close button while the check was out: it already reset the bar, and nothing may run.
-    if (!isCliFilterRunning) return;
 
     let editor = getActiveEditor();
     if (!editor) {
@@ -10211,21 +9645,7 @@ OUTPUT FORMAT:
         svgHtml = rendered.svg;
       } catch (firstErr) {
         removeMermaidLeftovers(renderId);
-        const fixed = (window.MermaidRepair && typeof window.MermaidRepair.repair === "function")
-          ? window.MermaidRepair.repair(mermaidCode).code
-          : mermaidCode;
-        if (fixed && fixed !== mermaidCode) {
-          drawn = fixed;
-          try {
-            const rendered2 = await window.mermaid.render(renderId + "r", drawn);
-            svgHtml = rendered2.svg;
-          } catch (secondErr) {
-            removeMermaidLeftovers(renderId + "r");
-            throw firstErr;
-          }
-        } else {
-          throw firstErr;
-        }
+        throw firstErr;
       }
 
       const tempContainer = document.createElement("div");
@@ -10580,23 +10000,7 @@ OUTPUT FORMAT:
         iconSvg: '<svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/><circle cx="17" cy="7" r="3"/></svg>',
         action: () => openCommandBar('ai')
       },
-      {
-        id: 'cmd_snippets',
-        title: t('cmdPaletteSnippets'),
-        desc: t('cmdPaletteSnippetsDesc'),
-        iconSvg: '<svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H7a2 2 0 0 0-2 2v4a2 2 0 0 1-2 2 2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h1"/><path d="M16 3h1a2 2 0 0 1 2 2v4a2 2 0 0 0 2 2 2 2 0 0 0-2 2v4a2 2 0 0 1-2 2h-1"/></svg>',
-        action: () => { if (window.SlotAgent && window.SlotAgent.openSnippetPicker) window.SlotAgent.openSnippetPicker(); }
-      },
       ...resultBlockPaletteCommands(),
-      ...tagEditPaletteCommands(),
-      ...lessonsPaletteCommands(),
-      {
-        id: 'cmd_mobile_drop',
-        title: t('cmdPaletteMobileDrop'),
-        iconSvg: '<svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>',
-        desc: t('cmdPaletteMobileDropDesc', { sc: getShortcutDisplay('mobileDrop', isMac ? 'Cmd+Shift+U' : 'Ctrl+Shift+U') }),
-        action: () => startMobileDrop()
-      },
       {
         id: 'cmd_voice_input',
         title: t('cmdPaletteVoiceInput'),
@@ -10610,13 +10014,6 @@ OUTPUT FORMAT:
         iconSvg: '<svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="10" rx="2.5"/><line x1="6" y1="12" x2="12" y2="12"/><line x1="16" y1="10" x2="16" y2="14"/></svg>',
         desc: paletteDescWithShortcut('cmdPaletteQuickCaptureDesc', 'quickCapture'),
         action: () => { Promise.resolve(window.backend.openQuickCapture()).catch(() => {}); }
-      }] : []),
-      ...((window.backend && window.backend.openInboxFolder && config.inbox && config.inbox.enabled) ? [{
-        id: 'cmd_open_inbox',
-        title: t('cmdPaletteOpenInbox'),
-        iconSvg: '<svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>',
-        desc: t('cmdPaletteOpenInboxDesc'),
-        action: () => { Promise.resolve(window.backend.openInboxFolder()).catch((e) => showMessage(String((e && e.message) || e), 4000, { important: true })); }
       }] : []),
       {
         id: 'cmd_pipe_polish',
@@ -11663,105 +11060,6 @@ OUTPUT FORMAT:
   btnReplaceOne.onclick = replaceOne;
   btnReplaceAll.onclick = replaceAll;
 
-  // --- Mobile Drop QR Sync (Ctrl+Shift+U / Cmd+Shift+U) ---
-  let mobileDropCountdownTimer = null;
-  let mobileDropRemainingSeconds = 0;
-
-  function appendToActiveBuffer(text) {
-    const editor = getActiveEditor();
-    const tab = getActiveTab();
-    if (!editor || !tab) {
-      showMessage(t('mobileDropNoActiveTab'), 3000);
-      return;
-    }
-    const endPos = editor.value.length;
-    editor.setSelectionRange(endPos, endPos);
-    insertTextWithUndo(text, editor);
-    // Same bookkeeping as typing (dirty flag, line numbers, status bar, autosave, session
-    // save, live preview). skipAutocomplete: a ghost suggestion is not wanted after a paste.
-    onEditorInput(editor, tab, true);
-    editor.scrollTop = editor.scrollHeight;
-  }
-
-  function stopMobileDropCountdown() {
-    if (mobileDropCountdownTimer) {
-      clearInterval(mobileDropCountdownTimer);
-      mobileDropCountdownTimer = null;
-    }
-  }
-
-  function startMobileDropCountdown(seconds) {
-    stopMobileDropCountdown();
-    mobileDropRemainingSeconds = Math.max(0, Math.floor(seconds) || 60);
-    if (mobileDropCountdownEl) mobileDropCountdownEl.textContent = String(mobileDropRemainingSeconds);
-    mobileDropCountdownTimer = setInterval(() => {
-      mobileDropRemainingSeconds -= 1;
-      if (mobileDropRemainingSeconds < 0) {
-        stopMobileDropCountdown();
-        return;
-      }
-      if (mobileDropCountdownEl) mobileDropCountdownEl.textContent = String(mobileDropRemainingSeconds);
-    }, 1000);
-  }
-
-  function isMobileDropModalOpen() {
-    return !!(mobileDropModal && !mobileDropModal.classList.contains('hidden'));
-  }
-
-  function showMobileDropError(message) {
-    if (!mobileDropModal) return;
-    mobileDropModal.classList.remove('hidden');
-    if (mobileDropLoading) mobileDropLoading.classList.add('hidden');
-    if (mobileDropContent) mobileDropContent.classList.add('hidden');
-    if (mobileDropErrorEl) {
-      mobileDropErrorEl.classList.remove('hidden');
-      mobileDropErrorEl.textContent = message;
-    }
-  }
-
-  function closeMobileDropModal() {
-    if (mobileDropModal) mobileDropModal.classList.add('hidden');
-    stopMobileDropCountdown();
-    resetMobileDropTunnelUI();
-    unbindMobileDropSharedTextListeners();
-    const editor = getActiveEditor();
-    if (editor) editor.focus();
-  }
-
-  function resetMobileDropTunnelUI() {
-    if (btnMobileDropTunnel) {
-      btnMobileDropTunnel.disabled = false;
-      btnMobileDropTunnel.classList.remove('hidden');
-    }
-    if (mobileDropTunnelStatusEl) {
-      mobileDropTunnelStatusEl.classList.add('hidden');
-      mobileDropTunnelStatusEl.classList.remove('error');
-      mobileDropTunnelStatusEl.textContent = '';
-    }
-    if (mobileDropHintEl) {
-      mobileDropHintEl.textContent = t('mobileDropHint');
-    }
-    hideMobileDropInstall();
-  }
-
-  // The install command offered when cloudflared is missing, with a Copy button.
-  let mobileDropCopiedTimer = null;
-
-  function hideMobileDropInstall() {
-    clearTimeout(mobileDropCopiedTimer);
-    if (mobileDropInstallEl) mobileDropInstallEl.classList.add('hidden');
-    if (mobileDropInstallCmdEl) mobileDropInstallCmdEl.textContent = '';
-    if (mobileDropInstallCopyLabelEl) mobileDropInstallCopyLabelEl.textContent = t('mobileDropCopy');
-  }
-
-  function showMobileDropInstall(command) {
-    if (!mobileDropInstallEl || !mobileDropInstallCmdEl) return;
-    clearTimeout(mobileDropCopiedTimer);
-    mobileDropInstallCmdEl.textContent = command;
-    if (mobileDropInstallCopyLabelEl) mobileDropInstallCopyLabelEl.textContent = t('mobileDropCopy');
-    mobileDropInstallEl.classList.remove('hidden');
-  }
-
   // navigator.clipboard needs a secure context and a user gesture; some webviews refuse it, so
   // fall back to a throw-away textarea + execCommand. Resolves to whether anything was copied.
   async function copyTextToClipboard(text) {
@@ -11784,269 +11082,6 @@ OUTPUT FORMAT:
     document.body.removeChild(scratch);
     if (previouslyFocused && typeof previouslyFocused.focus === 'function') previouslyFocused.focus();
     return copied;
-  }
-
-  async function copyMobileDropInstallCommand() {
-    const command = mobileDropInstallCmdEl ? mobileDropInstallCmdEl.textContent : '';
-    if (!command || !mobileDropInstallCopyLabelEl) return;
-    const copied = await copyTextToClipboard(command);
-    if (!copied && window.getSelection && document.createRange) {
-      // Could not write to the clipboard: select the command so Ctrl+C works.
-      const range = document.createRange();
-      range.selectNodeContents(mobileDropInstallCmdEl);
-      const selection = window.getSelection();
-      selection.removeAllRanges();
-      selection.addRange(range);
-    }
-    mobileDropInstallCopyLabelEl.textContent = t(copied ? 'mobileDropCopied' : 'mobileDropCopyFailed');
-    clearTimeout(mobileDropCopiedTimer);
-    mobileDropCopiedTimer = setTimeout(() => {
-      mobileDropInstallCopyLabelEl.textContent = t('mobileDropCopy');
-    }, 2000);
-  }
-
-  // Applies a MobileDropInfo response (from either startMobileDrop or a
-  // successful tunnel switch) to the already-visible modal content. A
-  // brief opacity fade on the QR image marks a genuine mode switch without
-  // introducing a new visual language for the initial (local) display.
-  function applyMobileDropInfo(info, opts) {
-    const animate = !!(opts && opts.animate);
-    const applyNow = () => {
-      if (!isMobileDropModalOpen()) return; // closed during the fade: do not restart the countdown
-      if (info && info.qrDataUri && mobileDropQrImg) {
-        mobileDropQrImg.src = info.qrDataUri;
-        mobileDropQrImg.classList.remove('hidden');
-      } else if (mobileDropQrImg) {
-        mobileDropQrImg.classList.add('hidden');
-      }
-      if (mobileDropUrlEl) mobileDropUrlEl.textContent = (info && info.url) || '';
-      startMobileDropCountdown((info && info.idleTimeoutSeconds) || 60);
-      if (animate && mobileDropQrImg) {
-        // Force reflow so the re-added transition actually animates in.
-        void mobileDropQrImg.offsetWidth;
-        mobileDropQrImg.classList.remove('swapping');
-      }
-    };
-
-    if (animate && mobileDropQrImg) {
-      mobileDropQrImg.classList.add('swapping');
-      setTimeout(applyNow, 180);
-    } else {
-      applyNow();
-    }
-  }
-
-  // --- PC -> phone shared text (机能 5A): pushes the active editor's selection (or, if none,
-  // one clipboard read attempt) to the phone while a session is open, kept in sync as the
-  // selection changes. Listeners are bound only for the lifetime of the session (added in
-  // startMobileDrop, removed in closeMobileDropModal) so this costs nothing otherwise.
-  const MOBILE_DROP_SHARED_TEXT_MAX = 64 * 1024;
-  const MOBILE_DROP_SHARED_TEXT_DEBOUNCE_MS = 400;
-  let mobileDropSharedTextTimer = null;
-  let mobileDropSharedTextListenersBound = false;
-
-  function currentEditorSelectionText() {
-    const editor = getActiveEditor();
-    if (!editor) return '';
-    return editor.value.substring(editor.selectionStart, editor.selectionEnd);
-  }
-
-  function truncateForPreview(text, max) {
-    const oneLine = String(text || '').replace(/\s+/g, ' ').trim();
-    return oneLine.length > max ? oneLine.slice(0, max) + '…' : oneLine;
-  }
-
-  function updateMobileDropSharedPreview(text) {
-    if (!mobileDropSharedPreviewEl) return;
-    if (!text) {
-      mobileDropSharedPreviewEl.classList.add('hidden');
-      mobileDropSharedPreviewEl.textContent = '';
-      return;
-    }
-    mobileDropSharedPreviewEl.classList.remove('hidden');
-    mobileDropSharedPreviewEl.textContent = t('mobileDropSharingPreview', { text: truncateForPreview(text, 80) });
-  }
-
-  function pushMobileDropSharedText(text) {
-    if (!(window.backend && window.backend.setMobileDropSharedText)) return;
-    let capped = text;
-    if (capped.length > MOBILE_DROP_SHARED_TEXT_MAX) capped = capped.slice(0, MOBILE_DROP_SHARED_TEXT_MAX);
-    window.backend.setMobileDropSharedText(capped);
-    updateMobileDropSharedPreview(capped);
-  }
-
-  function scheduleMobileDropSharedTextPush() {
-    if (!isMobileDropModalOpen()) return;
-    clearTimeout(mobileDropSharedTextTimer);
-    mobileDropSharedTextTimer = setTimeout(() => pushMobileDropSharedText(currentEditorSelectionText()), MOBILE_DROP_SHARED_TEXT_DEBOUNCE_MS);
-  }
-
-  function bindMobileDropSharedTextListeners() {
-    if (mobileDropSharedTextListenersBound) return;
-    mobileDropSharedTextListenersBound = true;
-    editorEl.addEventListener('select', scheduleMobileDropSharedTextPush);
-    editorEl.addEventListener('mouseup', scheduleMobileDropSharedTextPush);
-    editorEl.addEventListener('keyup', scheduleMobileDropSharedTextPush);
-    if (editorSecondary) {
-      editorSecondary.addEventListener('select', scheduleMobileDropSharedTextPush);
-      editorSecondary.addEventListener('mouseup', scheduleMobileDropSharedTextPush);
-      editorSecondary.addEventListener('keyup', scheduleMobileDropSharedTextPush);
-    }
-  }
-
-  function unbindMobileDropSharedTextListeners() {
-    if (!mobileDropSharedTextListenersBound) return;
-    mobileDropSharedTextListenersBound = false;
-    clearTimeout(mobileDropSharedTextTimer);
-    editorEl.removeEventListener('select', scheduleMobileDropSharedTextPush);
-    editorEl.removeEventListener('mouseup', scheduleMobileDropSharedTextPush);
-    editorEl.removeEventListener('keyup', scheduleMobileDropSharedTextPush);
-    if (editorSecondary) {
-      editorSecondary.removeEventListener('select', scheduleMobileDropSharedTextPush);
-      editorSecondary.removeEventListener('mouseup', scheduleMobileDropSharedTextPush);
-      editorSecondary.removeEventListener('keyup', scheduleMobileDropSharedTextPush);
-    }
-    updateMobileDropSharedPreview('');
-  }
-
-  // First push at session start: the current selection, or (if there is none) one silent
-  // clipboard read attempt - denial/absence is ignored, since this is a nice-to-have.
-  async function pushInitialMobileDropSharedText() {
-    let text = currentEditorSelectionText();
-    if (!text && navigator.clipboard && navigator.clipboard.readText) {
-      try { text = await navigator.clipboard.readText(); } catch (e) { text = ''; }
-    }
-    if (!isMobileDropModalOpen()) return; // closed while the clipboard read was in flight
-    pushMobileDropSharedText(text || '');
-  }
-
-  async function startMobileDrop() {
-    if (!mobileDropModal || isMobileDropModalOpen()) return;
-
-    mobileDropModal.classList.remove('hidden');
-    if (mobileDropLoading) mobileDropLoading.classList.remove('hidden');
-    if (mobileDropContent) mobileDropContent.classList.add('hidden');
-    if (mobileDropErrorEl) mobileDropErrorEl.classList.add('hidden');
-    resetMobileDropTunnelUI();
-    // Like the other dialogs, take the focus in: with it left in the note (or on the header button that opened this) whatever is
-    // typed next lands behind the QR code (Esc and the close button still work; closing hands the focus back to the editor).
-    if (btnMobileDropCancel) btnMobileDropCancel.focus();
-
-    if (!(window.backend && (window.backend.startMobileDropWithVoice || window.backend.startMobileDrop))) {
-      showMobileDropError(t('mobileDropUnavailable'));
-      return;
-    }
-
-    try {
-      // Voice recordings dropped from the phone need the same voice settings as PC recording,
-      // including the fall back to the vision (OCR) key/base URL: VoiceInput builds both. The
-      // timeout stays at the backend's own default (0) because a phone recording can be long.
-      const voiceJSON = window.VoiceInput && window.VoiceInput.configJSON
-        ? window.VoiceInput.configJSON(config, { timeout: 0, profile: 'batch' }) // Mobile Drop is the batch profile
-        : '{}';
-
-      const info = window.backend.startMobileDropWithVoice
-        ? await window.backend.startMobileDropWithVoice(JSON.stringify(config.vision || {}), voiceJSON)
-        : await window.backend.startMobileDrop(JSON.stringify(config.vision || {}));
-      if (!isMobileDropModalOpen()) return; // user cancelled while the request was in flight
-
-      if (mobileDropLoading) mobileDropLoading.classList.add('hidden');
-      if (mobileDropContent) mobileDropContent.classList.remove('hidden');
-      if (btnMobileDropTunnel) {
-        btnMobileDropTunnel.classList.toggle('hidden', !(window.backend && window.backend.requestMobileDropTunnel));
-      }
-      applyMobileDropInfo(info, { animate: false });
-
-      bindMobileDropSharedTextListeners();
-      pushInitialMobileDropSharedText();
-    } catch (err) {
-      showMobileDropError((err && err.message) ? err.message : String(err));
-    }
-  }
-
-  function cancelMobileDrop() {
-    const wasOpen = isMobileDropModalOpen();
-    closeMobileDropModal();
-    if (wasOpen && window.backend && window.backend.cancelMobileDrop) {
-      window.backend.cancelMobileDrop();
-    }
-  }
-
-  function requestMobileDropTunnel() {
-    if (!isMobileDropModalOpen() || !btnMobileDropTunnel || btnMobileDropTunnel.disabled) return;
-    if (!(window.backend && window.backend.requestMobileDropTunnel)) {
-      if (mobileDropTunnelStatusEl) {
-        mobileDropTunnelStatusEl.classList.remove('hidden');
-        mobileDropTunnelStatusEl.classList.add('error');
-        mobileDropTunnelStatusEl.textContent = t('mobileDropUnavailable');
-      }
-      return;
-    }
-    btnMobileDropTunnel.disabled = true;
-    hideMobileDropInstall(); // retrying after installing cloudflared
-    if (mobileDropTunnelStatusEl) {
-      mobileDropTunnelStatusEl.classList.remove('hidden', 'error');
-      mobileDropTunnelStatusEl.textContent = t('mobileDropTunnelConnecting');
-    }
-    window.backend.requestMobileDropTunnel();
-  }
-
-  window.__onMobileDropReceived = function (data) {
-    closeMobileDropModal();
-    if (data && data.content) {
-      appendToActiveBuffer(data.content);
-    }
-    // Photos / voice notes that could not be OCR'd or transcribed were kept as files instead.
-    const kept = data && Number(data.fallbackCount) > 0 ? Number(data.fallbackCount) : 0;
-    if (kept > 0) showMessage(t('mobileDropReceivedFallback', { count: kept }), 7000);
-    else showMessage(t('mobileDropReceived'), 3000);
-  };
-
-  window.__onMobileDropTimeout = function () {
-    if (isMobileDropModalOpen()) {
-      closeMobileDropModal();
-      showMessage(t('mobileDropTimedOut'), 3000);
-    }
-  };
-
-  window.__onMobileDropError = function (data) {
-    const msg = (data && data.message) ? data.message : t('mobileDropGenericError');
-    showMobileDropError(msg);
-  };
-
-  window.__onMobileDropTunnelReady = function (data) {
-    if (!isMobileDropModalOpen()) return; // user already cancelled/closed
-    if (btnMobileDropTunnel) btnMobileDropTunnel.classList.add('hidden');
-    if (mobileDropTunnelStatusEl) mobileDropTunnelStatusEl.classList.add('hidden');
-    if (mobileDropHintEl) mobileDropHintEl.textContent = t('mobileDropTunnelHint');
-    applyMobileDropInfo(data, { animate: true });
-  };
-
-  window.__onMobileDropTunnelError = function (data) {
-    if (!isMobileDropModalOpen()) return;
-    if (btnMobileDropTunnel) btnMobileDropTunnel.disabled = false;
-    // cloudflared missing: say so in the UI language and offer the install command to copy.
-    const missing = !!(data && data.code === 'cloudflared_missing' && data.installCommand);
-    if (mobileDropTunnelStatusEl) {
-      mobileDropTunnelStatusEl.classList.remove('hidden');
-      mobileDropTunnelStatusEl.classList.add('error');
-      mobileDropTunnelStatusEl.textContent = missing
-        ? t('mobileDropCloudflaredMissing')
-        : ((data && data.message) ? data.message : t('mobileDropGenericError'));
-    }
-    if (missing) showMobileDropInstall(data.installCommand);
-    else hideMobileDropInstall();
-  };
-
-  if (btnMobileDropCancel) btnMobileDropCancel.onclick = cancelMobileDrop;
-  if (modalMobileDropClose) modalMobileDropClose.onclick = cancelMobileDrop;
-  if (btnMobileDropTunnel) btnMobileDropTunnel.onclick = requestMobileDropTunnel;
-  if (btnMobileDropInstallCopy) btnMobileDropInstallCopy.onclick = copyMobileDropInstallCommand;
-  if (btnMobileDrop) btnMobileDrop.onclick = () => startMobileDrop();
-  if (mobileDropModal) {
-    mobileDropModal.addEventListener('mousedown', (e) => {
-      if (e.target === mobileDropModal) cancelMobileDrop();
-    });
   }
 
   // --- Toolbar / right-click menu layout (chrome_layout.js) ---
@@ -12295,26 +11330,6 @@ OUTPUT FORMAT:
     showMessage(t('scrapAppended', { command: data.command || 'CLI Pipe' }), 2500);
   };
 
-  // --- Feature 3: Webview Git Sync Status Listener ---
-  window.onGitSyncStatus = function(info) {
-    if (!info) return;
-    updateGitSyncStatusUI(info);
-  };
-
-  if (statGitSync) {
-    statGitSync.onclick = () => {
-      const isEnabled = config.scraps ? (config.scraps.gitSyncEnabled !== false) : (config.git_sync_enabled !== false);
-      if (!isEnabled) {
-        showMessage(t('gitSyncDisabledToast'), 2500);
-        return;
-      }
-      if (window.backend && window.backend.triggerGitSync) {
-        window.backend.triggerGitSync();
-        showMessage(t('gitSyncTriggeredToast'), 1500);
-      }
-    };
-  }
-
   // Voice input's ESC-to-abort must beat every other Escape consumer (modals, the Quick
   // Actions panel in jev_action.js, the bubble-phase handler below) and only while actually
   // recording (VoiceInput.handleKeydown returns false otherwise, so this is a no-op the rest
@@ -12331,8 +11346,8 @@ OUTPUT FORMAT:
   // Enter in it would still send the note's text to the model.
   function isDialogOpen() {
     const shown = (el) => !!el && !el.classList.contains('hidden');
-    return shown(settingsModal) || shown(gotoLineModal) || shown(quickPickModal) || shown(mobileDropModal) || shown(confirmModal) ||
-      shown(scrapsSearchModal) || deepDialogOpen || printPanelOpen || tagPickerOpen || !!(window.Lessons && window.Lessons.isOpen && window.Lessons.isOpen()) ||
+    return shown(settingsModal) || shown(gotoLineModal) || shown(quickPickModal) || shown(confirmModal) ||
+      shown(scrapsSearchModal) || deepDialogOpen || printPanelOpen ||
       !!(window.AboutDialog && window.AboutDialog.isOpen && window.AboutDialog.isOpen());
   }
 
@@ -12539,10 +11554,6 @@ OUTPUT FORMAT:
         closeQuickPick();
         return;
       }
-      if (isMobileDropModalOpen()) {
-        cancelMobileDrop();
-        return;
-      }
       if (chromeOverlay && chromeOverlay.leaveBar()) {
         return; // the focus was in the header or the status bar (F6, Tab): Esc takes it back to the note
       }
@@ -12741,14 +11752,6 @@ OUTPUT FORMAT:
     } else if (matchShortcut(e, config.shortcuts && config.shortcuts.runAiCli)) {
       e.preventDefault();
       if (!isDialogOpen()) { openCommandBar('ai'); }
-    } else if (matchShortcut(e, config.shortcuts && config.shortcuts.mobileDrop)) {
-      e.preventDefault();
-      startMobileDrop();
-    } else if (matchShortcut(e, config.shortcuts && config.shortcuts.quickActions)) {
-      e.preventDefault();
-      if (window.JevAction && window.JevAction.triggerJevPrediction) {
-        window.JevAction.triggerJevPrediction();
-      }
     } else if (matchShortcut(e, config.shortcuts && config.shortcuts.insertDate)) {
       e.preventDefault();
       insertDateAtCursor();
@@ -12756,10 +11759,6 @@ OUTPUT FORMAT:
       // Last in the chain: a binding the user chose for another action before this default existed still wins.
       e.preventDefault();
       if (!isDialogOpen()) { openCommandBar(); }
-    } else if (isCtrl && e.shiftKey && !e.altKey && e.code === 'KeyN') {
-      if (platformCapabilities && platformCapabilities.multiWindow === false) return;
-      e.preventDefault();
-      openNewWindow({});
     } else if (isCtrl && e.key === 'Tab') {
       e.preventDefault();
       if (tabs.length > 1) {
@@ -12779,16 +11778,6 @@ OUTPUT FORMAT:
   });
 
   // Context Menu Handling with Smart Overflow & Flip Detection
-  // The three tag items are in the markup hidden, and shown only when the backend can edit tags (the palette commands' own test).
-  const ctxTagItems = [['ctx-tag-entry', 'entry'], ['ctx-tag-note', 'note'], ['ctx-tag-remove', 'remove']];
-  function syncTagContextItems() {
-    const has = !!(window.backend && typeof window.backend.tagEdit === 'function');
-    ctxTagItems.forEach(([id]) => {
-      const el = document.getElementById(id);
-      if (el) el.classList.toggle('hidden', !has);
-    });
-  }
-
   // "Open to the Side" acts on the tab that was right-clicked. The tab's own listener (makeTabEl) has already named it when the press was on
   // a tab; a right-click anywhere else is about the note on screen, so a tab named earlier must not be remembered.
   function forgetContextTabUnlessOnTab(target) {
@@ -12994,7 +11983,6 @@ OUTPUT FORMAT:
           updateSecondaryPane();
           renderTabs();
         },
-        openNewWindow,
         showMessage,
         copyTextToClipboard,
         renderMermaidOverlay: showAgentMermaidOverlay
@@ -13035,7 +12023,6 @@ OUTPUT FORMAT:
 
     // 3. Regular Editor / Workspace Context Menu
     forgetContextTabUnlessOnTab(e.target);
-    syncTagContextItems();
     syncTabsSubmenu();
     if (agentBridge) agentBridge.syncHarnessContextMenuItems();
     if (window.ChromeLayout && !window.ChromeLayout.hasVisibleItems('context')) {
@@ -13149,17 +12136,6 @@ OUTPUT FORMAT:
       };
     }
 
-    const btnTabNewWindow = document.getElementById('tab-ctx-new-window');
-    if (btnTabNewWindow) {
-      btnTabNewWindow.onclick = () => {
-        hideAllContextMenus();
-        const targetId = contextMenuTargetTabId || activeTabId;
-        contextMenuTargetTabId = null;
-        const tab = getTab(targetId);
-        openNewWindow({ filePath: (tab && tab.path) || '' });
-      };
-    }
-
     const btnTabCopyPath = document.getElementById('tab-ctx-copy-path');
     if (btnTabCopyPath) {
       btnTabCopyPath.onclick = async () => {
@@ -13217,10 +12193,9 @@ OUTPUT FORMAT:
         const sel = document.getElementById('stat-selection') ? document.getElementById('stat-selection').textContent : '';
         const enc = document.getElementById('stat-encoding') ? document.getElementById('stat-encoding').textContent : '';
         const auto = document.getElementById('stat-autosave') ? document.getElementById('stat-autosave').textContent : '';
-        const git = document.getElementById('stat-gitsync') ? document.getElementById('stat-gitsync').textContent : '';
         const msg = statMessage ? statMessage.textContent.trim() : '';
 
-        const fullInfo = [cur, chars, sel, `Encoding: ${enc}`, auto, git, msg ? `Message: ${msg}` : '']
+        const fullInfo = [cur, chars, sel, `Encoding: ${enc}`, auto, msg ? `Message: ${msg}` : '']
           .filter(Boolean)
           .join(' | ');
 
@@ -13312,16 +12287,6 @@ OUTPUT FORMAT:
       triggerAICorrection();
     };
   }
-  // Tags: the same picker as the palette's three commands (openTagPicker: the entry is the one holding the caret, which a right click moves).
-  ctxTagItems.forEach(([id, kind]) => {
-    const el = document.getElementById(id);
-    if (el) {
-      el.onclick = () => {
-        contextMenu.classList.add('hidden');
-        openTagPicker(kind);
-      };
-    }
-  });
   const ctxCommandBar = document.getElementById('ctx-command-bar');
   if (ctxCommandBar) {
     ctxCommandBar.onclick = () => {
@@ -13419,13 +12384,6 @@ OUTPUT FORMAT:
       contextMenu.classList.add('hidden');
       toggleFullscreen();
       refocusEditor();
-    };
-  }
-  const ctxNewWindow = document.getElementById('ctx-new-window');
-  if (ctxNewWindow) {
-    ctxNewWindow.onclick = () => {
-      contextMenu.classList.add('hidden');
-      openNewWindow({});
     };
   }
   const ctxVoiceInput = document.getElementById('ctx-voice-input');
@@ -13569,7 +12527,6 @@ OUTPUT FORMAT:
             const input = document.getElementById('cfg-scrap-dir');
             if (input) {
               input.value = selected;
-              updateGitRepoStatusUI(selected);
             }
           }
         } catch (e) {
@@ -13579,439 +12536,7 @@ OUTPUT FORMAT:
     };
   }
 
-  const scrapDirInput = document.getElementById('cfg-scrap-dir');
-  if (scrapDirInput) {
-    scrapDirInput.addEventListener('change', () => {
-      updateGitRepoStatusUI(scrapDirInput.value.trim());
-    });
-  }
-
-  // Git Connection Test button
-  const btnGitTestRemote = document.getElementById('btn-git-test-remote');
-  if (btnGitTestRemote) {
-    btnGitTestRemote.onclick = async () => {
-      const gitRemoteUrlEl = document.getElementById('cfg-git-remote-url');
-      const testHintEl = document.getElementById('git-test-result-hint');
-      const remoteUrl = (gitRemoteUrlEl && gitRemoteUrlEl.value.trim()) || '';
-
-      if (!remoteUrl) {
-        showMessage(t('gitRemoteUrlRequired'), 3000);
-        if (gitRemoteUrlEl) gitRemoteUrlEl.focus();
-        return;
-      }
-
-      if (window.backend && window.backend.testGitRemote) {
-        try {
-          btnGitTestRemote.disabled = true;
-          btnGitTestRemote.textContent = t('btnGitTesting') || 'Testing...';
-          if (testHintEl) {
-            testHintEl.style.color = 'var(--text-muted)';
-            testHintEl.textContent = 'Testing connection & authentication...';
-          }
-
-          const res = await window.backend.testGitRemote(remoteUrl);
-          if (res && res.success) {
-            showMessage(t('gitTestSuccess'), 4000);
-            if (testHintEl) {
-              testHintEl.style.color = 'var(--text-ok)';
-              testHintEl.textContent = '✓ ' + (t('gitTestSuccess') || res.message);
-            }
-          } else {
-            const errDetail = (res && (res.message || res.error)) || 'Unknown error';
-            showMessage(t('gitTestFailed', { err: errDetail }), 6000, { important: true });
-            if (testHintEl) {
-              testHintEl.style.color = 'var(--coral)';
-              testHintEl.textContent = '✗ ' + errDetail;
-            }
-          }
-        } catch (e) {
-          const errDetail = e.message || String(e);
-          showMessage(t('gitTestFailed', { err: errDetail }), 6000, { important: true });
-          if (testHintEl) {
-            testHintEl.style.color = 'var(--coral)';
-            testHintEl.textContent = '✗ ' + errDetail;
-          }
-        } finally {
-          btnGitTestRemote.disabled = false;
-          btnGitTestRemote.textContent = t('btnGitTest');
-        }
-      }
-    };
-  }
-
-  const btnGitSetupRemote = document.getElementById('btn-git-setup-remote');
-  if (btnGitSetupRemote) {
-    btnGitSetupRemote.onclick = async () => {
-      const scrapDirEl = document.getElementById('cfg-scrap-dir');
-      const gitRemoteUrlEl = document.getElementById('cfg-git-remote-url');
-      const gitBranchEl = document.getElementById('cfg-git-remote-branch');
-      const testHintEl = document.getElementById('git-test-result-hint');
-      const dir = (scrapDirEl && scrapDirEl.value.trim()) || '~/Documents/syki-sok/scraps';
-      const remoteUrl = (gitRemoteUrlEl && gitRemoteUrlEl.value.trim()) || '';
-      const branch = (gitBranchEl && gitBranchEl.value.trim()) || 'main';
-
-      if (!remoteUrl) {
-        showMessage(t('gitRemoteUrlRequired'), 3000);
-        if (gitRemoteUrlEl) gitRemoteUrlEl.focus();
-        return;
-      }
-
-      if (window.backend && window.backend.setupGitRemote) {
-        try {
-          btnGitSetupRemote.disabled = true;
-          btnGitSetupRemote.textContent = '...';
-          if (testHintEl) {
-            testHintEl.style.color = 'var(--text-muted)';
-            testHintEl.textContent = 'Configuring repository & pushing initial commit...';
-          }
-          await window.backend.setupGitRemote(dir, remoteUrl, branch);
-          await updateGitRepoStatusUI(dir);
-          showMessage(t('gitSetupSuccess'), 4000);
-          if (testHintEl) {
-            testHintEl.style.color = 'var(--text-ok)';
-            testHintEl.textContent = '✓ ' + t('gitSetupSuccess');
-          }
-        } catch (e) {
-          const errDetail = e.message || String(e);
-          showMessage(t('gitSetupFailed', { err: errDetail }), 7000, { important: true });
-          if (testHintEl) {
-            testHintEl.style.color = 'var(--coral)';
-            testHintEl.textContent = '✗ ' + errDetail;
-          }
-        } finally {
-          btnGitSetupRemote.disabled = false;
-          btnGitSetupRemote.textContent = t('btnGitSetup');
-        }
-      }
-    };
-  }
-
-  async function checkGitInstalledStatusUI() {
-    const banner = document.getElementById('git-installed-banner');
-    if (!banner) return;
-    if (window.backend && window.backend.checkGitInstalled) {
-      try {
-        const info = await window.backend.checkGitInstalled();
-        if (info && !info.installed) {
-          banner.style.display = 'block';
-        } else {
-          banner.style.display = 'none';
-        }
-      } catch (e) {
-        console.warn('Failed to check git installed:', e);
-      }
-    }
-  }
-
-  // --- External Agent Configuration File Management ---
-  // The last slot config JSON loaded from the backend (agents.yaml or
-  // defaults), kept so the auto-approve warning and availability badge can
-  // look up the selected agent's command/args without a fresh RPC.
-  let lastLoadedSlotConfig = null;
-  let agentAvailabilityReqToken = 0;
-  const knownAgentDefinitions = {
-    'claude-code': { command: 'claude', args: ['-p', '対象ノート: {file}\n指示: {instruction}'], description: 'Claude Code (高知能・CLI操作・Web調査)', aliases: ['claude', 'cc'] },
-    hermes: { command: 'ollama', args: ['run', 'hermes3', '{instruction}'], description: 'Hermes 3 (完全ローカル・機密保護)' },
-    codex: { command: 'codex', args: ['exec', '{instruction}'], description: 'Codex (高速コード補完・リファクタリング)' },
-    agy: { command: 'agy', args: ['-p', '対象ノート: {file}\n指示: {instruction}'], description: 'Google Antigravity 2.0 (自律リポジトリ開発)', aliases: ['antigravity', 'gemini'] }
-  };
-
-  function populateAgentSelectOptions(slotCfg) {
-    const defaultAgentEl = document.getElementById('cfg-default-agent');
-    if (!defaultAgentEl) return;
-    if (!slotCfg || !slotCfg.agents) return;
-
-    lastLoadedSlotConfig = slotCfg;
-    if (typeof knownAgentDefinitions === 'object' && knownAgentDefinitions) {
-      Object.keys(slotCfg.agents).forEach((k) => {
-        if (slotCfg.agents[k]) knownAgentDefinitions[k] = slotCfg.agents[k];
-      });
-    }
-
-    const currentSelected = defaultAgentEl.value || config.default_agent || slotCfg.default_agent || 'claude-code';
-    defaultAgentEl.innerHTML = '';
-
-    // An agent that is switched off (agents.yaml: enabled: false / disabled_agents) or unchecked in UI (config.disabled_agents) is not offered.
-    const uiDisabled = new Set(Array.isArray(config && config.disabled_agents) ? config.disabled_agents : []);
-    const agentKeys = Object.keys(slotCfg.agents).filter((key) => !(slotCfg.agents[key] && slotCfg.agents[key].enabled === false) && !uiDisabled.has(key));
-    if (agentKeys.length === 0) {
-      const opt = document.createElement('option');
-      const allOff = (Array.isArray(slotCfg.disabled_agents) && slotCfg.disabled_agents.length > 0) || uiDisabled.size > 0;
-      opt.value = allOff ? '' : 'claude-code';
-      opt.textContent = allOff ? (typeof t === 'function' ? t('agentNoneEnabled') : 'No agent is enabled') : 'Claude Code';
-      defaultAgentEl.appendChild(opt);
-      defaultAgentEl.disabled = allOff;
-      return;
-    }
-    defaultAgentEl.disabled = false;
-
-    agentKeys.forEach((key) => {
-      const def = slotCfg.agents[key];
-      const opt = document.createElement('option');
-      opt.value = key;
-      // "key - description": the key is what agents.yaml and {{ @key }} use, the description says what the agent is.
-      // The full command line stays out of the label: for some agents (agy's --dangerously-skip-permissions default in
-      // particular) it is long enough to make every option in the list equally unreadable. It is still available in
-      // agents.yaml and in the auto-approve warning shown below this select when such a flag is detected.
-      opt.textContent = def && def.description ? key + ' - ' + def.description : key;
-      defaultAgentEl.appendChild(opt);
-    });
-
-    // Select target agent
-    const targetAgent = slotCfg.default_agent || currentSelected;
-    if (agentKeys.indexOf(targetAgent) !== -1) {
-      defaultAgentEl.value = targetAgent;
-      config.default_agent = targetAgent;
-    } else if (defaultAgentEl.options.length > 0) {
-      defaultAgentEl.selectedIndex = 0;
-      config.default_agent = defaultAgentEl.value;
-    }
-  }
-
-  // Settings > Agent: names the agents that are switched off in agents.yaml (enabled: false / disabled_agents), only when there are any.
-  function renderAgentDisabledNote(slotCfg) {
-    const el = document.getElementById('agent-disabled-note');
-    if (!el) return;
-    const list = slotCfg && Array.isArray(slotCfg.disabled_agents) ? slotCfg.disabled_agents.filter((key) => typeof key === 'string' && key) : [];
-    el.textContent = list.length ? t('agentDisabledNote', { agents: list.join(', ') }) : '';
-    el.classList.toggle('hidden', list.length === 0);
-  }
-
-  // Settings > Agent: checkboxes to toggle which agents are visible/selectable in UI (saved to config.disabled_agents).
-  function renderAgentVisibilityList(slotCfg) {
-    const container = document.getElementById('agent-visibility-list');
-    if (!container || !slotCfg || !slotCfg.agents) return;
-    const builtinKeys = ['claude-code', 'hermes', 'codex', 'agy'];
-    const yamlDisabled = new Set(Array.isArray(slotCfg.disabled_agents) ? slotCfg.disabled_agents : []);
-    const uiDisabled = new Set(Array.isArray(config && config.disabled_agents) ? config.disabled_agents : []);
-    const allKeys = Array.from(new Set([...builtinKeys, ...Object.keys(slotCfg.agents), ...yamlDisabled])).sort();
-    container.innerHTML = '';
-    allKeys.forEach((key) => {
-      const isExplicitDisabledInEntry = !!(slotCfg.agents[key] && slotCfg.agents[key].enabled === false);
-      const isChecked = !isExplicitDisabledInEntry && !yamlDisabled.has(key) && !uiDisabled.has(key);
-      const label = document.createElement('label');
-      label.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;padding:2px 6px;border:1px solid var(--border-color);border-radius:4px;';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.checked = isChecked;
-      cb.disabled = isExplicitDisabledInEntry;
-      cb.addEventListener('change', () => {
-        const next = new Set([
-          ...(Array.isArray(config && config.disabled_agents) ? config.disabled_agents : []),
-          ...(Array.isArray(slotCfg.disabled_agents) ? slotCfg.disabled_agents : [])
-        ]);
-        if (cb.checked) {
-          next.delete(key);
-          if (!slotCfg.agents[key] && knownAgentDefinitions[key]) {
-            slotCfg.agents[key] = knownAgentDefinitions[key];
-          }
-        } else {
-          next.add(key);
-        }
-        config.disabled_agents = Array.from(next).sort();
-        slotCfg.disabled_agents = config.disabled_agents.slice();
-        populateAgentSelectOptions(slotCfg);
-        renderAgentDisabledNote(slotCfg);
-        updateAgentAutoApproveWarning();
-        updateAgentAvailabilityBadge();
-        savePersistentConfig().catch(() => {});
-        const scrapDir = (document.getElementById('cfg-scrap-dir') && document.getElementById('cfg-scrap-dir').value.trim()) || '';
-        if (window.backend && window.backend.updateActiveAgentsConfigDisabledAgents) {
-          window.backend.updateActiveAgentsConfigDisabledAgents(scrapDir, config.disabled_agents).catch(() => {});
-        }
-        if (window.SlotAgent && window.SlotAgent.updateConfig) {
-          window.SlotAgent.updateConfig({
-            agents: Object.assign({}, knownAgentDefinitions, slotCfg.agents),
-            disabled_agents: config.disabled_agents,
-            default_agent: config.default_agent
-          });
-        }
-      });
-      label.appendChild(cb);
-      label.appendChild(document.createTextNode(key));
-      container.appendChild(label);
-    });
-  }
-
-  // The selected agent skips its CLI's permission prompts: the same flag list the run-time confirmation uses
-  // (AgentRisk.AUTO_APPROVE_FLAGS in agent_risk.js). A disclosure aid, not a sandbox.
-  function updateAgentAutoApproveWarning() {
-    const warnEl = document.getElementById('agent-auto-approve-warning');
-    if (!warnEl) return;
-    const agentDef = lastLoadedSlotConfig && lastLoadedSlotConfig.agents && lastLoadedSlotConfig.agents[config.default_agent];
-    const hasAutoApprove = !!(agentDef && window.AgentRisk && window.AgentRisk.riskFlags(agentDef).length > 0);
-    warnEl.classList.toggle('hidden', !hasAutoApprove);
-  }
-
-  // Settings > Agent: agent definitions worth a look (the Go side's agent_issues), until hidden for this set.
-  function renderAgentIssues(slotCfg) {
-    const el = document.getElementById('agent-issues');
-    if (!el || !window.AgentRisk) return;
-    window.AgentRisk.renderIssues(el, slotCfg && slotCfg.agent_issues, {
-      t: (key) => t(key),
-      doc: document,
-      agents: slotCfg && slotCfg.agents,
-      state: config.agentNotice,
-      copy: copyTextToClipboard,
-      showMessage: showMessage,
-      onDismiss: (state) => {
-        config.agentNotice = state;
-        savePersistentConfig().catch(() => {});
-      }
-    });
-  }
-
-  // Once per set of agent issues, a few seconds after start-up: a status-bar message pointing to Settings > Agent.
-  async function announceAgentIssues() {
-    if (!window.AgentRisk || !window.backend || !window.backend.getActiveSlotConfigJSON) return;
-    try {
-      const raw = await window.backend.getActiveSlotConfigJSON();
-      const due = window.AgentRisk.startupNotice(config.agentNotice, raw ? JSON.parse(raw).agent_issues : null);
-      if (!due) return;
-      showStartupNotice(t('agentIssuesStartup', { count: due.count }), 8000, () => {
-        config.agentNotice = due.state;
-        savePersistentConfig().catch(() => {});
-      });
-    } catch (e) {
-      console.warn('Checking the agent definitions failed:', e);
-    }
-  }
-
-  async function updateAgentAvailabilityBadge() {
-    const badgeEl = document.getElementById('agent-availability-badge');
-    if (!badgeEl) return;
-    if (!(window.backend && window.backend.checkAgentAvailability)) {
-      badgeEl.classList.add('hidden');
-      return;
-    }
-    const agentSelectEl = document.getElementById('cfg-default-agent');
-    if (agentSelectEl && agentSelectEl.disabled) { // every agent is disabled: there is nothing to look for
-      badgeEl.classList.add('hidden');
-      return;
-    }
-    const selectedKey = config.default_agent;
-    const agentDef = lastLoadedSlotConfig && lastLoadedSlotConfig.agents && lastLoadedSlotConfig.agents[selectedKey];
-    const fallbackCommand = (agentDef && agentDef.command) || selectedKey || '';
-    const myToken = ++agentAvailabilityReqToken;
-    try {
-      const result = await window.backend.checkAgentAvailability(selectedKey);
-      if (myToken !== agentAvailabilityReqToken) return; // selection changed while awaiting
-      const command = (result && result.command) || fallbackCommand;
-      if (result && result.available) {
-        badgeEl.textContent = t('agentInstalledBadge', { command });
-        badgeEl.classList.remove('hidden');
-      } else {
-        badgeEl.textContent = t('agentNotFoundBadge', { command });
-        badgeEl.classList.remove('hidden');
-      }
-    } catch (e) {
-      badgeEl.classList.add('hidden');
-    }
-  }
-
-  async function checkActiveAgentsConfigStatus() {
-    const badgeEl = document.getElementById('agent-config-status-badge');
-    const defaultAgentEl = document.getElementById('cfg-default-agent');
-
-    // 1. Populate dynamic agent options from active agents.yaml (or defaults)
-    if (window.backend && window.backend.getActiveSlotConfigJSON) {
-      try {
-        const rawJson = await window.backend.getActiveSlotConfigJSON();
-        if (rawJson) {
-          const slotCfg = JSON.parse(rawJson);
-          populateAgentSelectOptions(slotCfg);
-          renderAgentDisabledNote(slotCfg);
-          renderAgentIssues(slotCfg);
-          renderAgentVisibilityList(slotCfg);
-        }
-      } catch (e) {
-        console.warn('Failed to load active slot config JSON:', e);
-      }
-    }
-
-    // 2. Query file location and external/internal status
-    if (badgeEl && window.backend && window.backend.getActiveAgentsConfigStatus) {
-      try {
-        const scrapDir = (document.getElementById('cfg-scrap-dir') && document.getElementById('cfg-scrap-dir').value.trim()) || '';
-        const status = await window.backend.getActiveAgentsConfigStatus(scrapDir);
-        badgeEl.removeAttribute('data-i18n'); // real status resolved; stop applyLanguage() from resetting it to "Checking..."
-        if (status && status.is_external) {
-          badgeEl.textContent = t('statusAgentConfigExternal');
-          badgeEl.style.background = 'var(--accent-active-bg)';
-          badgeEl.style.color = 'var(--accent-hover)';
-          badgeEl.style.border = '1px solid var(--accent-hover, transparent)';
-          if (status.default_agent && defaultAgentEl) {
-            defaultAgentEl.value = status.default_agent;
-            config.default_agent = status.default_agent;
-          }
-        } else {
-          badgeEl.textContent = t('statusAgentConfigDefault');
-          badgeEl.style.background = 'var(--veil-08)';
-          badgeEl.style.color = 'var(--text-muted)';
-          badgeEl.style.border = '1px solid transparent';
-        }
-      } catch (e) {
-        console.warn('Failed to get agents config status:', e);
-      }
-    }
-
-    // The select now names the agent a run really uses (a disabled default_agent is replaced by the next enabled one). That is
-    // what Settings opened with, so Save must not write it back into agents.yaml as if the user had picked it.
-    if (openedConfigSnapshot && config.default_agent) openedConfigSnapshot.default_agent = config.default_agent;
-
-    updateAgentAutoApproveWarning();
-    updateAgentAvailabilityBadge();
-  }
-
-  const btnOpenAgentsConfig = document.getElementById('btn-open-agents-config');
-  if (btnOpenAgentsConfig) {
-    btnOpenAgentsConfig.onclick = async () => {
-      if (window.backend && window.backend.openAgentsConfigFile) {
-        try {
-          const scrapDir = (document.getElementById('cfg-scrap-dir') && document.getElementById('cfg-scrap-dir').value.trim()) || '';
-          const targetPath = await window.backend.openAgentsConfigFile(scrapDir);
-          if (targetPath) {
-            // Close settings modal so user is immediately back to editor
-            if (settingsModal) {
-              settingsModal.classList.add('hidden');
-            }
-            // Open or activate agents.yaml tab in syki::sok directly
-            let targetTab = tabs.find(t => t.path === targetPath);
-            if (!targetTab) {
-              let content = '';
-              if (window.backend.readFileByPath) {
-                const res = await window.backend.readFileByPath(targetPath);
-                if (res) content = res.content;
-              }
-              const fileName = targetPath.split(/[/\\]/).pop() || 'agents.yaml';
-              targetTab = createTab(fileName, content, targetPath);
-              targetTab.isAutoTitle = false;
-            }
-            selectTab(targetTab.id);
-            showMessage(t('agentsConfigLoadedSuccess', { path: targetPath }), 3000);
-          }
-        } catch (e) {
-          showMessage(t('agentsConfigError', { err: e.message || String(e) }), 6000, { important: true });
-        }
-      }
-    };
-  }
-
-  const defaultAgentSelectEl = document.getElementById('cfg-default-agent');
-  if (defaultAgentSelectEl) {
-    // In-memory only: this must NOT write to agents.yaml immediately, so that
-    // Cancel/Esc/× can leave the persisted config untouched (it is only
-    // persisted from the Save handler below, and only when actually changed).
-    defaultAgentSelectEl.onchange = () => {
-      config.default_agent = defaultAgentSelectEl.value;
-      if (window.SlotAgent && window.SlotAgent.updateConfig) {
-        window.SlotAgent.updateConfig(config);
-      }
-      updateAgentAutoApproveWarning();
-      updateAgentAvailabilityBadge();
-    };
-  }
-
+  // External Agent / Slot config management removed for syki-lite.
   let settingsModalController = null;
   function ensureSettingsModal() {
     if (settingsModalController) return settingsModalController;
@@ -14047,10 +12572,6 @@ OUTPUT FORMAT:
       clearRecordingAction: () => { activeRecordingAction = null; },
       isShortcutsDirtyOrUnrendered: () => !shortcutsTableRendered || shortcutsTableDirty || activeRecordingAction,
       renderShortcutsTable: () => renderShortcutsTable(),
-      updateOllamaStatus: () => updateOllamaStatus(),
-      checkActiveAgentsConfigStatus: () => checkActiveAgentsConfigStatus(),
-      checkGitInstalledStatusUI: () => checkGitInstalledStatusUI(),
-      updateGitRepoStatusUI: (dir) => updateGitRepoStatusUI(dir),
       syncTextProviderSelect: () => syncTextProviderSelect(),
       updateApiKeyPlaceholders: () => updateApiKeyPlaceholders(),
       listToText: (arr, sep) => listToText(arr, sep),
@@ -14060,11 +12581,7 @@ OUTPUT FORMAT:
       showAppearanceControls: (v) => showAppearanceControls(v),
       updateImeGuardianCapabilityHint: () => updateImeGuardianCapabilityHint(),
       applyTrayCapabilityUI: () => applyTrayCapabilityUI(),
-      updateQuickActionsFieldStates: () => updateQuickActionsFieldStates(),
       renderCloudConsentRow: () => renderCloudConsentRow(),
-      getAutoSelectorConfig: () => getAutoSelectorConfig(),
-      updateAutoSelectorFieldStates: () => updateAutoSelectorFieldStates(),
-      updateCFBridgeFieldStates: () => updateCFBridgeFieldStates(),
       updateCheckAtStartup: () => updateCheckAtStartup(),
       getPlatformCapabilities: () => platformCapabilities,
       isMac: () => isMac,
@@ -14315,7 +12832,6 @@ OUTPUT FORMAT:
     if (btnHeaderLLM) btnHeaderLLM.title = `${baseTitle(t('llmTitle'))} (${getSc('inlinePrompt', isMac ? 'Cmd+L' : 'Ctrl+L')})`;
     if (btnToggleSplit) btnToggleSplit.title = `${baseTitle(t('splitViewTitle'))} (${getSc('toggleSplit', isMac ? 'Cmd+\\' : 'Ctrl+\\')})`;
     if (btnTogglePreview) btnTogglePreview.title = `${isPreviewMode ? t('edit') : baseTitle(t('togglePreviewTitle'))} (${getSc('togglePreview', isMac ? 'Cmd+P' : 'Ctrl+P')})`;
-    if (btnMobileDrop) btnMobileDrop.title = `${t('mobileDropToolbarTitle')} (${getSc('mobileDrop', isMac ? 'Cmd+Shift+U' : 'Ctrl+Shift+U')})`;
     const quickCaptureBtnEl = document.getElementById('btn-quick-capture');
     if (quickCaptureBtnEl) {
       quickCaptureBtnEl.title = config.shortcuts.quickCapture
@@ -14628,8 +13144,7 @@ OUTPUT FORMAT:
       actions: [
         { key: 'commandBar', labelKey: 'shortcutActionCommandBar' },
         { key: 'runCliFilter', labelKey: 'shortcutActionRunCliFilter' },
-        { key: 'runAiCli', labelKey: 'shortcutActionRunAiCli' },
-        { key: 'mobileDrop', labelKey: 'shortcutActionMobileDrop' }
+        { key: 'runAiCli', labelKey: 'shortcutActionRunAiCli' }
       ]
     },
     {
@@ -14653,7 +13168,6 @@ OUTPUT FORMAT:
         { key: 'inlinePrompt', labelKey: 'shortcutActionInlinePrompt' },
         { key: 'rewriteSelection', labelKey: 'shortcutActionRewriteSelection' },
         { key: 'aiCorrection', labelKey: 'shortcutActionAICorrection' },
-        { key: 'quickActions', labelKey: 'shortcutActionQuickActions' },
         { key: 'convertMermaid', labelKey: 'shortcutActionConvertMermaid' },
         { key: 'mermaidToImage', labelKey: 'shortcutActionMermaidToImage' },
         { key: 'voiceInput', labelKey: 'shortcutActionVoiceInput' },
@@ -14903,135 +13417,6 @@ OUTPUT FORMAT:
   wireNumberInputClamp('cfg-auto-delay', 200, 2000, 500);
   wireNumberInputClamp('cfg-auto-tokens', 10, 100, 30);
   wireNumberInputClamp('cfg-max-pipe-size', 1, 100, 10);
-  wireNumberInputClamp('cfg-slot-timeout', 10, 600, 180);
-  wireNumberInputClamp('cfg-slot-ghost-diff-ms', 1000, 10000, 4000);
-  wireNumberInputClamp('cfg-action-delay', 0.5, 10.0, 1.5, true);
-  wireNumberInputClamp('cfg-git-debounce', 5, 3600, 30);
-  wireNumberInputClamp('cfg-cf-poll-interval', 10, 600, 30);
-
-  // Quick Actions settings: "enabled" and "manual-only" are contradictory when
-  // combined naively (manual-only implies auto-suggest is off, so its delay/API
-  // fields are meaningless if the feature itself is off). Mute the dependent
-  // fields instead of letting the user set values that can never take effect.
-  // This is pure UI coupling — the saved values themselves are unchanged.
-  function setFieldMuted(el, muted) {
-    if (!el) return;
-    el.disabled = muted;
-    const group = el.closest('.form-group') || el.closest('.inline-group');
-    if (group) group.classList.toggle('field-muted', muted);
-  }
-
-  function updateQuickActionsFieldStates() {
-    const enabledEl = document.getElementById('cfg-action-enabled');
-    const manualOnlyEl = document.getElementById('cfg-action-manual-only');
-    const delayEl = document.getElementById('cfg-action-delay');
-    const baseUrlEl = document.getElementById('cfg-action-base-url');
-    const modelEl = document.getElementById('cfg-action-model');
-    const apiKeyEl = document.getElementById('cfg-action-api-key');
-    const enabled = enabledEl ? enabledEl.checked : true;
-    const manualOnly = manualOnlyEl ? manualOnlyEl.checked : false;
-
-    setFieldMuted(manualOnlyEl, !enabled);
-    setFieldMuted(baseUrlEl, !enabled);
-    setFieldMuted(modelEl, !enabled);
-    setFieldMuted(apiKeyEl, !enabled);
-    // Delay only matters for the automatic (non-manual) popup.
-    setFieldMuted(delayEl, !enabled || manualOnly);
-  }
-
-  const qaEnabledToggleEl = document.getElementById('cfg-action-enabled');
-  if (qaEnabledToggleEl) qaEnabledToggleEl.addEventListener('change', updateQuickActionsFieldStates);
-  const qaManualOnlyToggleEl = document.getElementById('cfg-action-manual-only');
-  if (qaManualOnlyToggleEl) qaManualOnlyToggleEl.addEventListener('change', updateQuickActionsFieldStates);
-
-  // Auto selector: "confirm before an agent / command runs" means nothing while the selector itself is off.
-  function updateAutoSelectorFieldStates() {
-    const enabledEl = document.getElementById('cfg-autosel-enabled');
-    setFieldMuted(document.getElementById('cfg-autosel-agent-confirm'), enabledEl ? !enabledEl.checked : false);
-  }
-
-  const autoSelEnabledToggleEl = document.getElementById('cfg-autosel-enabled');
-  if (autoSelEnabledToggleEl) autoSelEnabledToggleEl.addEventListener('change', updateAutoSelectorFieldStates);
-
-  // Mobile Bridge (Cloudflare): token/endpoint/interval/test button mean nothing while disabled.
-  function updateCFBridgeFieldStates() {
-    const enabledEl = document.getElementById('cfg-cf-enabled');
-    const enabled = enabledEl ? enabledEl.checked : false;
-    setFieldMuted(document.getElementById('cfg-cf-endpoint'), !enabled);
-    setFieldMuted(document.getElementById('cfg-cf-token'), !enabled);
-    setFieldMuted(document.getElementById('cfg-cf-poll-interval'), !enabled);
-    const testBtn = document.getElementById('btn-cf-test');
-    if (testBtn) testBtn.disabled = !enabled;
-    const qrBtn = document.getElementById('btn-cf-qr');
-    if (qrBtn) qrBtn.disabled = !enabled;
-  }
-  const cfEnabledToggleEl = document.getElementById('cfg-cf-enabled');
-  if (cfEnabledToggleEl) cfEnabledToggleEl.addEventListener('change', updateCFBridgeFieldStates);
-
-  const btnCFTest = document.getElementById('btn-cf-test');
-  if (btnCFTest) {
-    btnCFTest.addEventListener('click', async () => {
-      const hint = document.getElementById('cf-test-result-hint');
-      const endpointEl = document.getElementById('cfg-cf-endpoint');
-      const tokenEl = document.getElementById('cfg-cf-token');
-      const endpoint = endpointEl ? endpointEl.value.trim() : '';
-      const token = tokenEl ? tokenEl.value.trim() : '';
-      if (!window.backend || !window.backend.testCFBridgeConnection) return;
-      btnCFTest.disabled = true;
-      const prevLabel = btnCFTest.textContent;
-      btnCFTest.textContent = t('btnCFBridgeTesting');
-      if (hint) { hint.textContent = ''; hint.style.color = 'var(--text-muted)'; }
-      try {
-        await window.backend.testCFBridgeConnection(endpoint, token);
-        if (hint) {
-          hint.textContent = t('cfBridgeTestSuccess');
-          hint.style.color = 'var(--accent-color)';
-        }
-      } catch (e) {
-        if (hint) {
-          hint.textContent = t('cfBridgeTestFailed', { err: (e && e.message) || String(e) });
-          hint.style.color = 'var(--text-danger-hint)';
-        }
-      } finally {
-        btnCFTest.disabled = !(document.getElementById('cfg-cf-enabled') && document.getElementById('cfg-cf-enabled').checked);
-        btnCFTest.textContent = prevLabel;
-      }
-    });
-  }
-
-  const btnCFQR = document.getElementById('btn-cf-qr');
-  if (btnCFQR) {
-    btnCFQR.addEventListener('click', async () => {
-      const endpointEl = document.getElementById('cfg-cf-endpoint');
-      const tokenEl = document.getElementById('cfg-cf-token');
-      const endpoint = endpointEl ? endpointEl.value.trim() : '';
-      const token = tokenEl ? tokenEl.value.trim() : '';
-      if (!endpoint) {
-        showMessage(t('cfBridgeTestFailed', { err: 'Endpoint URLを入力してください' }), 4000, { important: true });
-        return;
-      }
-      if (!window.backend || !window.backend.getCFBridgePairingQR) return;
-      try {
-        const qrDataUri = await window.backend.getCFBridgePairingQR(endpoint, token);
-        const modal = document.getElementById('cf-bridge-qr-modal');
-        const img = document.getElementById('cf-bridge-qr-img');
-        const urlEl = document.getElementById('cf-bridge-qr-url');
-        if (img) img.src = qrDataUri;
-        const targetUrl = endpoint.replace(/\/+$/, '') + (token ? '/?token=' + encodeURIComponent(token) : '');
-        if (urlEl) urlEl.textContent = targetUrl;
-        if (modal) modal.classList.remove('hidden');
-      } catch (e) {
-        showMessage((e && e.message) || String(e), 4000, { important: true });
-      }
-    });
-  }
-
-  const btnCloseCFQR = document.getElementById('modal-cf-bridge-qr-close');
-  const btnCloseCFQR2 = document.getElementById('btn-cf-bridge-qr-close');
-  const modalCFQR = document.getElementById('cf-bridge-qr-modal');
-  if (btnCloseCFQR && modalCFQR) btnCloseCFQR.addEventListener('click', () => modalCFQR.classList.add('hidden'));
-  if (btnCloseCFQR2 && modalCFQR) btnCloseCFQR2.addEventListener('click', () => modalCFQR.classList.add('hidden'));
-  if (modalCFQR) modalCFQR.addEventListener('click', (e) => { if (e.target === modalCFQR) modalCFQR.classList.add('hidden'); });
 
   // Send To (Explorer right-click OCR): the section only exists where the native binding does
   // (Windows). On any other platform/preview, hide it instead of wiring buttons that would fail.
@@ -15126,144 +13511,6 @@ OUTPUT FORMAT:
   const btnUnregisterFileTypes = document.getElementById('btn-unregister-filetypes');
   if (btnUnregisterFileTypes) btnUnregisterFileTypes.addEventListener('click', () => runFileTypesAction('unregisterFileTypes', ''));
 
-  const btnBrowseInboxDir = document.getElementById('btn-browse-inbox-dir');
-  if (btnBrowseInboxDir) {
-    btnBrowseInboxDir.onclick = async () => {
-      if (window.backend && window.backend.openFolder) {
-        try {
-          const selected = await withNativeDialog(() => window.backend.openFolder());
-          if (selected) {
-            const input = document.getElementById('cfg-inbox-dir');
-            if (input) input.value = selected;
-          }
-        } catch (e) { /* user canceled or dialog failed; leave the field as-is */ }
-      }
-    };
-  }
-
-  // --- Discord Bridge: background status + a new scrap arriving while the app may be minimized ---
-  // Deliberately its own handler, not onScrapAppended: that one switches the active tab to the
-  // scrap file, right for "I just ran a CLI pipe" but wrong for a message that can arrive at any
-  // moment in the background - it must never steal focus from whatever the user is editing.
-  window.onDiscordBridgeStatus = function(info) {
-    if (!info) return;
-    const hint = document.getElementById('discord-test-result-hint');
-    if (!hint || !settingsModal || settingsModal.classList.contains('hidden')) return;
-    if (info.status === 'connected') {
-      hint.textContent = t('cfBridgeStatusConnected');
-      hint.style.color = 'var(--accent-color)';
-    } else if (info.status === 'connecting') {
-      hint.textContent = t('cfBridgeStatusConnecting');
-      hint.style.color = 'var(--text-muted)';
-    } else if (info.status === 'error') {
-      hint.textContent = t('cfBridgeStatusError', { err: info.message || '' });
-      hint.style.color = 'var(--text-danger-hint)';
-    }
-  };
-
-  window.onDiscordBridgeMessage = async function(data) {
-    if (!data || !data.filePath) return;
-    let targetTab = findTabByPath(data.filePath);
-    if (targetTab) {
-      const refreshed = await refreshTabFromDisk(targetTab, data.filePath);
-      if (refreshed === 'kept') {
-        showMessage(t('scrapKeptUnsavedEdits'), 4000);
-        return;
-      }
-    } else {
-      let content = '';
-      if (window.backend && window.backend.readFileByPath) {
-        try {
-          const res = await window.backend.readFileByPath(data.filePath);
-          if (res && res.content !== undefined) {
-            content = res.content;
-          }
-        } catch (e) {
-          console.warn('Failed to read scrap file for discord bridge:', e);
-        }
-      }
-      targetTab = createTab(data.fileName || 'Daily Scrap', content, data.filePath);
-      targetTab.isAutoTitle = false;
-      targetTab.isScrap = true;
-    }
-
-    const currentTab = getTab(activeTabId);
-    const hasUnsaved = currentTab && tabHasUnsavedText(currentTab);
-    const isEmptyUntitled = currentTab && !currentTab.path && !(currentTab.content || '').trim() && !hasUnsaved;
-
-    if (!hasUnsaved || (currentTab && currentTab.id === targetTab.id)) {
-      if (isEmptyUntitled && currentTab && currentTab.id !== targetTab.id) {
-        closeTab(currentTab.id);
-      }
-      selectTab(targetTab.id);
-      setTimeout(() => {
-        if (editorEl) editorEl.scrollTop = editorEl.scrollHeight;
-      }, 50);
-    }
-
-    showMessage(t('cfBridgeMessageToast'), 2500);
-  };
-
-  // --- Mobile Bridge (Cloudflare): background status + arrival notification ---
-  window.onCFBridgeStatus = function(info) {
-    if (!info) return;
-    const hint = document.getElementById('cf-test-result-hint');
-    if (!hint) return;
-    if (info.status === 'connected') {
-      hint.textContent = t('cfBridgeStatusConnected');
-      hint.style.color = 'var(--accent-color)';
-    } else if (info.status === 'fetching') {
-      hint.textContent = t('cfBridgeStatusConnecting');
-      hint.style.color = 'var(--text-muted)';
-    } else if (info.status === 'error') {
-      hint.textContent = t('cfBridgeStatusError', { err: info.message || '' });
-      hint.style.color = 'var(--text-danger-hint)';
-    }
-  };
-
-  window.onCFBridgeMessage = async function(data) {
-    if (!data || !data.filePath) return;
-    let targetTab = findTabByPath(data.filePath);
-    if (targetTab) {
-      const refreshed = await refreshTabFromDisk(targetTab, data.filePath);
-      if (refreshed === 'kept') {
-        showMessage(t('scrapKeptUnsavedEdits'), 4000);
-        return;
-      }
-    } else {
-      let content = '';
-      if (window.backend && window.backend.readFileByPath) {
-        try {
-          const res = await window.backend.readFileByPath(data.filePath);
-          if (res && res.content !== undefined) {
-            content = res.content;
-          }
-        } catch (e) {
-          console.warn('Failed to read scrap file for mobile bridge:', e);
-        }
-      }
-      targetTab = createTab(data.fileName || 'Daily Scrap', content, data.filePath);
-      targetTab.isAutoTitle = false;
-      targetTab.isScrap = true;
-    }
-
-    const currentTab = getTab(activeTabId);
-    const hasUnsaved = currentTab && tabHasUnsavedText(currentTab);
-    const isEmptyUntitled = currentTab && !currentTab.path && !(currentTab.content || '').trim() && !hasUnsaved;
-
-    if (!hasUnsaved || (currentTab && currentTab.id === targetTab.id)) {
-      if (isEmptyUntitled && currentTab && currentTab.id !== targetTab.id) {
-        closeTab(currentTab.id);
-      }
-      selectTab(targetTab.id);
-      setTimeout(() => {
-        if (editorEl) editorEl.scrollTop = editorEl.scrollHeight;
-      }, 50);
-    }
-
-    showMessage(t('cfBridgeMessageToast'), 2500);
-  };
-
   // Settings Dialog
   let openedConfigSnapshot = null;
 
@@ -15282,7 +13529,6 @@ OUTPUT FORMAT:
       'cfg-vision-api-key',
       'cfg-image-api-key',
       'cfg-auto-api-key',
-      'cfg-action-api-key',
       'cfg-semantic-api-key'
     ];
 
@@ -15317,47 +13563,6 @@ OUTPUT FORMAT:
   function cancelSettings() {
     restoreLiveConfigFromSnapshot();
     closeSettings();
-  }
-
-  async function updateGitRepoStatusUI(dir) {
-    const badge = document.getElementById('git-repo-status-badge');
-    const remoteInput = document.getElementById('cfg-git-remote-url');
-    if (!badge) return;
-
-    if (!window.backend || !window.backend.getGitRepoStatus) {
-      badge.removeAttribute('data-i18n');
-      badge.textContent = 'Local';
-      return;
-    }
-
-    try {
-      const status = await window.backend.getGitRepoStatus(dir || '');
-      if (status) {
-        badge.removeAttribute('data-i18n'); // real status resolved; stop applyLanguage() from resetting it to "Checking..."
-        if (!status.is_git) {
-          badge.textContent = t('gitStatusNotGit');
-          badge.style.background = 'var(--badge-git-warn-bg)';
-          badge.style.color = 'var(--badge-git-warn-text)';
-        } else if (status.remote_url) {
-          const shortUrl = status.remote_url.replace(/https?:\/\/|git@/g, '').split('/')[1] || status.remote_url;
-          badge.textContent = t('gitStatusLinked', { url: shortUrl });
-          badge.title = status.remote_url;
-          badge.style.background = 'var(--badge-git-ok-bg)';
-          badge.style.color = 'var(--badge-git-ok-text)';
-          if (remoteInput && !remoteInput.value) {
-            remoteInput.value = status.remote_url;
-          }
-        } else {
-          badge.textContent = t('gitStatusNoRemote');
-          badge.style.background = 'var(--badge-git-idle-bg)';
-          badge.style.color = 'var(--badge-git-idle-text)';
-        }
-      }
-    } catch (e) {
-      console.warn('Failed to get git status:', e);
-      badge.removeAttribute('data-i18n');
-      badge.textContent = 'Error';
-    }
   }
 
   // Wire protocol detection for the Text model's Base URL: the app used to
@@ -15589,7 +13794,6 @@ OUTPUT FORMAT:
   bindModelBaseUrlAutoFill('cfg-auto-model', 'cfg-auto-base-url', 'llm');
   bindModelBaseUrlAutoFill('cfg-vision-model', 'cfg-vision-base-url', 'llm');
   bindModelBaseUrlAutoFill('cfg-semantic-model', 'cfg-semantic-base-url', 'embed');
-  bindModelBaseUrlAutoFill('cfg-action-model', 'cfg-action-base-url', 'action');
 
   // The model fields read their suggestions from the provider (frontend/js/model_list.js, loaded on the first focus of one of them); the
   // options of index.html are the fallback.
@@ -15606,10 +13810,6 @@ OUTPUT FORMAT:
     apiKey: settingValue('cfg-image-api-key') || borrowedApiKey(GEMINI_BASE, [visionEndpoint(), textEndpoint()])
   });
   const semanticEndpoint = () => ({ baseUrl: settingValue('cfg-semantic-base-url') || 'http://localhost:11434', apiKey: settingValue('cfg-semantic-api-key') });
-  const actionEndpoint = () => {
-    const baseUrl = settingValue('cfg-action-base-url') || settingValue('cfg-base-url') || GEMINI_BASE;
-    return { baseUrl, apiKey: settingValue('cfg-action-api-key') || borrowedApiKey(baseUrl, [textEndpoint()]) };
-  };
   const textModelField = { input: document.getElementById('cfg-model'), kind: 'text', endpoint: textEndpoint };
   [
     textModelField,
@@ -15619,8 +13819,7 @@ OUTPUT FORMAT:
     { input: document.getElementById('cfg-voice-refine-model'), kind: 'text', endpoint: visionEndpoint },
     { input: document.getElementById('cfg-image-model'), kind: 'image', endpoint: imageEndpoint },
     { input: document.getElementById('cfg-semantic-model'), kind: 'embed', endpoint: semanticEndpoint },
-    { input: document.getElementById('cfg-cli-model'), kind: 'text', endpoint: textEndpoint },
-    { input: document.getElementById('cfg-action-model'), kind: 'text', endpoint: actionEndpoint }
+    { input: document.getElementById('cfg-cli-model'), kind: 'text', endpoint: textEndpoint }
   ].forEach(field => {
     if (field.input) field.input.addEventListener('focus', () => ensureModelList().then(() => ModelList.refreshIfStale(field), () => {}));
   });
@@ -15655,186 +13854,6 @@ OUTPUT FORMAT:
       }
     });
   }
-
-  // Ollama Lifecycle & Automated Gemma 4 Setup
-  let lastOllamaStatusCheck = 0;
-  async function updateOllamaStatus(force) {
-    const badge = document.getElementById('ollama-status-badge');
-    const btnStart = document.getElementById('btn-start-ollama');
-    const btnStop = document.getElementById('btn-stop-ollama');
-    if (!badge) return;
-
-    if (!force && Date.now() - lastOllamaStatusCheck < 3000) return;
-    lastOllamaStatusCheck = Date.now();
-
-    if (!window.backend || !window.backend.checkOllamaRunning) {
-      badge.removeAttribute('data-i18n');
-      badge.textContent = 'Local';
-      badge.style.background = 'var(--veil-10)';
-      badge.style.color = 'var(--text-idle)';
-      if (btnStart) btnStart.classList.add('hidden');
-      if (btnStop) btnStop.classList.add('hidden');
-      return;
-    }
-
-    try {
-      const running = await window.backend.checkOllamaRunning();
-      badge.removeAttribute('data-i18n');
-      if (running) {
-        badge.textContent = t('ollamaRunning');
-        badge.style.background = 'var(--badge-ok-bg)';
-        badge.style.color = 'var(--badge-ok-text)';
-        if (btnStart) btnStart.classList.add('hidden');
-        if (btnStop) btnStop.classList.remove('hidden');
-      } else {
-        badge.textContent = t('ollamaStopped');
-        badge.style.background = 'var(--badge-danger-bg)';
-        badge.style.color = 'var(--badge-danger-text)';
-        if (btnStart) btnStart.classList.remove('hidden');
-        if (btnStop) btnStop.classList.add('hidden');
-      }
-    } catch (e) {
-      badge.removeAttribute('data-i18n');
-      badge.textContent = t('ollamaStopped');
-      badge.style.background = 'var(--badge-danger-bg)';
-      badge.style.color = 'var(--badge-danger-text)';
-      if (btnStart) btnStart.classList.remove('hidden');
-      if (btnStop) btnStop.classList.add('hidden');
-    }
-  }
-
-  let activeOllamaSetupReqId = null;
-
-  const btnStartOllama = document.getElementById('btn-start-ollama');
-  if (btnStartOllama) {
-    btnStartOllama.onclick = async () => {
-      const badge = document.getElementById('ollama-status-badge');
-      if (badge) {
-        badge.textContent = t('ollamaChecking');
-        badge.style.color = 'var(--badge-busy-text)';
-      }
-      btnStartOllama.disabled = true;
-      if (window.backend && window.backend.startOllamaService) {
-        try {
-          await window.backend.startOllamaService();
-          showMessage(t('ollamaStarted'), 3000);
-        } catch (e) {
-          showMessage(t('ollamaStartFailed', { err: e.message || String(e) }), 4000, { important: true });
-        }
-      }
-      setTimeout(() => {
-        btnStartOllama.disabled = false;
-        updateOllamaStatus();
-      }, 2000);
-    };
-  }
-
-  const btnStopOllama = document.getElementById('btn-stop-ollama');
-  if (btnStopOllama) {
-    btnStopOllama.onclick = async () => {
-      btnStopOllama.disabled = true;
-      if (window.backend && window.backend.stopOllamaService) {
-        try {
-          await window.backend.stopOllamaService();
-          showMessage(t('ollamaStoppedSuccess'), 3000);
-        } catch (e) {}
-      }
-      setTimeout(() => {
-        btnStopOllama.disabled = false;
-        updateOllamaStatus();
-      }, 1000);
-    };
-  }
-
-  const btnSetupOllama = document.getElementById('btn-setup-ollama');
-  const btnCancelOllamaSetup = document.getElementById('btn-cancel-ollama-setup');
-  const ollamaProgressBox = document.getElementById('ollama-setup-progress-box');
-  const ollamaProgressMsg = document.getElementById('ollama-progress-msg');
-  const ollamaProgressStep = document.getElementById('ollama-progress-step');
-  const ollamaProgressBar = document.getElementById('ollama-progress-bar');
-
-  if (btnSetupOllama) {
-    btnSetupOllama.onclick = () => {
-      activeOllamaSetupReqId = 'ollama_setup_' + Date.now();
-      if (ollamaProgressBox) ollamaProgressBox.classList.remove('hidden');
-      if (ollamaProgressMsg) ollamaProgressMsg.textContent = t('ollamaChecking');
-      if (ollamaProgressStep) ollamaProgressStep.textContent = t('ollamaStepOf', { step: 1, total: 5 });
-      if (ollamaProgressBar) ollamaProgressBar.style.width = '20%';
-      btnSetupOllama.classList.add('hidden');
-      if (btnCancelOllamaSetup) btnCancelOllamaSetup.classList.remove('hidden');
-
-      if (window.backend && window.backend.setupOllamaGemma4Async) {
-        window.backend.setupOllamaGemma4Async(activeOllamaSetupReqId);
-      }
-    };
-  }
-
-  if (btnCancelOllamaSetup) {
-    btnCancelOllamaSetup.onclick = () => {
-      if (activeOllamaSetupReqId && window.backend && window.backend.cancelOllamaSetup) {
-        window.backend.cancelOllamaSetup(activeOllamaSetupReqId);
-      }
-      if (ollamaProgressBox) ollamaProgressBox.classList.add('hidden');
-      if (btnSetupOllama) btnSetupOllama.classList.remove('hidden');
-      btnCancelOllamaSetup.classList.add('hidden');
-      activeOllamaSetupReqId = null;
-    };
-  }
-
-  window.__onOllamaSetupProgress = (prog) => {
-    if (!prog || (activeOllamaSetupReqId && prog.reqId !== activeOllamaSetupReqId)) {
-      return;
-    }
-
-    // The Go side words each step in Japanese: said in the UI language here (go_text.js)
-    if (ollamaProgressMsg && prog.message) {
-      ollamaProgressMsg.textContent = goErr(prog.message);
-    }
-    if (ollamaProgressStep && prog.step) {
-      ollamaProgressStep.textContent = t('ollamaStepOf', { step: prog.step, total: prog.total || 5 });
-    }
-    if (ollamaProgressBar && prog.step && prog.total) {
-      const pct = Math.min(100, Math.round((prog.step / prog.total) * 100));
-      ollamaProgressBar.style.width = pct + '%';
-    }
-
-    if (prog.isDone) {
-      if (btnSetupOllama) btnSetupOllama.classList.remove('hidden');
-      if (btnCancelOllamaSetup) btnCancelOllamaSetup.classList.add('hidden');
-      setTimeout(() => {
-        if (ollamaProgressBox) ollamaProgressBox.classList.add('hidden');
-      }, 3000);
-
-      if (prog.success) {
-        const baseUrl = 'http://localhost:11434';
-        const model = 'gemma4:e2b';
-
-        const baseInput = document.getElementById('cfg-base-url');
-        const modelInput = document.getElementById('cfg-model');
-        const autoBaseInput = document.getElementById('cfg-auto-base-url');
-        const autoModelInput = document.getElementById('cfg-auto-model');
-
-        if (baseInput) baseInput.value = baseUrl;
-        if (modelInput) modelInput.value = model;
-        if (autoBaseInput) autoBaseInput.value = baseUrl;
-        if (autoModelInput) autoModelInput.value = model;
-
-        config.text.baseUrl = baseUrl;
-        config.text.model = model;
-        config.autocomplete.baseUrl = baseUrl;
-        config.autocomplete.model = model;
-
-        savePersistentConfig();
-        updateOllamaStatus();
-        refreshStatusAI(); // the model behind the AI item of the status bar just changed
-        showMessage(t('ollamaSetupSuccess'), 4000);
-      } else {
-        updateOllamaStatus();
-        showMessage(t('ollamaSetupFailed', { err: goErr(prog.error || '') || t('ollamaSetupUnknown') }), 8000, { important: true });
-      }
-      activeOllamaSetupReqId = null;
-    }
-  };
 
   const cfgLanguageSelect = document.getElementById('cfg-language');
   if (cfgLanguageSelect) {
@@ -16130,28 +14149,6 @@ OUTPUT FORMAT:
     const saveCliOpenErrorTabEl = document.getElementById('cfg-cli-open-error-tab');
     if (saveCliOpenErrorTabEl) config.cli.openErrorInNewTab = saveCliOpenErrorTabEl.checked;
 
-    if (!config.action) config.action = {};
-    const saveActEnabledEl = document.getElementById('cfg-action-enabled');
-    if (saveActEnabledEl) config.action.enabled = saveActEnabledEl.checked;
-    const saveActManualOnlyEl = document.getElementById('cfg-action-manual-only');
-    if (saveActManualOnlyEl) config.action.manualOnly = saveActManualOnlyEl.checked;
-    const saveActDelayEl = document.getElementById('cfg-action-delay');
-    if (saveActDelayEl) {
-      config.action.delaySec = clampNumber(saveActDelayEl.value, 0.5, 10.0, 1.5, true);
-    }
-    const saveActBaseUrlEl = document.getElementById('cfg-action-base-url');
-    if (saveActBaseUrlEl) config.action.baseUrl = saveActBaseUrlEl.value.trim();
-    const saveActModelEl = document.getElementById('cfg-action-model');
-    if (saveActModelEl) config.action.model = saveActModelEl.value.trim() || 'gemini-decision-1';
-    if (!config.action.baseUrl && window.SykiSettingsModal) {
-      const inferredActUrl = window.SykiSettingsModal.inferBaseUrlForModel(config.action.model, { kind: 'action' });
-      if (inferredActUrl) {
-        config.action.baseUrl = inferredActUrl;
-        if (saveActBaseUrlEl) saveActBaseUrlEl.value = inferredActUrl;
-      }
-    }
-    const saveActApiKeyEl = document.getElementById('cfg-action-api-key');
-    if (saveActApiKeyEl) config.action.apiKey = saveActApiKeyEl.value.trim();
     updateActionStatus();
 
     if (!config.image) config.image = {};
@@ -16239,23 +14236,6 @@ OUTPUT FORMAT:
     const checkUpdatesSaveCheckbox = document.getElementById('cfg-check-updates');
     if (checkUpdatesSaveCheckbox) config.general.checkUpdates = checkUpdatesSaveCheckbox.checked;
 
-    // Save Slot & Autonomous Agent Settings
-    const saveSlotTimeoutEl = document.getElementById('cfg-slot-timeout');
-    if (saveSlotTimeoutEl) config.timeout_seconds = clampNumber(saveSlotTimeoutEl.value, 10, 600, 180);
-    const saveGhostDiffEl = document.getElementById('cfg-slot-ghost-diff-ms');
-    if (saveGhostDiffEl) config.ghost_diff_duration_ms = clampNumber(saveGhostDiffEl.value, 1000, 10000, 4000);
-    const saveHoverPeekEl = document.getElementById('cfg-slot-hover-peek');
-    if (saveHoverPeekEl) config.hover_peek_enabled = saveHoverPeekEl.checked;
-    const saveDefaultAgentEl = document.getElementById('cfg-default-agent');
-    if (saveDefaultAgentEl) {
-      config.default_agent = saveDefaultAgentEl.value || config.default_agent || 'claude-code'; // empty: every agent is disabled
-    }
-    if (!config.autoSelector || typeof config.autoSelector !== 'object') config.autoSelector = {};
-    const saveAutoSelEnabledEl = document.getElementById('cfg-autosel-enabled');
-    if (saveAutoSelEnabledEl) config.autoSelector.enabled = saveAutoSelEnabledEl.checked;
-    const saveAutoSelConfirmEl = document.getElementById('cfg-autosel-agent-confirm');
-    if (saveAutoSelConfirmEl) config.autoSelector.agentConfirm = saveAutoSelConfirmEl.checked;
-
     // Snapshot comparison for differential / dirty updates
     const prev = openedConfigSnapshot || {};
     const prevScraps = prev.scraps || {};
@@ -16263,58 +14243,12 @@ OUTPUT FORMAT:
     const prevGeneral = prev.general || {};
     const prevAppearanceSignature = window.Appearance ? window.Appearance.signature(window.Appearance.normalize(prev.appearance, prevGeneral.theme)) : '';
 
-    const scrapDirInput = (document.getElementById('cfg-scrap-dir') && document.getElementById('cfg-scrap-dir').value.trim()) || '';
-    if (saveDefaultAgentEl && (config.default_agent !== prev.default_agent || (scrapDirInput && scrapDirInput !== prevScraps.scrapDir))) {
-      if (window.backend && window.backend.updateActiveAgentsConfigDefaultAgent) {
-        window.backend.updateActiveAgentsConfigDefaultAgent(scrapDirInput, config.default_agent).catch(e => {
-          console.warn('Failed to update default_agent in agents.yaml:', e);
-        });
-      }
-    }
-
-    const slotSettingsChanged = config.timeout_seconds !== prev.timeout_seconds ||
-      config.hover_peek_enabled !== prev.hover_peek_enabled ||
-      config.ghost_diff_duration_ms !== prev.ghost_diff_duration_ms;
-    if (slotSettingsChanged && window.backend && window.backend.updateActiveAgentsConfigSlotSettings) {
-      window.backend.updateActiveAgentsConfigSlotSettings(
-        scrapDirInput,
-        config.timeout_seconds || 180,
-        config.hover_peek_enabled !== false,
-        config.ghost_diff_duration_ms || 4000
-      ).catch(e => {
-        console.warn('Failed to update slot settings in agents.yaml:', e);
-      });
-    }
-
-    if (window.SlotAgent && window.SlotAgent.updateConfig) {
-      window.SlotAgent.updateConfig(config);
-    }
-
-    // Save Scraps & Background Git Sync Settings
+    // Save Scraps Settings
     if (!config.scraps) config.scraps = {};
     const saveScrapDirEl = document.getElementById('cfg-scrap-dir');
     if (saveScrapDirEl) {
       config.scraps.scrapDir = saveScrapDirEl.value.trim() || '~/Documents/syki-sok/scraps';
       config.scrap_dir = config.scraps.scrapDir;
-    }
-    const saveGitSyncEnabledEl = document.getElementById('cfg-git-sync-enabled');
-    if (saveGitSyncEnabledEl) {
-      config.scraps.gitSyncEnabled = saveGitSyncEnabledEl.checked;
-      config.git_sync_enabled = config.scraps.gitSyncEnabled;
-    }
-    const saveGitDebounceEl = document.getElementById('cfg-git-debounce');
-    if (saveGitDebounceEl) {
-      config.scraps.gitSyncDebounceSeconds = clampNumber(saveGitDebounceEl.value, 5, 3600, 30);
-      config.git_sync_debounce_seconds = config.scraps.gitSyncDebounceSeconds;
-    }
-    const saveGitBranchEl = document.getElementById('cfg-git-remote-branch');
-    if (saveGitBranchEl) {
-      config.scraps.gitRemoteBranch = saveGitBranchEl.value.trim() || 'main';
-      config.git_remote_branch = config.scraps.gitRemoteBranch;
-    }
-    const saveGitRemoteUrlEl = document.getElementById('cfg-git-remote-url');
-    if (saveGitRemoteUrlEl) {
-      config.scraps.gitRemoteUrl = saveGitRemoteUrlEl.value.trim();
     }
     const saveMaxPipeSizeEl = document.getElementById('cfg-max-pipe-size');
     if (saveMaxPipeSizeEl) {
@@ -16322,39 +14256,8 @@ OUTPUT FORMAT:
       config.max_pipe_size_mb = config.scraps.maxPipeSizeMB;
     }
 
-    // Save CF Mobile Bridge settings
-    if (!config.cfBridge) config.cfBridge = {};
-    const saveCFEnabledEl = document.getElementById('cfg-cf-enabled');
-    if (saveCFEnabledEl) config.cfBridge.enabled = saveCFEnabledEl.checked;
-    const saveCFEndpointEl = document.getElementById('cfg-cf-endpoint');
-    if (saveCFEndpointEl) config.cfBridge.endpoint = saveCFEndpointEl.value.trim();
-    const saveCFTokenEl = document.getElementById('cfg-cf-token');
-    if (saveCFTokenEl) config.cfBridge.token = saveCFTokenEl.value.trim();
-    const saveCFIntervalEl = document.getElementById('cfg-cf-poll-interval');
-    if (saveCFIntervalEl) config.cfBridge.pollIntervalSeconds = clampNumber(saveCFIntervalEl.value, 10, 600, 30);
-
-    // Save Inbox (Hot Folder) settings
-    if (!config.inbox) config.inbox = {};
-    const saveInboxEnabledEl = document.getElementById('cfg-inbox-enabled');
-    if (saveInboxEnabledEl) config.inbox.enabled = saveInboxEnabledEl.checked;
-    const saveInboxDirEl = document.getElementById('cfg-inbox-dir');
-    if (saveInboxDirEl) config.inbox.dir = saveInboxDirEl.value.trim();
-    // "on-device" = never send images out; '' = the default (cloud model first, on-device as fallback).
-    const saveOcrOnDeviceEl = document.getElementById('cfg-ocr-on-device');
-    if (saveOcrOnDeviceEl && !(isMac || platformCapabilities.os === 'darwin')) config.vision.ocrMode = saveOcrOnDeviceEl.checked ? 'on-device' : '';
     if (window.SpeechSettings) window.SpeechSettings.save(config);
     if (window.SemanticSettings) window.SemanticSettings.save(config);
-
-    // Only configure git remote if the remote URL or branch was genuinely changed by the user
-    const prevRemoteUrl = (prevScraps.gitRemoteUrl || '').trim();
-    const prevBranch = (prevScraps.gitRemoteBranch || 'main').trim();
-    const curRemoteUrl = (config.scraps.gitRemoteUrl || '').trim();
-    const curBranch = (config.scraps.gitRemoteBranch || 'main').trim();
-    if (curRemoteUrl && (curRemoteUrl !== prevRemoteUrl || curBranch !== prevBranch) && window.backend && window.backend.setupGitRemote) {
-      window.backend.setupGitRemote(config.scraps.scrapDir, curRemoteUrl, curBranch).catch(e => {
-        console.warn('Differential setupGitRemote error:', e);
-      });
-    }
 
     // Apply the look, accent and font only when they changed (the dialog already showed them: this puts the saved ones on screen and
     // ends the preview) and the language only when changed
@@ -16383,15 +14286,6 @@ OUTPUT FORMAT:
     const curShortcut = (config.shortcuts && config.shortcuts.globalSummon) || DEFAULT_SHORTCUTS.globalSummon;
     if (curShortcut !== prevShortcut) {
       updateShortcutLabels();
-    }
-
-    // Auto-stop Ollama only if user transitioned from Ollama to cloud API
-    const wasOllamaConfigured = (prev.text && prev.text.baseUrl && prev.text.baseUrl.includes('11434')) ||
-                               (prev.autocomplete && prev.autocomplete.enabled && prev.autocomplete.baseUrl && prev.autocomplete.baseUrl.includes('11434'));
-    const isOllamaConfigured = (config.text.baseUrl && config.text.baseUrl.includes('11434')) ||
-                               (config.autocomplete.enabled && config.autocomplete.baseUrl && config.autocomplete.baseUrl.includes('11434'));
-    if (wasOllamaConfigured && !isOllamaConfigured && window.backend && window.backend.stopOllamaService) {
-      window.backend.stopOllamaService().catch(() => {});
     }
 
     // Optimistic UI: the modal closes at once, the write runs in the background. The "saved" toast waits for the write: when
@@ -16453,91 +14347,7 @@ OUTPUT FORMAT:
     });
   }
 
-  // `next` is the whole config as merged by ConfigPack.mergeImported (imported sections laid over the
-  // current values); only the top-level keys that actually changed are put back into the live config.
-  function applyImportedConfig(next) {
-    if (!next || typeof next !== 'object') {
-      throw new Error("Invalid config format");
-    }
-    const prevSummon = (config.shortcuts && config.shortcuts.globalSummon) || DEFAULT_SHORTCUTS.globalSummon;
-    const prevQuickCapture = quickCaptureShortcutOf(config.shortcuts);
-
-    const prevThemeValue = config.general && config.general.theme;
-    const prevAppearanceJson = JSON.stringify(config.appearance === undefined ? null : config.appearance);
-    for (const key of Object.keys(next)) {
-      if (key !== '__proto__' && next[key] !== config[key]) config[key] = next[key];
-    }
-    // A package made before the appearance setting existed carries only general.theme: the accent follows it (the setting, when a
-    // package brings one, is the authority).
-    if (window.Appearance && config.general && config.general.theme !== prevThemeValue && config.appearance && typeof config.appearance === 'object' &&
-        JSON.stringify(config.appearance) === prevAppearanceJson && window.Appearance.LEGACY_THEMES.indexOf(config.general.theme) >= 0) {
-      config.appearance = Object.assign({}, config.appearance, { accent: config.general.theme });
-    }
-    if (next.general && next.general.imeGuardian !== undefined) hasPersistedImeGuardianSetting = true;
-    if (next.shortcuts) config.shortcuts = Object.assign({}, DEFAULT_SHORTCUTS, usableShortcuts(next.shortcuts));
-    migrateInsertLineShortcuts();
-    migrateZenShortcut(true);
-    migrateAskShortcuts(true);
-    migrateMacShortcuts(true);
-    migrateFullscreenShortcut();
-    if (window.SlotAgent && window.SlotAgent.updateConfig) {
-      window.SlotAgent.updateConfig(config);
-    }
-
-    applyTheme();
-    applyLanguage();
-    applyChromeLayout();
-    settingsRefreshRequested = true;
-    openSettings(); // Refresh settings modal inputs (the dialog is open: this is not a second open)
-    updateShortcutLabels();
-    updateActionStatus();
-    const saved = savePersistentConfig();
-
-    // Same as Save: the OS-level hotkey follows the imported shortcut, and falls back if it is refused.
-    const curSummon = (config.shortcuts && config.shortcuts.globalSummon) || DEFAULT_SHORTCUTS.globalSummon;
-    if (curSummon !== prevSummon && window.backend && window.backend.updateGlobalShortcut) {
-      Promise.resolve(window.backend.updateGlobalShortcut(curSummon)).then((ok) => {
-        if (ok === false) {
-          if (config.shortcuts) config.shortcuts.globalSummon = prevSummon;
-          clearShortcutParseCache();
-          renderShortcutsTable();
-          updateShortcutLabels();
-          savePersistentConfig().catch(() => {});
-          showMessage(t('globalShortcutRegisterFailed'), 5000, { important: true });
-        }
-      }).catch((err) => {
-        console.warn('updateGlobalShortcut failed:', err);
-      });
-    }
-    syncQuickCaptureShortcut(prevQuickCapture);
-    return saved;
-  }
-
-  // Export / Import open the settings-package dialog (js/config_pack.js); the app only lends it the
-  // pieces it needs.
-  function packHost() {
-    return {
-      getConfig: () => config,
-      getProjectHint: getNoteDir,
-      applyConfig: applyImportedConfig,
-      refreshAgents: checkActiveAgentsConfigStatus,
-      isMac: isMac, // a package's shortcuts made on a Mac are not taken on another OS
-      t: t,
-      showMessage: showMessage
-    };
-  }
-
-  if (btnExportSettings) {
-    btnExportSettings.onclick = () => {
-      if (window.ConfigPack) window.ConfigPack.openExport(packHost());
-    };
-  }
-
-  if (btnImportSettings) {
-    btnImportSettings.onclick = () => {
-      if (window.ConfigPack) window.ConfigPack.openImport(packHost());
-    };
-  }
+  // Settings Export/Import (ConfigPack) removed for syki-lite.
 
   // Resolves true when config.json took the config (or there is no backend to write to), false when it did not. A failure is
   // said here, in the status bar, every time - not only in the console - so no caller has to remember to (and none can show a
@@ -16581,15 +14391,6 @@ OUTPUT FORMAT:
     if (v && typeof v === 'object' && !Array.isArray(v)) config.appearance = Object.assign({}, v);
   }
 
-  // What this machine remembers about agents (agent_risk.js): the confirmed command lines (agentAck) and which agent
-  // notice was shown or hidden (agentNotice). Kept with the config, never exported in a settings package.
-  function loadAgentSafetyState(saved) {
-    for (const key of ['agentAck', 'agentNotice']) {
-      const v = saved && saved[key];
-      if (v && typeof v === 'object' && !Array.isArray(v)) config[key] = Object.assign({}, v);
-    }
-  }
-
   // Load Saved Config from local storage & backend RPC
   function loadLocalConfigSync() {
     try {
@@ -16613,23 +14414,13 @@ OUTPUT FORMAT:
           if (!config.scraps) config.scraps = {};
           Object.assign(config.scraps, parsed.scraps);
         }
-        if (parsed.cfBridge) {
-          if (!config.cfBridge) config.cfBridge = {};
-          Object.assign(config.cfBridge, parsed.cfBridge);
-        }
-        if (parsed.inbox) {
-          if (!config.inbox) config.inbox = {};
-          Object.assign(config.inbox, parsed.inbox);
-        }
         if (parsed.action) {
           if (!config.action) config.action = {};
           Object.assign(config.action, parsed.action);
         }
-        if (parsed.autoSelector && typeof parsed.autoSelector === 'object') config.autoSelector = Object.assign({}, config.autoSelector, parsed.autoSelector);
         // The look, accent and editor font (js/appearance.js). A group that is not read here is lost with the next save, which writes
         // the whole config back (the same trap as config.semantic): so it is copied as it is, keys this version does not know included.
         loadAppearanceGroup(parsed);
-        loadAgentSafetyState(parsed);
         if (parsed.general) Object.assign(config.general, parsed.general);
         if (parsed.general && parsed.general.imeGuardian !== undefined) hasPersistedImeGuardianSetting = true;
         if (parsed.shortcuts) config.shortcuts = Object.assign({}, DEFAULT_SHORTCUTS, usableShortcuts(parsed.shortcuts));
@@ -16664,8 +14455,7 @@ OUTPUT FORMAT:
     if (!fileConfig || typeof fileConfig !== 'object') return out;
     const nested = fileConfig.scraps && typeof fileConfig.scraps === 'object' ? fileConfig.scraps : {};
     const usable = (v, kind) => (kind === 'bool' ? typeof v === 'boolean' : kind === 'str' ? typeof v === 'string' && v !== '' : typeof v === 'number' && v > 0);
-    [['scrap_dir', 'scrapDir', 'str'], ['git_sync_enabled', 'gitSyncEnabled', 'bool'], ['git_sync_debounce_seconds', 'gitSyncDebounceSeconds', 'num'],
-      ['git_remote_branch', 'gitRemoteBranch', 'str'], ['max_pipe_size_mb', 'maxPipeSizeMB', 'num']].forEach(([flat, name, kind]) => {
+    [['scrap_dir', 'scrapDir', 'str'], ['max_pipe_size_mb', 'maxPipeSizeMB', 'num']].forEach(([flat, name, kind]) => {
       if (usable(fileConfig[flat], kind) && !usable(nested[name], kind)) out[name] = fileConfig[flat];
     });
     return out;
@@ -16699,14 +14489,6 @@ OUTPUT FORMAT:
             if (!config.scraps) config.scraps = {};
             Object.assign(config.scraps, fileConfig.scraps || {}, flatScraps);
           }
-          if (fileConfig.cfBridge) {
-            if (!config.cfBridge) config.cfBridge = {};
-            Object.assign(config.cfBridge, fileConfig.cfBridge);
-          }
-          if (fileConfig.inbox) {
-            if (!config.inbox) config.inbox = {};
-            Object.assign(config.inbox, fileConfig.inbox);
-          }
           // The semantic index's settings have no screen yet. They are kept exactly as the file has them: the notes search reads
           // config.semantic.enabled to offer "Meaning", and this page rewrites the whole file on a save, so a group it did not
           // read here would be lost then. (The local copy blanks the keys inside it like those of every other group.)
@@ -16717,10 +14499,6 @@ OUTPUT FORMAT:
             if (!config.action) config.action = {};
             Object.assign(config.action, fileConfig.action);
           }
-          if (fileConfig.autoSelector && typeof fileConfig.autoSelector === 'object') {
-            config.autoSelector = Object.assign({}, config.autoSelector, fileConfig.autoSelector);
-          }
-          loadAgentSafetyState(fileConfig);
           // Remember what the (already applied) local config produced so the
           // whole-DOM i18n / theme passes are not repeated for no reason.
           const prevAppearance = appearanceSignature();
@@ -16750,19 +14528,6 @@ OUTPUT FORMAT:
           // genuinely new install; re-apply the IME Guardian capability default
           // now that we know for sure.
           applyImeGuardianCapabilityDefault();
-
-          // Sync Slot & Agent configuration (v2.2.0)
-          if (fileConfig.default_agent) config.default_agent = fileConfig.default_agent;
-          if (fileConfig.timeout_seconds) config.timeout_seconds = fileConfig.timeout_seconds;
-          if (fileConfig.hover_peek_enabled !== undefined) config.hover_peek_enabled = fileConfig.hover_peek_enabled;
-          if (fileConfig.ghost_diff_duration_ms) config.ghost_diff_duration_ms = fileConfig.ghost_diff_duration_ms;
-          if (fileConfig.agents) config.agents = fileConfig.agents;
-          if (fileConfig.slot_profiles) config.slot_profiles = fileConfig.slot_profiles;
-          if (fileConfig.recipes) config.recipes = fileConfig.recipes;
-
-          if (window.SlotAgent && window.SlotAgent.updateConfig) {
-            window.SlotAgent.updateConfig(fileConfig);
-          }
           if (appearanceSignature() !== prevAppearance) {
             applyTheme();
           }
@@ -16806,12 +14571,6 @@ OUTPUT FORMAT:
       console.warn('Failed to fetch platform capabilities:', e);
     }
     applyImeGuardianCapabilityDefault();
-    if (platformCapabilities && platformCapabilities.multiWindow === false) {
-      ['ctx-new-window', 'tab-ctx-new-window', 'agent-ctx-new-window'].forEach((id) => {
-        const el = document.getElementById(id);
-        if (el) el.classList.add('hidden');
-      });
-    }
     applyTrayCapabilityUI();
   }
 
@@ -17466,15 +15225,12 @@ OUTPUT FORMAT:
       '#inline-prompt-bar',
       '#cli-filter-bar',
       '#quick-pick-modal .quick-pick-modal',
-      '#tag-pick-card',
       '.scraps-search-dialog',
-      '#lesson-card',
       '#tab-list-panel',
-      '#jev-action-panel',
       '#settings-modal .modal-card'
     ].join(', ');
 
-    const INTERACTIVE_SELECTOR = 'button, input, textarea, a, select, option, details, summary, .quick-pick-item, .jev-slot-card';
+    const INTERACTIVE_SELECTOR = 'button, input, textarea, a, select, option, details, summary, .quick-pick-item';
 
     function getTransformXY(el) {
       const tr = (el && el.style && el.style.transform) || '';
@@ -17626,9 +15382,6 @@ OUTPUT FORMAT:
     }
 
     // 2. Background Asynchronous Verification & Sync:
-    if (!isSecondaryWindow) {
-      setTimeout(announceAgentIssues, BOOT_POLICY.agentNoticeDelayMs); // well after the first paint and the config sync
-    }
     const runBackgroundStartupSync = () => {
       loadPlatformCapabilities();
       (async () => {
@@ -18538,7 +16291,7 @@ OUTPUT FORMAT:
 
   // RPC ui.open_panel: the panels the command palette and the shortcuts open, through the same functions. Each only shows the
   // panel (nothing is sent, run or saved); a panel can be opened again, the way a second shortcut press does.
-  const RPC_PANELS = ['find', 'replace', 'scraps_search', 'settings', 'shortcuts', 'snippets', 'all_tabs', 'command_palette', 'about'];
+  const RPC_PANELS = ['find', 'replace', 'scraps_search', 'settings', 'shortcuts', 'all_tabs', 'command_palette', 'about'];
 
   function openPanelForRpc(name, opts) {
     if (typeof name !== 'string' || RPC_PANELS.indexOf(name) === -1) {
@@ -18551,10 +16304,6 @@ OUTPUT FORMAT:
       case 'scraps_search': shownMode = openScrapsSearchForRpc(opts); break;
       case 'settings': openSettings(); break;
       case 'shortcuts': openSettings(); switchSettingsTab('shortcuts'); break;
-      case 'snippets':
-        if (!window.SlotAgent || !window.SlotAgent.openSnippetPicker) rpcFail('not_found', 'the snippet picker is not available');
-        window.SlotAgent.openSnippetPicker();
-        break;
       case 'all_tabs': {
         const overflow = getTabOverflow();
         if (!overflow) rpcFail('not_found', 'the all-tabs list is not available');
@@ -18858,14 +16607,6 @@ OUTPUT FORMAT:
     cancelLlmTask: cancelLlmTask,
     // False (with a toast when asked) if the built-in LLM cannot answer: no model / URL, or a hosted service without a key.
     isLlmConfigured: isLlmConfigured,
-    getAutoSelectorConfig: getAutoSelectorConfig,
-    // Command tasks ([[ $ command ]]): confirmCommand is the command bar's safety gate (Promise<boolean>, toasts the reason
-    // itself, never touches the note); runCommandTask / cancelCommandTask: see runCommandTask above.
-    confirmCommand: confirmCommand,
-    // Agent runs: (agentKey, definition) -> Promise<boolean>, false when the user declines a risky agent.
-    confirmAgentRun: confirmAgentRun,
-    runCommandTask: runCommandTask,
-    cancelCommandTask: cancelCommandTask,
     // The live text of a note wherever it is shown, or null when the tab is gone.
     getTabText: getTabText,
     // The pane that shows a note right now (the focused one when both do), or null when it is not on screen.
@@ -18888,7 +16629,6 @@ OUTPUT FORMAT:
     createTab,
     getActiveEditor,
     applyLanguage,
-    updateGitSyncStatusUI,
     openAboutDialog,
     checkForAppUpdates,
     askDestination,
@@ -18914,18 +16654,6 @@ OUTPUT FORMAT:
         }
         if (window.ResultBlocks && typeof scheduleUpdateLineNumbers === 'function') {
           scheduleUpdateLineNumbers(true);
-        }
-        if (window.SlotAgent) {
-          if (typeof window.SlotAgent.attachEditor === 'function') {
-            if (editorEl) window.SlotAgent.attachEditor(editorEl);
-            if (typeof editorSecondary !== 'undefined' && editorSecondary) window.SlotAgent.attachEditor(editorSecondary);
-          }
-          if (typeof window.SlotAgent.updateConfig === 'function') {
-            window.SlotAgent.updateConfig(config);
-          }
-        }
-        if (window.JevAction) {
-          updateActionStatus();
         }
       };
       document.head.appendChild(s);

@@ -103,12 +103,6 @@
             <path d="M19 4v3m1.5-1.5h-3"></path>
           </svg>
         </button>
-        <button id="btn-mobile-drop" class="btn-header-icon" title="Mobile Drop">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>
-            <line x1="12" y1="18" x2="12.01" y2="18"></line>
-          </svg>
-        </button>
         <button id="btn-voice-input" class="btn-header-icon" data-i18n-title="voiceInputTitle" title="Voice input (Ctrl+Shift+R)">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <rect x="9" y="2" width="6" height="12" rx="3"></rect>
@@ -355,18 +349,6 @@
         <div id="cli-filter-preview" class="cli-filter-preview hidden"></div>
       </div>
 
-      <!-- Jev Autonomous Action Panel (Ctrl+J Suggest) -->
-      <div id="jev-action-panel" class="jev-action-panel hidden">
-        <div class="jev-header">
-          <div class="jev-title">
-            <span class="jev-badge">Suggest</span>
-          </div>
-          <div class="jev-hints" id="jev-hints"></div>
-        </div>
-        <div class="jev-slots" id="jev-slots-container"></div>
-        <div class="jev-status hidden" id="jev-status-bar"></div>
-      </div>
-
       <!-- Primary Pane (Left) -->
       <div id="editor-pane" class="pane">
         <div id="line-numbers"></div>
@@ -523,7 +505,6 @@
         <!-- Every item on the right is a real <button> (a 24px target, in the Tab order). The AI item (status_ai.js) groups Text prediction / Suggestions / Voice tidy-up behind one popover and says which model answers. -->
         <button type="button" id="stat-recording" class="clickable-badge recording-status hidden" title="Recording. Click to stop (Esc discards)" data-i18n-title="voiceStatusTitle"><span class="rec-dot" aria-hidden="true"></span><span class="rec-label"></span><span class="rec-time"></span><span class="rec-mode"></span><span class="rec-stop"></span></button>
         <button type="button" id="stat-tasks" class="clickable-badge hidden" data-i18n-title="taskListTitle" title="Task list (Alt+T)"><span class="task-badge-spinner"></span><span id="stat-tasks-count">実行中: 0件</span></button>
-        <button type="button" id="stat-gitsync" class="clickable-badge" title="Git sync status. Click to sync now.">Git: Ready</button>
         <button type="button" id="stat-ime" class="clickable-badge" style="display: none;" aria-pressed="true" data-i18n-title="statImeTooltip" title="Auto Romaji-to-Japanese conversion (IME Guardian)">IME: ON</button>
         <button type="button" id="stat-ai" class="clickable-badge status-ai" data-a11y-keep aria-haspopup="dialog" aria-expanded="false" title="AI">AI</button>
         <button type="button" id="stat-autosave" class="clickable-badge" aria-pressed="true" data-i18n-title="statAutosaveTooltip" title="Autosave is enabled (Click to toggle)">Autosave: ON</button>
@@ -639,21 +620,6 @@
         <span class="menu-label" data-i18n="ctxVoiceInput">Voice input</span>
         <span class="shortcut" id="sc-ctx-voice-input">Ctrl+Shift+R</span>
       </div>
-      <div class="menu-item hidden" id="ctx-tag-entry">
-        <svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
-        <span class="menu-label" data-i18n="ctxTagEntry">Add a Tag to This Entry...</span>
-        <span class="shortcut" id="sc-ctx-tag-entry"></span>
-      </div>
-      <div class="menu-item hidden" id="ctx-tag-note">
-        <svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
-        <span class="menu-label" data-i18n="ctxTagNote">Add a Tag to the Whole Note...</span>
-        <span class="shortcut" id="sc-ctx-tag-note"></span>
-      </div>
-      <div class="menu-item hidden" id="ctx-tag-remove">
-        <svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
-        <span class="menu-label" data-i18n="ctxTagRemove">Remove a Tag...</span>
-        <span class="shortcut" id="sc-ctx-tag-remove"></span>
-      </div>
       <div class="menu-item" id="ctx-convert-mermaid">
         <svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><path d="M10 6.5h4a2 2 0 0 1 2 2v5.5"/></svg>
         <span class="menu-label" data-i18n="ctxConvertMermaid">To Flowchart...</span>
@@ -703,11 +669,6 @@
         <svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
         <span class="menu-label" data-i18n="ctxFullscreen">Full Screen</span>
         <span class="shortcut" id="sc-ctx-fullscreen">F11</span>
-      </div>
-      <div class="menu-item" id="ctx-new-window">
-        <svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M7 20h12a2 2 0 0 0 2-2V8"/></svg>
-        <span class="menu-label" data-i18n="ctxNewWindow">New Window</span>
-        <span class="shortcut">Ctrl+Shift+N</span>
       </div>
       <div class="menu-divider"></div>
       <div class="menu-item" id="ctx-harness-template">
@@ -787,10 +748,6 @@
         <span class="menu-label" data-i18n="ctxOpenToSide">横に並べて開く</span>
         <span class="shortcut">Ctrl+\</span>
       </div>
-      <div class="menu-item" id="tab-ctx-new-window">
-        <svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="14" height="12" rx="2"></rect><path d="M7 20h12a2 2 0 0 0 2-2V8"></path></svg>
-        <span class="menu-label" data-i18n="tabCtxNewWindow">新しいウィンドウで開く</span>
-      </div>
       <div class="menu-divider"></div>
       <div class="menu-item" id="tab-ctx-copy-path">
         <svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
@@ -816,10 +773,6 @@
       <div class="menu-item" id="agent-ctx-new">
         <svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
         <span class="menu-label" data-i18n="agentCtxNew">新しいエージェントセッション...</span>
-      </div>
-      <div class="menu-item" id="agent-ctx-new-window">
-        <svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="14" height="12" rx="2"></rect><path d="M7 20h12a2 2 0 0 0 2-2V8"></path></svg>
-        <span class="menu-label" data-i18n="agentCtxNewWindow">新しいウィンドウで開く（メモ＋ターミナル）</span>
       </div>
       <div class="menu-item" id="agent-ctx-rename">
         <svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
@@ -1205,31 +1158,6 @@
 
           <!-- 2. AIモデル (AI Models: Text, Ghost Text, Vision, Image Gen) -->
           <div id="pane-model" class="settings-pane hidden">
-            <!-- Local AI Setup -->
-            <div id="local-ai-card" class="local-ai-card" style="background: var(--veil-04); border: 1px solid var(--border-color); border-radius: 6px; padding: 12px 14px; margin-bottom: 16px;">
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                  <strong style="font-size: 13px;" data-i18n="localAiTitle">Local AI (Ollama & Gemma 4 E2B)</strong>
-                  <span id="ollama-status-badge" data-i18n="statusChecking" style="font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--veil-10); color: var(--text-idle);">Checking...</span>
-                </div>
-                <div style="display: flex; gap: 6px;">
-                  <button type="button" id="btn-start-ollama" class="btn-secondary hidden" style="padding: 3px 10px; font-size: 11px;" data-i18n="btnStartOllama">Start</button>
-                  <button type="button" id="btn-stop-ollama" class="btn-secondary hidden" style="padding: 3px 10px; font-size: 11px;" data-i18n="btnStopOllama">Stop</button>
-                  <button type="button" id="btn-setup-ollama" class="btn-secondary" style="padding: 3px 10px; font-size: 11px;" data-i18n="btnSetupOllama">Install Gemma 4</button>
-                  <button type="button" id="btn-cancel-ollama-setup" class="btn-secondary hidden" style="padding: 3px 10px; font-size: 11px;" data-i18n="btnCancel">Cancel</button>
-                </div>
-              </div>
-              <div id="ollama-setup-progress-box" class="hidden" style="margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border-color);">
-                <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">
-                  <span id="ollama-progress-msg">Preparing...</span>
-                  <span id="ollama-progress-step">Step 1/5</span>
-                </div>
-                <div style="background: var(--shade-30); height: 4px; border-radius: 2px; overflow: hidden;">
-                  <div id="ollama-progress-bar" style="background: var(--accent-color); height: 100%; width: 20%; transition: width 0.3s ease;"></div>
-                </div>
-              </div>
-            </div>
-
             <!-- Text LLM -->
             <div class="settings-section-header" data-basic>
               <h4 data-i18n="sectionTextLLM">Writing & commands</h4>
@@ -1843,113 +1771,6 @@
               <small data-i18n="maxPipeSizeHint">Failsafe limit for terminal standard input pipes to prevent memory spikes.</small>
             </div>
 
-            <!-- Section 2: エージェント (依頼する) -->
-            <div class="settings-section-header" data-basic style="margin-top: 18px;">
-              <h4 data-i18n="sectionAgentDelegate">エージェント (依頼する)</h4>
-            </div>
-            <!-- External Agent Config File Bar -->
-            <div class="agent-config-card" style="background: var(--veil-03); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px 14px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center;">
-              <div style="display: flex; align-items: center; gap: 8px;">
-                <strong style="font-size: 13px;" data-i18n="sectionAgentConfig">エージェント設定</strong>
-                <span id="agent-config-status-badge" data-i18n="statusChecking" style="font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--veil-10); color: var(--text-muted);">Checking...</span>
-              </div>
-              <button type="button" id="btn-open-agents-config" class="btn-secondary" style="padding: 5px 12px; font-size: 12px; white-space: nowrap;" data-i18n="btnOpenAgentsConfig">agents.yaml を開く</button>
-            </div>
-            <div class="form-group">
-              <label for="cfg-default-agent" data-i18n="lblDefaultAgent">エージェント:</label>
-              <select id="cfg-default-agent" class="form-select">
-                <option value="claude-code">Claude Code</option>
-                <option value="hermes">Hermes 3 (Ollama)</option>
-                <option value="codex">Codex</option>
-                <option value="agy">Google Antigravity</option>
-              </select>
-              <small id="agent-availability-badge" class="hidden"></small>
-              <small id="agent-disabled-note" class="hidden"></small>
-              <div id="agent-visibility-list" style="margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px;"></div>
-              <small id="agent-auto-approve-warning" class="hidden" data-i18n="agentAutoApproveWarning">This agent is configured to modify files and run commands without asking (change its arguments in agents.yaml).</small>
-              <div id="agent-issues" class="hidden" style="margin-top: 8px; padding: 8px 10px; border: 1px solid var(--border-color); border-radius: 6px;"></div>
-            </div>
-            <div class="form-row" style="display: flex; gap: 12px; margin-top: 10px;">
-              <div class="form-group" style="flex: 1;">
-                <label for="cfg-slot-timeout" data-i18n="slotTimeoutLabel">Agent timeout (seconds)</label>
-                <input type="number" id="cfg-slot-timeout" min="10" max="600" step="10" value="180">
-                <small data-i18n="slotTimeoutHint">How long to wait for the agent before giving up and marking the task failed.</small>
-              </div>
-              <div class="form-group" style="flex: 1;">
-                <label for="cfg-slot-ghost-diff-ms" data-i18n="slotGhostDiffLabel">Change highlight duration (ms)</label>
-                <input type="number" id="cfg-slot-ghost-diff-ms" min="1000" max="10000" step="500" value="4000">
-                <small data-i18n="slotGhostDiffHint">How long the inserted/changed text stays highlighted after an agent finishes.</small>
-              </div>
-            </div>
-            <div class="form-group inline-group">
-              <label>
-                <input type="checkbox" id="cfg-slot-hover-peek" checked> <span data-i18n="slotHoverPeekLabel">Live output preview in the task panel (Hover Peek)</span>
-              </label>
-              <small data-i18n="slotHoverPeekHint">When off, the task panel won't fetch or show the agent's live output while it runs.</small>
-            </div>
-
-            <!-- Section 3: 自動セレクター (任せる) -->
-            <div class="settings-section-header" style="margin-top: 18px;">
-              <h4 data-i18n="sectionAutoSelector">Auto selector (Let it decide)</h4>
-            </div>
-            <div class="form-group inline-group">
-              <label>
-                <input type="checkbox" id="cfg-autosel-enabled" checked> <span data-i18n="autoSelEnabledLabel">Let Ctrl+Enter decide: ask the AI, hand over to an agent, or run a command</span>
-              </label>
-              <small data-i18n="autoSelEnabledHint">When off, Ctrl+Enter only runs {{ }} slots, as before.</small>
-            </div>
-            <div class="form-group inline-group">
-              <label>
-                <input type="checkbox" id="cfg-autosel-agent-confirm" checked> <span data-i18n="autoSelAgentConfirmLabel">Confirm before an auto-detected agent or command runs</span>
-              </label>
-              <small data-i18n="autoSelAgentConfirmHint">The line is rewritten first; press Ctrl+Enter again to run it (Ctrl+Z undoes the rewrite).</small>
-            </div>
-
-            <!-- Section 4: 提案 (アクション) -->
-            <div class="settings-section-header" style="margin-top: 18px;">
-              <h4 data-i18n="sectionAgentSuggestions">提案 (アクション)</h4>
-            </div>
-            <div class="form-group inline-group">
-              <label>
-                <input type="checkbox" id="cfg-action-enabled" checked> <span data-i18n="actionEnabledLabel">メモ入力時にアクション候補を自動提示する</span>
-              </label>
-            </div>
-            <div class="form-group inline-group">
-              <label>
-                <input type="checkbox" id="cfg-action-manual-only"> <span data-i18n="actionManualOnlyLabel">手動呼び出しのみ (自動提示せず Ctrl+J で表示)</span>
-              </label>
-            </div>
-            <div class="form-group">
-              <label for="cfg-action-delay" data-i18n="actionDelayLabel">入力停止から自動提示までの待機時間 (秒):</label>
-              <input type="number" id="cfg-action-delay" min="0.5" max="10.0" step="0.5" value="1.5" style="width: 100px;">
-            </div>
-            <details class="ai-override-box">
-              <summary><span data-i18n="aiOverrideSummary">Connection &amp; model override</span><span class="ai-override-badge"></span></summary>
-              <div class="ai-override-body">
-                <small data-i18n="actionApiBlockHint">With both URL and API key blank, nothing leaves your machine — suggestions come from built-in local rules. If you fill them in, the text around your caret is sent to that API.</small>
-                <div class="form-group" style="margin-top: 6px;">
-                  <label for="cfg-action-base-url" data-i18n="actionBaseUrlLabel">API Base URL / Endpoint:</label>
-                  <input type="text" id="cfg-action-base-url" placeholder="https://generativelanguage.googleapis.com or https://api.openai.com/v1">
-                </div>
-                <div class="form-group">
-                  <label for="cfg-action-model" data-i18n="actionModelLabel">Model Name:</label>
-                  <input type="text" id="cfg-action-model" list="action-model-suggestions" placeholder="gemini-decision-1 (default), jev-latest, or gpt-6-luna">
-                  <datalist id="action-model-suggestions">
-                    <option value="gemini-decision-1">Gemini Decision 1 (Google Cloud)</option>
-                    <option value="gpt-6-luna">GPT-6 Luna (OpenAI Decisions API)</option>
-                    <option value="jev-latest">Jev Latest (TypeSafe)</option>
-                    <option value="google/gemini-3.8-flash">Gemini 3.8 Flash (OpenRouter)</option>
-                    <option value="openai/gpt-6-luna">GPT-6 Luna (OpenRouter)</option>
-                  </datalist>
-                  <small data-i18n="actionModelHint">Blank = gemini-decision-1. Decision models: gemini-decision-1 (Google), jev-latest (TypeSafe) or gpt-6-luna (OpenAI Decisions API).</small>
-                </div>
-                <div class="form-group">
-                  <label for="cfg-action-api-key" data-i18n="actionApiKeyLabel">API Key (Gemini / OpenAI / OpenRouter / TypeSafe):</label>
-                  <input type="password" id="cfg-action-api-key" placeholder="sk-... / sk-or-v1-... / typesafe key">
-                </div>
-              </div>
-            </details>
-
             <!-- Section 5: OS連携 (送る) -->
             <div id="sendto-section" class="settings-section-header" style="margin-top: 18px;">
               <h4 data-i18n="sectionSendTo">OS Integration (Send To)</h4>
@@ -1984,118 +1805,18 @@
             </div>
           </div>
 
-          <!-- 4. 同期 (Sync: Scraps & Git) -->
+          <!-- 4. 同期 (Scraps) -->
           <div id="pane-sync" class="settings-pane hidden">
-            <!-- Git Diagnostic Alert Banner -->
-            <div id="git-installed-banner" style="display: none; padding: 10px 12px; margin-bottom: 14px; border-radius: 6px; font-size: 12px; line-height: 1.5; background: var(--danger-banner-bg); border: 1px solid var(--danger-banner-border); color: var(--text-danger-hint);">
-              <div style="font-weight: 600; display: flex; align-items: center; gap: 6px;">
-                <svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                <span data-i18n="gitNotInstalledTitle">Git is not detected on this system</span>
-              </div>
-              <div style="margin-top: 4px; color: var(--text-main);" data-i18n="gitNotInstalledDesc">
-                Git is required for background synchronization. Please install Git and restart the application.
-              </div>
-              <div style="margin-top: 6px;">
-                <a href="https://git-scm.com/downloads" target="_blank" class="link-external" style="color: var(--accent-hover); text-decoration: underline;" data-i18n="gitDownloadLink">Download Git for Windows / macOS ↗</a>
-              </div>
-            </div>
-
             <div class="settings-section-header" data-basic>
               <h4 data-i18n="sectionScrapFolder">Daily scraps folder</h4>
             </div>
             <div class="form-group">
               <label for="cfg-scrap-dir" data-i18n="scrapDirLabel">Daily Scraps Folder Path:</label>
               <div style="display: flex; gap: 8px;">
-                <input type="text" id="cfg-scrap-dir" placeholder="~/Documents/syki-sok/scraps" style="flex: 1; background: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); padding: 7px 10px; border-radius: 4px; font-size: 13px;">
+                <input type="text" id="cfg-scrap-dir" placeholder="~/Documents/syki-lite/scraps" style="flex: 1; background: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); padding: 7px 10px; border-radius: 4px; font-size: 13px;">
                 <button id="btn-browse-scrap-dir" type="button" class="btn-secondary" data-i18n="btnBrowse">Browse...</button>
               </div>
               <small data-i18n="scrapDirHint">Folder where piped logs (cat file | syki) and daily notes are saved.</small>
-            </div>
-            <div class="settings-section-header" style="margin-top: 18px;">
-              <h4 data-i18n="sectionGitHub">GitHub sync</h4>
-            </div>
-            <div class="form-group inline-group">
-              <label>
-                <input type="checkbox" id="cfg-git-sync-enabled" checked> <span data-i18n="gitSyncEnabledLabel">Enable background Git sync (Pull on startup, auto-commit & push)</span>
-              </label>
-              <small data-i18n="gitSyncEnabledHint" style="display: block; margin-top: 4px; color: var(--text-muted);">Uncheck to turn off all automatic GitHub pull, commit, and push operations.</small>
-            </div>
-            <div class="form-row" style="display: flex; gap: 12px; margin-top: 10px;">
-              <div class="form-group" style="flex: 1;">
-                <label for="cfg-git-debounce" data-i18n="gitDebounceLabel">Auto-sync debounce (seconds):</label>
-                <input type="number" id="cfg-git-debounce" min="5" max="3600" value="30" style="background: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); padding: 6px 10px; border-radius: 4px; font-size: 13px; width: 100%;">
-              </div>
-              <div class="form-group" style="flex: 1;">
-                <label for="cfg-git-remote-branch" data-i18n="gitRemoteBranchLabel">Remote Branch:</label>
-                <input type="text" id="cfg-git-remote-branch" value="main" style="background: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); padding: 6px 10px; border-radius: 4px; font-size: 13px; width: 100%;">
-              </div>
-            </div>
-
-            <div class="form-group" style="margin-top: 14px;">
-              <label for="cfg-git-remote-url" data-i18n="gitRemoteUrlLabel">Git Remote URL (GitHub / GitLab):</label>
-              <div style="display: flex; gap: 8px;">
-                <input type="text" id="cfg-git-remote-url" placeholder="https://github.com/username/scraps.git or git@github.com:username/scraps.git" style="flex: 1; background: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); padding: 7px 10px; border-radius: 4px; font-size: 13px;">
-                <button id="btn-git-test-remote" type="button" class="btn-secondary" data-i18n="btnGitTest" style="padding: 7px 12px; white-space: nowrap;">Test Connection</button>
-                <button id="btn-git-setup-remote" type="button" class="btn-primary" data-i18n="btnGitSetup" style="padding: 7px 14px; white-space: nowrap;">Link / Init</button>
-              </div>
-              <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 6px;">
-                <small id="git-test-result-hint" data-i18n="gitRemoteUrlHint">Specify your GitHub repository URL to automatically initialize and sync scraps.</small>
-                <span id="git-repo-status-badge" data-i18n="statusChecking" style="font-size: 11px; padding: 2px 6px; border-radius: 3px; background: var(--veil-08); color: var(--text-muted);">Checking...</span>
-              </div>
-            </div>
-
-            <!-- Mobile Bridge (Cloudflare) -->
-            <div class="settings-section-header" style="margin-top: 18px;">
-              <h4 data-i18n="sectionCFBridge">Mobile Quick Capture (Cloudflare)</h4>
-            </div>
-            <div class="form-group inline-group">
-              <label>
-                <input type="checkbox" id="cfg-cf-enabled"> <span data-i18n="cfBridgeEnabledLabel">Sync mobile notes via Cloudflare Worker relay</span>
-              </label>
-              <small data-i18n="cfBridgeEnabledHint">Captures memos and photos instantly from smartphone PWA. Stored ephemerally on Cloudflare D1 and wiped immediately once fetched by this PC.</small>
-            </div>
-            <div class="form-group">
-              <label for="cfg-cf-endpoint" data-i18n="cfBridgeEndpointLabel">Worker Endpoint URL:</label>
-              <input type="text" id="cfg-cf-endpoint" placeholder="https://syki-mobile.yourname.workers.dev">
-              <small data-i18n="cfBridgeEndpointHint">e.g. https://syki-mobile.yourname.workers.dev</small>
-            </div>
-            <div class="form-group">
-              <label for="cfg-cf-token" data-i18n="cfBridgeTokenLabel">Bearer Token:</label>
-              <input type="password" id="cfg-cf-token" placeholder="Bearer secret token">
-              <small data-i18n="cfBridgeTokenHint">API Token configured in wrangler.toml or Worker environment secret.</small>
-            </div>
-            <div class="form-row" style="display: flex; gap: 12px; align-items: flex-end; margin-top: 10px;">
-              <div class="form-group" style="flex: 1;">
-                <label for="cfg-cf-poll-interval" data-i18n="cfBridgePollIntervalLabel">Check interval (seconds):</label>
-                <input type="number" id="cfg-cf-poll-interval" min="10" max="600" value="30" style="background: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); padding: 6px 10px; border-radius: 4px; font-size: 13px; width: 100%;">
-              </div>
-              <button id="btn-cf-test" type="button" class="btn-secondary" data-i18n="btnCFBridgeTest" style="padding: 7px 12px; white-space: nowrap;">Test Connection</button>
-              <button id="btn-cf-qr" type="button" class="btn-secondary" data-i18n="btnCFBridgeQR" style="padding: 7px 12px; white-space: nowrap;">Pairing QR</button>
-            </div>
-            <small id="cf-test-result-hint" style="display: block; margin-top: 6px; color: var(--text-muted);"></small>
-
-            <!-- Inbox (Hot Folder) -->
-            <div class="settings-section-header" style="margin-top: 18px;">
-              <h4 data-i18n="sectionInbox">Hot folder</h4>
-            </div>
-            <div class="form-group inline-group">
-              <label>
-                <input type="checkbox" id="cfg-inbox-enabled"> <span data-i18n="inboxEnabledLabel">Watch a folder: images are OCR'd, audio is transcribed, both appended to today's scrap</span>
-              </label>
-              <small data-i18n="inboxEnabledHint">Processed files are moved into an "assets" folder next to your scraps, never deleted - even if OCR/transcription fails. Checked once at startup for files already waiting, then live.</small>
-            </div>
-            <div class="form-group">
-              <label for="cfg-inbox-dir" data-i18n="inboxDirLabel">Watched Folder Path:</label>
-              <div style="display: flex; gap: 8px;">
-                <input type="text" id="cfg-inbox-dir" placeholder="~/Documents/syki-sok/inbox" style="flex: 1; background: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); padding: 7px 10px; border-radius: 4px; font-size: 13px;">
-                <button id="btn-browse-inbox-dir" type="button" class="btn-secondary" data-i18n="btnBrowse">Browse...</button>
-              </div>
-            </div>
-            <div class="form-group inline-group">
-              <label>
-                <input type="checkbox" id="cfg-ocr-on-device"> <span data-i18n="ocrOnDeviceLabel">Keep images on this PC: read them with the on-device OCR only (less accurate)</span>
-              </label>
-              <small data-i18n="ocrOnDeviceHint">Off (default): images are read by the image model set under Image OCR (Gemini etc.), which is far more accurate; the on-device OCR is used only when that fails. Applies to the hot folder, the Send To shortcut and the ocr command.</small>
             </div>
           </div>
 
@@ -2127,30 +1848,11 @@
           </div>
         </div>
 
-        <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
-          <div style="display: flex; gap: 8px;">
-            <button id="btn-export-settings" type="button" class="btn-secondary" data-i18n="btnExportSettings">Export...</button>
-            <button id="btn-import-settings" type="button" class="btn-secondary" data-i18n="btnImportSettings">Import...</button>
-          </div>
+        <div class="modal-footer" style="display: flex; justify-content: flex-end; align-items: center;">
           <div style="display: flex; gap: 8px;">
             <button id="btn-save-settings" class="btn-primary" data-i18n="btnSave">Save</button>
             <button id="btn-cancel-settings" class="btn-secondary" data-i18n="btnCancel">Cancel</button>
           </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Settings package (export / import) dialog: built by js/config_pack.js when opened; sits after the Settings modal so it stacks above it -->
-    <div id="pack-modal" class="modal-backdrop hidden">
-      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="pack-title">
-        <div class="modal-header">
-          <h3 id="pack-title"></h3>
-          <button id="pack-close" type="button" class="btn-icon">✕</button>
-        </div>
-        <div id="pack-body" class="modal-body"></div>
-        <div class="modal-footer">
-          <button id="pack-confirm" type="button" class="btn-primary"></button>
-          <button id="pack-cancel" type="button" class="btn-secondary"></button>
         </div>
       </div>
     </div>
@@ -2220,69 +1922,6 @@
       </div>
     </div>
 
-    <!-- Mobile Drop QR Sync Modal (Ctrl+Shift+U / Cmd+Shift+U) -->
-    <div id="mobile-drop-modal" class="modal-backdrop hidden">
-      <div class="modal-card modal-small">
-        <div class="modal-header">
-          <h3 data-i18n="mobileDropTitle">Mobile Drop</h3>
-          <button id="modal-mobile-drop-close" class="btn-icon">✕</button>
-        </div>
-        <div class="modal-body">
-          <div id="mobile-drop-loading" class="mobile-drop-state">
-            <div class="mobile-drop-spinner"></div>
-            <p data-i18n="mobileDropStarting">Starting...</p>
-          </div>
-          <div id="mobile-drop-content" class="hidden">
-            <img id="mobile-drop-qr" class="mobile-drop-qr" alt="QR code">
-            <p class="mobile-drop-url" id="mobile-drop-url"></p>
-            <p class="mobile-drop-hint" id="mobile-drop-hint" data-i18n="mobileDropHint">Scan with your phone's camera on the same Wi-Fi/LAN.</p>
-            <p class="mobile-drop-shared-preview hidden" id="mobile-drop-shared-preview"></p>
-            <p class="mobile-drop-countdown">
-              <span data-i18n="mobileDropExpiresIn">Expires in</span>
-              <span id="mobile-drop-countdown">60</span><span data-i18n="mobileDropSecondsUnit">s</span>
-            </p>
-            <button id="btn-mobile-drop-tunnel" class="btn-secondary mobile-drop-tunnel-btn" type="button" data-i18n-title="mobileDropTunnelTitle">
-              <svg class="mobile-drop-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-              <span data-i18n="mobileDropTunnelSwitch">Switch to external network (mobile data / other Wi-Fi)</span>
-            </button>
-            <p id="mobile-drop-tunnel-status" class="hidden mobile-drop-tunnel-status"></p>
-            <div id="mobile-drop-install" class="hidden mobile-drop-install">
-              <code id="mobile-drop-install-cmd" class="mobile-drop-install-cmd"></code>
-              <button id="btn-mobile-drop-install-copy" class="btn-secondary mobile-drop-install-copy" type="button">
-                <svg class="mobile-drop-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                <span id="mobile-drop-install-copy-label" data-i18n="mobileDropCopy">Copy</span>
-              </button>
-            </div>
-          </div>
-          <div id="mobile-drop-error" class="hidden mobile-drop-error"></div>
-        </div>
-        <div class="modal-footer">
-          <button id="btn-mobile-drop-cancel" class="btn-secondary" data-i18n="btnCancel">Cancel</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Mobile Quick Capture (Cloudflare) Pairing QR Modal -->
-    <div id="cf-bridge-qr-modal" class="modal-backdrop hidden">
-      <div class="modal-card modal-small">
-        <div class="modal-header">
-          <h3 data-i18n="cfBridgeQRTitle">Mobile Quick Capture Pairing</h3>
-          <button id="modal-cf-bridge-qr-close" class="btn-icon">✕</button>
-        </div>
-        <div class="modal-body" style="text-align: center; padding: 18px 20px;">
-          <img id="cf-bridge-qr-img" style="width: 220px; height: 220px; border-radius: 12px; margin: 0 auto; display: block; background: var(--canvas-bg); padding: 10px; box-sizing: border-box;" alt="Pairing QR">
-          <p id="cf-bridge-qr-url" style="font-family: ui-monospace, monospace; font-size: 11px; color: var(--text-muted); word-break: break-all; margin-top: 12px; user-select: text;"></p>
-          <small data-i18n="cfBridgeQRHint" style="display: block; margin-top: 8px; color: var(--text-muted);">Scan with your smartphone camera to open the PWA with your token prefilled.</small>
-        </div>
-        <div class="modal-footer" style="justify-content: flex-end;">
-          <button id="btn-cf-bridge-qr-close" class="btn-secondary" data-i18n="dialogClose">Close</button>
-        </div>
-      </div>
-    </div>
-        </div>
-      </div>
-    </div>
-
     <!-- Quick Pick Command & Search Palette (Ctrl+Shift+P / Ctrl+P) -->
     <div id="quick-pick-modal" class="modal-backdrop hidden">
       <div class="quick-pick-modal">
@@ -2294,45 +1933,17 @@
       </div>
     </div>
 
-    <!-- Tags (palette: Add a tag to this entry / to the whole note / Remove a tag; frontend/js/tag_edit.js, loaded on the first use): a box and
-         the tags to pick from. Hidden markup: nothing is built until a command opens it (docs/design/tag-filter-2026-10.md section 10.6). -->
-    <div id="tag-pick-modal" class="modal-backdrop hidden">
-      <div id="tag-pick-card" class="quick-pick-modal tag-pick-card">
-        <div class="quick-pick-input-wrap">
-          <div class="inline-prompt-badge" data-i18n="badgeTag">Tag</div>
-          <input type="text" id="tag-pick-input" class="quick-pick-input" role="combobox" aria-autocomplete="list" aria-controls="tag-pick-list" aria-expanded="true" autocomplete="off" spellcheck="false" placeholder="Type a tag (Esc to close)" data-i18n-placeholder="tagEditPlaceholderAdd">
-        </div>
-        <div class="inline-prompt-meta tag-pick-meta">
-          <span id="tag-pick-context" class="inline-prompt-chip" aria-live="polite"></span>
-        </div>
-        <div id="tag-pick-where" class="tag-pick-where hidden" role="radiogroup"></div>
-        <div id="tag-pick-list" class="quick-pick-list tag-pick-list hidden" role="listbox"></div>
-        <div id="tag-pick-hint" class="tag-pick-hint"></div>
-      </div>
-    </div>
-
     <!-- Scraps In-Memory Grep Search Modal (Ctrl+Shift+F) -->
     <div id="scraps-search-modal" class="modal-backdrop hidden">
       <div class="quick-pick-modal scraps-search-dialog">
         <div class="quick-pick-input-wrap">
           <div class="inline-prompt-badge" data-i18n="badgeSearch">Search</div>
-          <!-- "Exact | Meaning" and the Deep search button: shown only when Settings > Semantic search is on (app.js wires them the first time) -->
+          <!-- "Exact | Meaning": shown only when Settings > Semantic search is on (app.js wires them the first time) -->
           <div id="scraps-search-mode" class="scraps-mode hidden" role="group" aria-label="Kind of search">
             <button type="button" id="scraps-mode-exact" class="scraps-mode-btn active" aria-pressed="true" data-i18n="scrapsModeExact" data-i18n-title="scrapsModeExactTitle" title="Find the words you typed">Exact</button>
             <button type="button" id="scraps-mode-meaning" class="scraps-mode-btn" aria-pressed="false" data-i18n="scrapsModeMeaning" data-i18n-title="scrapsModeMeaningTitle" title="Find notes close in meaning, even when they use other words">Meaning</button>
           </div>
           <input type="text" id="scraps-search-input" class="quick-pick-input" placeholder="Search daily scraps in milliseconds... (Ctrl+Shift+F, Esc to close)" data-i18n-placeholder="scrapsSearchPlaceholder" spellcheck="false">
-          <select id="scraps-deep-model" class="scraps-deep-model hidden" aria-label="Deep search model" title="Model for deep search"></select>
-          <div id="scraps-deep-length" class="scraps-mode scraps-deep-length hidden" role="group" aria-label="Answer length">
-            <button type="button" class="scraps-mode-btn" data-length="short" aria-pressed="false" data-i18n="deepSearchLenShort">Short</button>
-            <button type="button" class="scraps-mode-btn active" data-length="standard" aria-pressed="true" data-i18n="deepSearchLenStandard">Standard</button>
-            <button type="button" class="scraps-mode-btn" data-length="long" aria-pressed="false" data-i18n="deepSearchLenLong">Long</button>
-          </div>
-          <label id="scraps-deep-skip-wrap" class="scraps-deep-skip-wrap hidden" title="Skip confirmation dialog when destination is already approved">
-            <input type="checkbox" id="chk-deep-skip-confirm">
-            <span data-i18n="deepSearchSkipConfirm">Skip confirm</span>
-          </label>
-          <button type="button" id="btn-scraps-deep" class="scraps-deep-btn hidden" data-i18n="deepSearchButton">Deep search</button>
         </div>
         <!-- Filter (a period and tags that narrow every search): shown when the backend can list the tags; the area is built and the tags are asked
              for when it is first opened (frontend/js/scraps_filter.js; docs/design/tag-filter-2026-10.md section 5). Its buttons stay out of the Tab order. -->
@@ -2354,84 +1965,6 @@
           <div class="scraps-search-empty" data-i18n="scrapsSearchEmpty">Type keyword to search daily scraps...</div>
         </div>
         <div id="scraps-search-hint" class="scraps-search-hint" data-i18n="scrapsSearchHint">Enter: open the note &middot; Tab: insert the line at the cursor &middot; Esc: close</div>
-      </div>
-    </div>
-
-    <!-- Deep search: what will be sent, and to whom, before anything leaves (app.js showDeepSearchDialog; docs/design/deep-search-2026-10.md section 4) -->
-    <div id="deep-search-modal" class="modal-backdrop hidden">
-      <div class="modal-card deep-search-card">
-        <div class="modal-header">
-          <h3 id="deep-search-title" data-i18n="deepSearchTitle">Deep search</h3>
-          <button id="deep-search-close" type="button" class="btn-icon" data-i18n-title="dialogClose" title="Close">✕</button>
-        </div>
-        <div class="modal-body deep-search-body">
-          <p id="deep-search-query" class="deep-search-query"></p>
-          <p id="deep-search-summary" class="deep-search-summary"></p>
-          <details id="deep-search-sources" class="deep-search-sources">
-            <summary id="deep-search-sources-summary"></summary>
-            <ol id="deep-search-source-list" class="deep-search-source-list"></ol>
-          </details>
-          <div id="deep-search-facts" class="deep-search-facts"></div>
-          <div id="deep-search-consent" class="deep-search-consent hidden" role="alert"></div>
-        </div>
-        <div class="modal-footer">
-          <button id="deep-search-cancel" type="button" class="btn-secondary" data-i18n="btnCancel">Cancel</button>
-          <button id="deep-search-run" type="button" class="btn-primary" data-i18n="deepSearchRun">Run</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Lessons (lessons.js, loaded on the first press of a task card's Lessons button or of the palette command "Open the lessons file"): what would
-         be sent and to whom, the proposed rules to edit and save, and the small picker of the lessons files. Hidden markup: nothing is built
-         until it opens (docs/design/lessons-2026-10.md section 7). -->
-    <div id="lesson-modal" class="modal-backdrop hidden">
-      <div id="lesson-card" class="quick-pick-modal lesson-card" role="dialog" aria-modal="true">
-        <div class="quick-pick-input-wrap lesson-head">
-          <div id="lesson-title" class="inline-prompt-badge" data-i18n="badgeLessons">Lessons</div>
-          <span id="lesson-agent" class="inline-prompt-chip lesson-agent hidden"></span>
-          <button id="lesson-close" type="button" class="btn-icon lesson-close" data-i18n-title="dialogClose" title="Close">✕</button>
-        </div>
-        <div id="lesson-meta" class="inline-prompt-meta lesson-meta">
-          <span id="lesson-context" class="lesson-context"></span>
-        </div>
-        <div id="lesson-body" class="lesson-body">
-          <div id="lesson-working" class="lesson-working hidden" role="status">
-            <span class="cli-spinner cli-spinner-sm"></span><span id="lesson-working-text"></span>
-          </div>
-          <div id="lesson-banner" class="lesson-banner hidden" role="alert" data-kind="warn"></div>
-          <div id="lesson-prepare" class="lesson-section hidden">
-            <p id="lesson-sent" class="lesson-line"></p>
-            <p id="lesson-sent-note" class="lesson-line hidden"></p>
-            <p id="lesson-masked" class="lesson-line lesson-muted hidden"></p>
-            <p id="lesson-dest" class="lesson-dest" data-kind="local"></p>
-            <label id="lesson-consent-row" class="lesson-check hidden">
-              <input type="checkbox" id="lesson-consent">
-              <span id="lesson-consent-text"></span>
-            </label>
-            <p id="lesson-existing" class="lesson-line lesson-muted hidden"></p>
-          </div>
-          <div id="lesson-none" class="lesson-section hidden">
-            <p id="lesson-none-text" class="lesson-line"></p>
-            <p id="lesson-none-hint" class="lesson-line lesson-muted"></p>
-          </div>
-          <div id="lesson-note-row" class="lesson-section hidden">
-            <label id="lesson-note-label" for="lesson-note" class="lesson-label"></label>
-            <textarea id="lesson-note" class="lesson-note" rows="2" maxlength="500" spellcheck="false"></textarea>
-          </div>
-          <div id="lesson-result" class="lesson-section hidden">
-            <p id="lesson-result-intro" class="lesson-line lesson-muted"></p>
-            <div id="lesson-rules" class="lesson-rules"></div>
-          </div>
-          <div id="lesson-pick" class="lesson-pick hidden">
-            <div id="lesson-pick-list" class="quick-pick-list lesson-pick-list" role="listbox" tabindex="0"></div>
-          </div>
-        </div>
-        <div id="lesson-footer" class="lesson-footer">
-          <!-- (their words and state are set by lessons.js for the phase of the dialog) -->
-          <button id="lesson-secondary" type="button" class="btn-secondary">Cancel</button>
-          <button id="lesson-primary" type="button" class="btn-primary hidden">Create a proposal</button>
-        </div>
-        <div id="lesson-hint" class="tag-pick-hint"></div>
       </div>
     </div>
 
@@ -2512,18 +2045,13 @@
   <script src="js/task_manager.js?v=1.0.5"></script>
   <script src="js/html_comments.js?v=1.0.1"></script>
   <script src="js/comment_toggle.js?v=1.0.1"></script>
-  <script src="js/auto_selector.js?v=1.0.1"></script>
-  <script src="js/slot_snippets.js?v=1.0.1"></script>
-  <script src="js/agent_risk.js?v=1.0.1"></script>
   <script src="js/bulk_insert.js?v=1.0.1"></script>
   <script src="js/disk_sync.js?v=1.0.1"></script>
   <script src="js/ghost_diff.js?v=1.0.1"></script>
-  <script src="js/slot_agent.js?v=2.4.1"></script>
   <script src="js/llm_error.js?v=1.0.1"></script>
   <script src="js/go_text.js?v=1.0.1"></script>
   <script src="js/panel_fade.js?v=1.0.1"></script>
   <script src="js/chrome_overlay.js?v=1.0.1"></script>
-  <script src="js/jev_action.js?v=1.3.0"></script>
   <script src="js/chrome_layout.js?v=1.0.1"></script>
   <script src="js/tab_strip.js?v=1.0.1"></script>
   <script src="js/tab_overflow.js?v=1.0.1"></script>
@@ -2543,12 +2071,10 @@
   <script src="js/preview_images.js?v=1.0.1"></script>
   <script src="js/appearance.js?v=1.0.1"></script>
   <script src="js/mermaid_tone.js?v=1.0.1"></script>
-  <script src="js/mermaid_repair.js?v=1.0.1"></script>
   <script src="js/scrap_quote.js?v=1.0.1"></script>
   <script src="js/scraps_filter.js?v=1.0.1"></script>
   <script src="js/note_title.js?v=1.0.1"></script>
   <script src="js/result_blocks.js?v=1.0.1"></script>
-  <script src="js/config_pack.js?v=1.0.1"></script>
   <script src="js/secret_strip.js?v=1.0.1"></script>
   <script src="js/builtin_ai.js?v=1.0.1"></script>
   <script src="js/note_hash.js?v=1.0.1"></script>

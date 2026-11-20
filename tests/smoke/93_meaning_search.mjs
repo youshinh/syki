@@ -38,7 +38,9 @@ export default {
     assert.deepEqual(await asked(s, 'searchScrapsSemantic'), [['API', 10]], 'the first ask is for 10 notes');
 
     t.step('typing a word is ONE request (after the pause), not one per letter');
+    const beforeBamboo = await semanticCalls();
     await typeQuery(s, 'bamboo');
+    await s.waitFor(`window.__docshot.calls.filter(function (c) { return c.fn === 'searchScrapsSemantic'; }).length >= ${beforeBamboo + 1}`);
     await waitMeaningList(s);
     assert.deepEqual((await asked(s, 'searchScrapsSemantic')).map((a) => a[0]), ['API', 'bamboo']);
 
@@ -107,7 +109,9 @@ export default {
 
     t.step('counts come as numbers and are worded in the UI language: files not indexed yet, notes left out by the cut-off (no command-line flags on screen)');
     await semanticKnobs(s, { semantic: true, notes: [], pending: 3, leftOut: 2 });
+    const beforeCounts = await semanticCalls();
     await typeQuery(s, 'bamboo stalks');
+    await s.waitFor(`window.__docshot.calls.filter(function (c) { return c.fn === 'searchScrapsSemantic'; }).length === ${beforeCounts + 1}`);
     await waitMeaningList(s);
     assert.deepEqual(await noteLines(), [await phrase(s, 'scrapsSearchPending', { n: '3' }), await phrase(s, 'scrapsSearchLeftOut', { n: '2' })]);
     assert.ok(!/--|syki scrap/.test(await s.ev("document.getElementById('scraps-search-results').innerText")), 'no command-line jargon in the panel');
