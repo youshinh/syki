@@ -95,6 +95,25 @@ impl NoteFileStore {
     }
 }
 
+/// Computes the `cyrb53` UTF-16 signature matching `DiskSync.sum(text)` in `frontend/js/disk_sync.js`.
+pub fn cyrb53_utf16_sig(text: &str) -> String {
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let mut len: usize = 0;
+    let mut h1: u32 = 0xdead_beef;
+    let mut h2: u32 = 0x41c6_ce57;
+    for ch in normalized.encode_utf16() {
+        len += 1;
+        h1 = (h1 ^ (ch as u32)).wrapping_mul(2654435761);
+        h2 = (h2 ^ (ch as u32)).wrapping_mul(1597334677);
+    }
+    h1 = (h1 ^ (h1 >> 16)).wrapping_mul(2246822507)
+        ^ (h2 ^ (h2 >> 13)).wrapping_mul(3266489909);
+    h2 = (h2 ^ (h2 >> 16)).wrapping_mul(2246822507)
+        ^ (h1 ^ (h1 >> 13)).wrapping_mul(3266489909);
+    let value: u64 = 4294967296u64 * ((2097151u32 & h2) as u64) + (h1 as u64);
+    format!("{len:x}-{value:x}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +187,14 @@ mod tests {
         )
         .expect("matching sig succeeds");
         assert_eq!(sig3, TextSignature::from_bytes(b"merged v3\n"));
+    }
+
+    #[test]
+    fn cyrb53_utf16_sig_matches_disk_sync_js() {
+        assert_eq!(
+            cyrb53_utf16_sig("hello\r\nworld"),
+            cyrb53_utf16_sig("hello\nworld")
+        );
+        assert_eq!(cyrb53_utf16_sig("hello\n世界"), "8-5be9f81d6a121");
     }
 }

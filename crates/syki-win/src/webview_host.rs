@@ -5,13 +5,14 @@
 //! `/api/print/preview.pdf` through an optional `DynamicRouteHandler`.
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 
-use syki_core::rpc::{RpcRequest, RpcResponse};
+use syki_core::rpc::{RpcEvent, RpcRequest, RpcResponse};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2Controller,
+    CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2, ICoreWebView2Controller,
     ICoreWebView2EnvironmentOptions, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
 };
 use webview2_com::{
@@ -28,10 +29,14 @@ use windows::Win32::UI::HiDpi::{SetProcessDpiAwareness, PROCESS_PER_MONITOR_DPI_
 use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW,
-    GetWindowLongPtrW, PostQuitMessage, RegisterClassW, SetWindowLongPtrW, ShowWindow,
-    TranslateMessage, CW_USEDEFAULT, GWLP_USERDATA, MSG, SW_SHOW, WINDOW_EX_STYLE, WM_CLOSE,
-    WM_DESTROY, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    GetWindowLongPtrW, PostMessageW, PostQuitMessage, RegisterClassW, SetWindowLongPtrW,
+    ShowWindow, TranslateMessage, CW_USEDEFAULT, GWLP_USERDATA, MSG, SW_SHOW, WINDOW_EX_STYLE,
+    WM_APP, WM_CLOSE, WM_DESTROY, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
+
+use crate::rpc_dispatch::EventSender;
+
+const WM_APP_PUSH_EVENT: u32 = WM_APP + 1;
 
 pub const VIRTUAL_ORIGIN: &str = "https://app.syki.local/";
 
@@ -100,6 +105,8 @@ pub fn resolve_virtual_request(
 
 struct WindowState {
     controller: Rc<RefCell<Option<ICoreWebView2Controller>>>,
+    webview: Rc<RefCell<Option<ICoreWebView2>>>,
+    event_queue: Arc<Mutex<VecDeque<String>>>,
 }
 
 fn client_rect_of(hwnd: HWND) -> RECT {
@@ -138,7 +145,32 @@ extern "system" fn host_wnd_proc(
             }
             LRESULT(0)
         }
+        WM_APP_PUSH_EVENT => {
+            let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const WindowState;
+            if !ptr.is_null() {
+                let state = unsafe { &*ptr };
+                if let Some(wv) = state.webview.borrow().as_ref() {
+                    let drained: Vec<String> = {
+                        let mut q = state.event_queue.lock().expect("event_queue mutex");
+                        q.drain(..).collect()
+                    };
+                    for json in drained {
+                        let w = CoTaskMemPWSTR::from(json.as_str());
+                        let _ = unsafe { wv.PostWebMessageAsJson(*w.as_ref().as_pcwstr()) };
+                    }
+                }
+            }
+            LRESULT(0)
+        }
         WM_CLOSE => {
+            let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const WindowState;
+            if !ptr.is_null() {
+                let state = unsafe { &*ptr };
+                if let Some(wv) = state.webview.borrow().as_ref() {
+                    let flush_w = CoTaskMemPWSTR::from(r#"{"topic":"host:flushSession","payload":{}}"#);
+                    let _ = unsafe { wv.PostWebMessageAsJson(*flush_w.as_ref().as_pcwstr()) };
+                }
+            }
             unsafe {
                 let _ = DestroyWindow(hwnd);
             }
@@ -164,6 +196,17 @@ pub fn run_webview_host(
     config: WebViewHostConfig,
     rpc_handler: Arc<dyn Fn(&RpcRequest) -> RpcResponse + Send + Sync>,
     dynamic_handler: Option<Arc<DynamicRouteHandler>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_webview_host_with_events(config, rpc_handler, dynamic_handler, None)
+}
+
+/// Launches the single Win32 frame + WebView2 controller loop with an [`EventSender`] callback
+/// for pushing host-to-JS [`RpcEvent`] notifications onto the UI STA thread.
+pub fn run_webview_host_with_events(
+    config: WebViewHostConfig,
+    rpc_handler: Arc<dyn Fn(&RpcRequest) -> RpcResponse + Send + Sync>,
+    dynamic_handler: Option<Arc<DynamicRouteHandler>>,
+    on_ready: Option<Box<dyn FnOnce(EventSender)>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
         CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
@@ -205,8 +248,12 @@ pub fn run_webview_host(
     };
 
     let controller_slot: Rc<RefCell<Option<ICoreWebView2Controller>>> = Rc::new(RefCell::new(None));
+    let webview_slot: Rc<RefCell<Option<ICoreWebView2>>> = Rc::new(RefCell::new(None));
+    let event_queue: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
     let boxed_state = Box::new(WindowState {
         controller: Rc::clone(&controller_slot),
+        webview: Rc::clone(&webview_slot),
+        event_queue: Arc::clone(&event_queue),
     });
     unsafe {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(boxed_state) as isize);
@@ -263,6 +310,25 @@ pub fn run_webview_host(
     *controller_slot.borrow_mut() = Some(controller.clone());
 
     let webview = unsafe { controller.CoreWebView2()? };
+    *webview_slot.borrow_mut() = Some(webview.clone());
+    if let Some(cb) = on_ready {
+        let hwnd_raw = hwnd.0 as isize;
+        let q_for_sender = Arc::clone(&event_queue);
+        let sender: EventSender = Arc::new(move |ev: RpcEvent| {
+            if let Ok(json) = serde_json::to_string(&ev) {
+                q_for_sender.lock().expect("event_queue mutex").push_back(json);
+                unsafe {
+                    let _ = PostMessageW(
+                        Some(HWND(hwnd_raw as *mut _)),
+                        WM_APP_PUSH_EVENT,
+                        WPARAM(0),
+                        LPARAM(0),
+                    );
+                }
+            }
+        });
+        cb(sender);
+    }
     if !config.debug {
         unsafe {
             let settings = webview.Settings()?;

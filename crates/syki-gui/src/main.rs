@@ -3,12 +3,12 @@
 //! Single-window GUI launcher for syki-lite (`syki.exe`).
 
 use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use syki_core::rpc::RuntimeEnv;
-use syki_win::webview_host::{
-    default_tracer_handler, run_webview_host, WebViewHostConfig, VIRTUAL_ORIGIN,
-};
+use syki_win::rpc_dispatch::CoreState;
+use syki_win::webview_host::{run_webview_host_with_events, WebViewHostConfig, VIRTUAL_ORIGIN};
 
 fn main() {
     let env = RuntimeEnv::from_env();
@@ -21,6 +21,11 @@ fn main() {
         std::process::exit(1);
     }
 
+    let startup_file = std::env::args().nth(1).map(PathBuf::from);
+    let core = Arc::new(CoreState::new(env, startup_file));
+    let core_for_rpc = Arc::clone(&core);
+    let core_for_events = Arc::clone(&core);
+
     let config = WebViewHostConfig {
         virtual_origin: VIRTUAL_ORIGIN,
         user_data_dir,
@@ -28,7 +33,14 @@ fn main() {
         debug: cfg!(debug_assertions),
     };
 
-    if let Err(err) = run_webview_host(config, Arc::new(default_tracer_handler), None) {
+    if let Err(err) = run_webview_host_with_events(
+        config,
+        Arc::new(move |req| core_for_rpc.dispatch(req)),
+        None,
+        Some(Box::new(move |sender| {
+            core_for_events.set_event_sender(sender);
+        })),
+    ) {
         eprintln!("syki-gui fatal error: {err}");
         std::process::exit(1);
     }
