@@ -6,6 +6,7 @@
 //! user-data folder). It intentionally has no UI or OS-binding code.
 
 pub mod rpc;
+pub mod storage;
 
 /// Version reported by the CLI, the GUI banner and the `info` RPC.
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
