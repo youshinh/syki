@@ -1,0 +1,301 @@
+// syki::sok index tabs, the Dock's magnification (docs/design/v2-plan-P3.md; css/style.css, .dock-live).
+//
+// While the mouse is over an index strip, every tab comes out to a resting width (BASE_W: the names can be read) and the tab under the pointer
+// comes out the furthest, to the full open width; its neighbours follow on a bell curve, so a wave of tabs rises under the pointer and follows
+// it up and down the strip, and it is a little taller too. When the mouse leaves, the strip eases back to its thin edge. Nothing is shaded.
+//
+// Cost model: this file is loaded the first time the mouse reaches a strip, never at start-up. Nothing runs while the mouse is elsewhere.
+// While it is over a strip:
+//  * the rows' positions are read once when the pointer arrives (and again only when the column scrolls, the window is resized or the number
+//    of tabs changes), never inside a frame: a read after the previous frame's writes would force a second layout every frame;
+//  * a frame writes only the values of the rows that moved (a row far from the pointer holds still and costs nothing);
+//  * the loop sleeps as soon as everything has settled (a pointer that rests costs no frames) and a pointer move wakes it;
+//  * the easing is by elapsed time, so it runs the same at 60 and 120 Hz and does not stutter when a frame is late;
+//  * when everything has gone back to the thin edge every inline value is removed, so the plain CSS state is back.
+//
+// The pure functions at the top touch no DOM and are tested by Node (tests/tab_dock_test.mjs).
+(function (global) {
+  'use strict';
+
+  const BASE_W = 90;       // the width every tab has while the mouse is over the strip (px)
+  const SIGMA = 62;        // the bell's width in px of distance from the pointer: about two tabs on each side
+  const TAU_ROW = 60;      // ms: the time a tab takes to cover about two thirds of the way to its target
+  const TAU_ALL = 95;      // ms: the same for the strip as a whole coming out / going back (about a quarter of a second to arrive)
+  const MAX_DT = 50;       // ms: a frame later than this counts as this (a stalled page must not jump)
+  const TEXT_FROM = 50;    // the width at which a name starts to show, and
+  const TEXT_SPAN = 40;    // the width span over which it fades in
+  const EXTRA_H = 12;      // how much taller the tab under the pointer gets (px)
+
+  // The share (0..1) of the full magnification a row whose centre is `centre` gets with the pointer at `y`.
+  function bell(centre, y, sigma) {
+    const d = (centre - y) / (sigma || SIGMA);
+    return Math.exp(-d * d);
+  }
+
+  // The width of a row: `hit` while collapsed (hover 0, m 0), `base` with the mouse over the strip (hover 1, m 0), `full` under the pointer (m 1).
+  function rowWidth(hit, base, full, hover, m) {
+    const b = Math.min(base, full);
+    return hit + (b - hit) * hover + (full - b) * m;
+  }
+
+  // How much of its name a row of width w shows (0..1).
+  function textShare(w) {
+    return Math.max(0, Math.min(1, (w - TEXT_FROM) / TEXT_SPAN));
+  }
+
+  // The strength the person set (Settings), kept where the dock still looks right: below MIN_STRENGTH the wave is too small to see, and the
+  // widest tab cannot pass the strip's own width, so there is no strength above 100.
+  const MIN_STRENGTH = 20;
+  function strengthOf(v) {
+    const n = Number(v);
+    if (!isFinite(n)) return 100;
+    return Math.max(MIN_STRENGTH, Math.min(100, Math.round(n)));
+  }
+
+  // How much of a row the base colour covers: none while the row is a thin edge, all of it a few pixels further out.
+  function fillShare(w, hit) {
+    return Math.max(0, Math.min(1, (w - hit) / 20));
+  }
+
+  // Where the pointer is in the rows' unmagnified layout. The rows below a taller one are pushed down, so the row that is on screen under
+  // the pointer is not the row whose unmagnified centre is at the pointer's height: left alone, the widest tab would stand about a row below the
+  // pointer. `centres` are the unmagnified centres, `extras` the height each row has added; a row's centre on screen is its own centre plus the
+  // heights added above it plus half its own. The pointer's height is mapped through those, so the widest tab is the one under it.
+  function toUnmagnified(centres, extras, y) {
+    const n = centres.length;
+    if (n === 0) return y;
+    let above = 0;
+    let prevShown = 0;
+    let prevBase = 0;
+    for (let i = 0; i < n; i++) {
+      const shown = centres[i] + above + extras[i] / 2;
+      if (y <= shown) {
+        if (i === 0) return centres[0] + (y - shown);
+        const span = shown - prevShown;
+        return span > 0 ? prevBase + (centres[i] - prevBase) * ((y - prevShown) / span) : centres[i];
+      }
+      prevShown = shown;
+      prevBase = centres[i];
+      above += extras[i];
+    }
+    return prevBase + (y - prevShown);
+  }
+
+  // The share of the way to its target a value moves in `dt` ms with time constant `tau` ms (1 when there is no easing).
+  function easeShare(dt, tau) {
+    if (!(tau > 0)) return 1;
+    return 1 - Math.exp(-Math.min(Math.max(dt, 0), MAX_DT) / tau);
+  }
+
+  // Time constants for retracting (`!hover`): scaled from the configured animation duration so 250ms matches TAU_ALL / TAU_ROW.
+  const DEFAULT_HIDE_DURATION = 250;
+  function hideTaus(durationMs) {
+    const d = Number(durationMs);
+    if (!isFinite(d)) return { all: TAU_ALL, row: TAU_ROW };
+    if (d <= 0) return { all: 0, row: 0 };
+    const all = d / 2.6;
+    return { all, row: all * (TAU_ROW / TAU_ALL) };
+  }
+
+  // ---- DOM ----------------------------------------------------------------------------------------------------------------------
+
+  // opts: { strips: [{ el, listEl, footEl?, scrollEl? }], hitWidth (px, or a function giving it), fullWidth(): px, strength?(): 20..100 (the share of the full magnification,
+  // default 100), instant?(): true when the system asks for less motion: the tabs then take their size at once instead of easing to it,
+  // hideDelay?(): ms to wait after the pointer leaves before collapsing (default 0) }.
+  // Returns { destroy, enter }.
+  function create(opts) {
+    const win = global;
+    const states = opts.strips.map((s) => ({
+      s, hover: false, h: 0, y: 0, m: new WeakMap(), written: new WeakMap(), styled: new Set(), live: false,
+      centres: null, count: -1, prevTs: 0, hideTimer: 0
+    }));
+    // The thin width (Settings can change it) and the open width, read when a pointer arrives: a style read inside a frame would flush the style every frame.
+    let hit = 0;
+    let openW = 0;
+    const readSizes = () => {
+      hit = typeof opts.hitWidth === 'function' ? opts.hitWidth() : opts.hitWidth;
+      openW = opts.fullWidth();
+    };
+    let raf = 0;
+
+    function rowsOf(st) {
+      const rows = Array.prototype.slice.call(st.s.listEl.children);
+      if (st.s.footEl) rows.push(st.s.footEl);
+      return rows;
+    }
+
+    function clear(st) {
+      st.styled.forEach((r) => {
+        r.style.removeProperty('--rw');
+        r.style.removeProperty('--st');
+        r.style.removeProperty('--bgs');
+        r.style.removeProperty('--rx');
+      });
+      st.styled.clear();
+      st.written = new WeakMap();
+      st.centres = null;
+      st.prevTs = 0;
+      st.h = 0;
+      if (st.live) { st.s.el.classList.remove('dock-live'); st.live = false; }
+    }
+
+    // The centre of every row as it would stand without magnification (a taller row pushes the ones below it down, and a pointer that is held
+    // still must not see them move under it), in the window's coordinates: the one read of positions, and it takes the height the rows have
+    // added so far out of what it reads.
+    function measure(st, rows, extraH) {
+      let above = 0;
+      return rows.map((r) => {
+        const b = r.getBoundingClientRect();
+        const extra = extraH * (st.m.get(r) || 0);
+        const c = b.top + b.height / 2 - above - extra / 2;
+        above += extra;
+        return c;
+      });
+    }
+
+    function put(r, st, name, text) {
+      let w = st.written.get(r);
+      if (!w) { w = {}; st.written.set(r, w); }
+      if (w[name] === text) return;
+      w[name] = text;
+      r.style.setProperty(name, text);
+    }
+
+    function frame(ts) {
+      raf = 0;
+      let anyBusy = false;
+      const k = strengthOf(opts.strength ? opts.strength() : 100) / 100;
+      const instant = !!(opts.instant && opts.instant());
+      const open = Math.max(hit, openW);
+      const full = Math.min(open, BASE_W) + (open - Math.min(open, BASE_W)) * k; // how far the tab under the pointer comes out
+      const extraH = EXTRA_H * k;
+      states.forEach((st) => {
+        if (!st.live) return;
+        let stBusy = false;
+        const dt = st.prevTs ? ts - st.prevTs : 16.7;
+        st.prevTs = ts;
+        let tauAll = TAU_ALL;
+        let tauRow = TAU_ROW;
+        if (!st.hover && opts.hideDuration) {
+          const taus = hideTaus(opts.hideDuration());
+          tauAll = taus.all;
+          tauRow = taus.row;
+        }
+        const easeAll = instant ? 1 : easeShare(dt, tauAll);
+        const easeRow = instant ? 1 : easeShare(dt, tauRow);
+        const rows = rowsOf(st);
+        if (!st.centres || st.count !== rows.length) { st.centres = measure(st, rows, extraH); st.count = rows.length; }
+        const hTarget = st.hover ? 1 : 0;
+        const pointer = st.hover
+          ? toUnmagnified(st.centres, rows.map((r) => extraH * (st.m.get(r) || 0)), st.y)
+          : 0;
+        st.h += (hTarget - st.h) * easeAll;
+        if (Math.abs(hTarget - st.h) < 0.002) st.h = hTarget; else stBusy = true;
+        rows.forEach((r, i) => {
+          const target = st.hover ? bell(st.centres[i], pointer) : 0;
+          let m = st.m.get(r) || 0;
+          if (m === target && st.h === hTarget && st.written.has(r)) return; // this row has settled: nothing to compute or write
+          m += (target - m) * easeRow;
+          if (Math.abs(target - m) < 0.002) m = target; else stBusy = true;
+          st.m.set(r, m);
+          const w = rowWidth(hit, BASE_W, full, st.h, m);
+          put(r, st, '--rw', w.toFixed(1) + 'px');
+          put(r, st, '--st', textShare(w).toFixed(2));
+          put(r, st, '--bgs', fillShare(w, hit).toFixed(2));
+          put(r, st, '--rx', (extraH * m).toFixed(1) + 'px');
+          st.styled.add(r);
+        });
+        if (!st.hover && st.h === 0 && !stBusy) clear(st);
+        if (stBusy) anyBusy = true;
+      });
+      if (anyBusy) raf = win.requestAnimationFrame(frame);
+    }
+
+    function kick() { if (!raf) raf = win.requestAnimationFrame(frame); }
+
+    function cancelHide(st) {
+      if (st.hideTimer) { win.clearTimeout(st.hideTimer); st.hideTimer = 0; }
+    }
+
+    function scheduleHide(st) {
+      if (!st.hover) return;
+      const raw = opts.hideDelay ? Number(opts.hideDelay()) : 0;
+      const delay = isFinite(raw) && raw > 0 ? raw : 0;
+      if (delay <= 0) {
+        cancelHide(st);
+        st.hover = false;
+        kick();
+        return;
+      }
+      if (st.hideTimer) return;
+      st.hideTimer = win.setTimeout(() => {
+        st.hideTimer = 0;
+        st.hover = false;
+        kick();
+      }, delay);
+    }
+
+    function begin(st, e) {
+      cancelHide(st);
+      st.hover = true;
+      st.y = e.clientY;
+      // The loop sleeps when everything has settled. The first frame after it wakes is a normal frame, not one that covers the whole time asleep:
+      // that would be capped at MAX_DT and move the tabs more than twice as far as a frame should, a lurch every time the pointer starts again.
+      if (!raf) st.prevTs = 0;
+      if (!st.live) { readSizes(); st.s.el.classList.add('dock-live'); st.live = true; st.centres = null; }
+      kick();
+    }
+
+    const listeners = [];
+    function on(el, type, fn, o) { el.addEventListener(type, fn, o); listeners.push([el, type, fn, o]); }
+    states.forEach((st) => {
+      on(st.s.el, 'pointerenter', (e) => { if (e.pointerType !== 'touch') begin(st, e); });
+      on(st.s.el, 'pointermove', (e) => { if (e.pointerType !== 'touch') begin(st, e); });
+      on(st.s.el, 'pointerleave', () => { scheduleHide(st); });
+      // The column scrolling (the wheel) moves every row: measure again at the next frame.
+      const scroller = st.s.scrollEl || st.s.listEl.parentNode;
+      if (scroller) on(scroller, 'scroll', () => { st.centres = null; kick(); }, { passive: true });
+    });
+
+    // Window-level safety net: if a pointer moves outside the strip without triggering pointerleave
+    // (e.g. fast swipe across the screen edge or window boundary), collapse cleanly.
+    on(win, 'pointermove', (e) => {
+      if (e.pointerType === 'touch') return;
+      states.forEach((st) => {
+        if (!st.hover || !st.live) return;
+        const rect = st.s.el.getBoundingClientRect();
+        const pad = 8;
+        if (e.clientX < rect.left - pad || e.clientX > rect.right + pad ||
+            e.clientY < rect.top - pad || e.clientY > rect.bottom + pad) {
+          scheduleHide(st);
+        }
+      });
+    }, { passive: true });
+
+    on(win, 'blur', () => {
+      states.forEach((st) => { if (st.hover) { st.hover = false; kick(); } });
+    });
+    if (win.document) {
+      on(win.document, 'mouseleave', () => {
+        states.forEach((st) => { if (st.hover) { st.hover = false; kick(); } });
+      });
+    }
+
+    on(win, 'resize', () => { states.forEach((st) => { st.centres = null; }); });
+
+    return {
+      // the pointer event that reached a strip before this file was loaded
+      enter(el, e) { const st = states.find((x) => x.s.el === el); if (st) begin(st, e); },
+      destroy() {
+        listeners.forEach(([el, type, fn, o]) => el.removeEventListener(type, fn, o));
+        if (raf) win.cancelAnimationFrame(raf);
+        raf = 0;
+        states.forEach((st) => { cancelHide(st); clear(st); });
+      }
+    };
+  }
+
+  const api = { BASE_W, SIGMA, EXTRA_H, MIN_STRENGTH, TAU_ALL, TAU_ROW, DEFAULT_HIDE_DURATION, strengthOf, toUnmagnified, bell, rowWidth, textShare, fillShare, easeShare, hideTaus, create };
+  global.TabDock = api;
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+})(typeof window !== 'undefined' ? window : globalThis);
