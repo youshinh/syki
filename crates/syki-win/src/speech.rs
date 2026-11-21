@@ -726,6 +726,71 @@ pub fn save_audio_to_cache(data_dir: &Path, audio_b64: &str, mime_type: &str) ->
     Ok(path)
 }
 
+fn parse_speech_json_output(raw: &str) -> String {
+    if let Ok(val) = serde_json::from_str::<Value>(raw.trim()) {
+        if let Some(t) = val.get("text").and_then(|v| v.as_str()) {
+            let trimmed = t.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        if let Some(regions) = val.get("regions").and_then(|v| v.as_array()) {
+            let joined: Vec<&str> = regions
+                .iter()
+                .filter_map(|r| r.get("text").and_then(|v| v.as_str()))
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !joined.is_empty() {
+                return joined.join("\n");
+            }
+        }
+    }
+    raw.trim().to_string()
+}
+
+fn ensure_wav_input_if_needed(audio_path: &Path) -> (PathBuf, Option<PathBuf>) {
+    let is_wav = std::fs::File::open(audio_path)
+        .ok()
+        .and_then(|mut f| {
+            use std::io::Read;
+            let mut hdr = [0u8; 12];
+            f.read_exact(&mut hdr).ok()?;
+            Some(&hdr[0..4] == b"RIFF" && &hdr[8..12] == b"WAVE")
+        })
+        .unwrap_or(false);
+    if is_wav {
+        return (audio_path.to_path_buf(), None);
+    }
+    let tmp_wav = audio_path.with_extension("tmp16k.wav");
+    let ok = Command::new("ffmpeg")
+        .args([
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            &audio_path.to_string_lossy(),
+            "-vn",
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-c:a",
+            "pcm_s16le",
+            &tmp_wav.to_string_lossy(),
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if ok && tmp_wav.is_file() {
+        (tmp_wav.clone(), Some(tmp_wav))
+    } else {
+        let _ = std::fs::remove_file(&tmp_wav);
+        (audio_path.to_path_buf(), None)
+    }
+}
+
 pub fn transcribe_local_with_config(
     data_dir: &Path,
     audio_path: &Path,
@@ -750,42 +815,80 @@ pub fn transcribe_local_with_config(
     if !engine.is_file() || !model_path.is_file() {
         return Err("local speech engine/model not installed".to_string());
     }
+
+    let (input_path, cleanup_wav) = ensure_wav_input_if_needed(audio_path);
     let lang = cfg
         .pointer("/whisper/language")
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty() && *s != "auto")
         .unwrap_or("ja");
+    let threads = cfg
+        .pointer("/whisper/threads")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
     let mut cmd = Command::new(&engine);
+    cmd.current_dir(&dir);
     if use_speech {
-        cmd.args([
-            "-m",
-            &model_path.to_string_lossy(),
-            "-f",
-            &audio_path.to_string_lossy(),
-            "-l",
-            lang,
-        ]);
+        cmd.arg("asr").arg(&model_path);
+        let vad = dir.join("silero-vad-309K-v6.2-F32.gguf");
+        if vad.is_file() {
+            cmd.arg("--vad").arg(&vad);
+        }
+        if cfg.pointer("/whisper/diarize").and_then(|v| v.as_bool()).unwrap_or(false) {
+            let dz = dir.join("Nemotron-3-Diarization-99M-Q8_0.gguf");
+            if dz.is_file() {
+                cmd.arg("--diarize").arg(&dz);
+            }
+        }
+        if cfg.pointer("/whisper/enhance").and_then(|v| v.as_bool()).unwrap_or(false) {
+            let en = dir.join("NVIDIA-NemotronLabs-RE-USE-10M-F32.gguf");
+            if en.is_file() {
+                cmd.arg("--enhance").arg(&en);
+            }
+        }
+        if cfg.pointer("/whisper/timestamps").and_then(|v| v.as_bool()).unwrap_or(false) {
+            cmd.arg("--timestamps");
+        }
+        cmd.args(["--device", "cpu", "--format", "json"]);
+        if threads > 0 {
+            cmd.arg("--threads").arg(threads.to_string());
+        }
+        cmd.arg(&input_path);
     } else {
         cmd.args([
             "-m",
             &model_path.to_string_lossy(),
             "-f",
-            &audio_path.to_string_lossy(),
+            &input_path.to_string_lossy(),
             "-l",
             lang,
             "--no-timestamps",
         ]);
+        if threads > 0 {
+            cmd.arg("-t").arg(threads.to_string());
+        }
     }
+
     let out = cmd
         .creation_flags(CREATE_NO_WINDOW)
         .output()
-        .map_err(|e| format!("local speech spawn failed: {e}"))?;
+        .map_err(|e| format!("local speech spawn failed: {e}"));
+    if let Some(tmp) = cleanup_wav {
+        let _ = std::fs::remove_file(tmp);
+    }
+    let out = out?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         return Err(format!("local speech failed: {stderr}"));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    if use_speech {
+        Ok(parse_speech_json_output(&stdout))
+    } else {
+        Ok(stdout.trim().to_string())
+    }
 }
 
 pub fn transcribe_wav_file(data_dir: &Path, audio_path: &Path, language: &str) -> Result<String, String> {
