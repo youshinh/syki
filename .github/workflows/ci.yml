@@ -47,14 +47,42 @@ jobs:
         run: cargo build --release --workspace
 
       - name: Smoke Tests
-        run: node tests/smoke/run.mjs
+        shell: pwsh
+        run: |
+          node tests/smoke/run.mjs --jobs 1 --json-out smoke-result.json --shots smoke-shots
+          $ec = $LASTEXITCODE
+          if ($ec -ne 0 -and (Test-Path smoke-result.json)) {
+            $res = Get-Content smoke-result.json -Raw | ConvertFrom-Json
+            foreach ($f in ($res.flows | Where-Object { $_.status -eq 'fail' })) {
+              $msg = ($f.message -replace "`r?`n", " ").Trim()
+              Write-Host "::error title=Smoke Fail ($($f.id))::$($f.step) - $msg"
+            }
+          }
+          exit $ec
+
+      - name: Upload Smoke Failure Artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-failures-${{ github.sha }}
+          path: |
+            smoke-result.json
+            smoke-shots/
+          if-no-files-found: ignore
 
       - name: Deploy Perf & Memory Benchmark
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         shell: pwsh
         run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File tools/perf/native_load_bench.ps1 -OutJson perf-latest.json
-          node tools/perf/record_perf_history.mjs --in perf-latest.json --jsonl docs/perf-history.jsonl --md docs/PERF_HISTORY.md --summary "$env:GITHUB_STEP_SUMMARY"
+          try {
+            powershell -NoProfile -ExecutionPolicy Bypass -File tools/perf/native_load_bench.ps1 -OutJson perf-latest.json
+            if ($LASTEXITCODE -ne 0) { throw "native_load_bench.ps1 exited with $LASTEXITCODE" }
+            node tools/perf/record_perf_history.mjs --in perf-latest.json --jsonl docs/perf-history.jsonl --md docs/PERF_HISTORY.md --summary "$env:GITHUB_STEP_SUMMARY"
+            if ($LASTEXITCODE -ne 0) { throw "record_perf_history.mjs exited with $LASTEXITCODE" }
+          } catch {
+            Write-Host "::error title=Perf Bench Fail::$($_.Exception.Message)"
+            exit 1
+          }
 
       - name: Upload Perf Artifacts
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
