@@ -23,7 +23,7 @@ use windows::Win32::System::Threading::{
     CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess,
     InitializeProcThreadAttributeList, TerminateProcess, UpdateProcThreadAttribute,
     WaitForSingleObject, EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
-    PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+    PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, STARTF_USESTDHANDLES,
     STARTUPINFOEXW,
 };
 
@@ -62,6 +62,19 @@ impl PtyManager {
         label: &str,
         sender: Option<EventSender>,
     ) -> Result<Value, String> {
+        self.start_session_with_size(explicit_id, preset, dir, label, 100, 30, sender)
+    }
+
+    pub fn start_session_with_size(
+        &self,
+        explicit_id: &str,
+        preset: &str,
+        dir: &str,
+        label: &str,
+        cols: u16,
+        rows: u16,
+        sender: Option<EventSender>,
+    ) -> Result<Value, String> {
         let id = if explicit_id.trim().is_empty() {
             let n = self.seq.fetch_add(1, Ordering::Relaxed) + 1;
             format!("pty-{n}")
@@ -87,7 +100,10 @@ impl PtyManager {
             }
         }
 
-        let size = COORD { X: 100, Y: 30 };
+        let size = COORD {
+            X: cols.max(10) as i16,
+            Y: rows.max(4) as i16,
+        };
         let hpcon: HPCON = match unsafe { CreatePseudoConsole(size, in_read, out_write, 0) } {
             Ok(h) => h,
             Err(e) => {
@@ -130,6 +146,7 @@ impl PtyManager {
 
         let mut si = STARTUPINFOEXW::default();
         si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+        si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
         si.lpAttributeList = attr_list;
 
         let mut cmd_utf16: Vec<u16> = cmd_line.encode_utf16().chain(std::iter::once(0)).collect();
@@ -256,6 +273,10 @@ impl PtyManager {
     }
 
     pub fn write(&self, id: &str, data: &str) -> Result<(), String> {
+        self.write_bytes(id, data.as_bytes())
+    }
+
+    pub fn write_bytes(&self, id: &str, data: &[u8]) -> Result<(), String> {
         let session = self
             .sessions
             .lock()
@@ -264,7 +285,7 @@ impl PtyManager {
             .cloned()
             .ok_or_else(|| format!("unknown pty session: {id}"))?;
         let mut w = session.writer.lock().expect("pty writer mutex");
-        w.write_all(data.as_bytes())
+        w.write_all(data)
             .and_then(|_| w.flush())
             .map_err(|e| format!("ptyWrite failed: {e}"))
     }

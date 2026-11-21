@@ -14583,8 +14583,12 @@ OUTPUT FORMAT:
   // startup config-load paths — NOT from openSettings() — so it can never
   // clobber a checkbox the user just toggled on in an still-open dialog.
   function applyImeGuardianCapabilityDefault() {
-    if (!hasPersistedImeGuardianSetting && platformCapabilities.nativeImeSwitch === false) {
-      config.general.imeGuardian = false;
+    if (!hasPersistedImeGuardianSetting) {
+      if (platformCapabilities.nativeImeSwitch === false) {
+        config.general.imeGuardian = false;
+      } else if (config.general && config.general.language === 'ja') {
+        config.general.imeGuardian = true;
+      }
     }
     updateImeGuardianCapabilityHint();
   }

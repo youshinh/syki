@@ -693,8 +693,13 @@ impl CoreState {
             "ptyStart" => {
                 let preset = param_str(&req.params, 0, "preset").unwrap_or_else(|| "cmd".into());
                 let dir = param_str(&req.params, 1, "dir").unwrap_or_default();
+                let cols = param_u64(&req.params, 2, "cols").unwrap_or(100) as u16;
+                let rows = param_u64(&req.params, 3, "rows").unwrap_or(30) as u16;
                 let sender = self.event_sender.lock().expect("event_sender mutex").clone();
-                match self.pty_mgr.start_session("", &preset, &dir, "", sender) {
+                match self
+                    .pty_mgr
+                    .start_session_with_size("", &preset, &dir, "", cols, rows, sender)
+                {
                     Ok(info) => RpcResponse::ok(&req.id, json!(info.to_string())),
                     Err(e) => RpcResponse::err(&req.id, e),
                 }
@@ -704,19 +709,32 @@ impl CoreState {
                 let preset = param_str(&req.params, 1, "preset").unwrap_or_else(|| "cmd".into());
                 let dir = param_str(&req.params, 2, "dir").unwrap_or_default();
                 let label = param_str(&req.params, 3, "label").unwrap_or_default();
+                let cols = param_u64(&req.params, 6, "cols").unwrap_or(100) as u16;
+                let rows = param_u64(&req.params, 7, "rows").unwrap_or(30) as u16;
                 let sender = self.event_sender.lock().expect("event_sender mutex").clone();
-                match self
-                    .pty_mgr
-                    .start_session(&explicit_id, &preset, &dir, &label, sender)
-                {
+                match self.pty_mgr.start_session_with_size(
+                    &explicit_id,
+                    &preset,
+                    &dir,
+                    &label,
+                    cols,
+                    rows,
+                    sender,
+                ) {
                     Ok(info) => RpcResponse::ok(&req.id, json!(info.to_string())),
                     Err(e) => RpcResponse::err(&req.id, e),
                 }
             }
             "ptyWrite" => {
+                use base64::engine::general_purpose::STANDARD;
+                use base64::Engine as _;
                 let id = param_str(&req.params, 0, "id").unwrap_or_default();
-                let data = param_str(&req.params, 1, "data").unwrap_or_default();
-                match self.pty_mgr.write(&id, &data) {
+                let data_b64 = param_str(&req.params, 1, "data").unwrap_or_default();
+                let bytes = match STANDARD.decode(data_b64.as_bytes()) {
+                    Ok(b) => b,
+                    Err(_) => data_b64.into_bytes(),
+                };
+                match self.pty_mgr.write_bytes(&id, &bytes) {
                     Ok(()) => RpcResponse::ok(&req.id, json!(true)),
                     Err(e) => RpcResponse::err(&req.id, e),
                 }
@@ -1340,6 +1358,49 @@ mod tests {
             .unwrap()
             .contains("vector search"));
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pty_write_decodes_base64_and_streams_conpty_output() {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine as _;
+
+        let (root, state) = temp_env("pty-b64");
+        let (tx, rx) = std::sync::mpsc::channel::<RpcEvent>();
+        state.set_event_sender(Arc::new(move |ev| {
+            let _ = tx.send(ev);
+        }));
+
+        let started = state.dispatch(&req(
+            "ptyStartWithOptions",
+            json!(["rpc-pty-1", "cmd", ".", "Test", "", false, 80, 24]),
+        ));
+        assert!(started.ok);
+
+        std::thread::sleep(Duration::from_millis(200));
+        let cmd_b64 = STANDARD.encode(b"echo SYKI_B64_OK\r\n");
+        let wrote = state.dispatch(&req("ptyWrite", json!(["rpc-pty-1", cmd_b64])));
+        assert!(wrote.ok);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut combined = String::new();
+        while std::time::Instant::now() < deadline {
+            if let Ok(ev) = rx.recv_timeout(Duration::from_millis(150)) {
+                if ev.topic == "pty:data" {
+                    if let Some(b64) = ev.payload["b64"].as_str() {
+                        if let Ok(bytes) = STANDARD.decode(b64.as_bytes()) {
+                            combined.push_str(&String::from_utf8_lossy(&bytes));
+                            if combined.contains("SYKI_B64_OK") {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(combined.contains("SYKI_B64_OK"), "got: {combined}");
+        assert!(state.dispatch(&req("ptyClose", json!(["rpc-pty-1"]))).ok);
         let _ = std::fs::remove_dir_all(root);
     }
 
