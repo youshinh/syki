@@ -11299,6 +11299,32 @@ OUTPUT FORMAT:
     let targetTab = data.filePath ? findTabByPath(data.filePath) : null;
     if (targetTab) {
       if ((await refreshTabFromDisk(targetTab, data.filePath)) === 'kept') {
+        if (data.ocrReplace && data.ocrReplace.marker && typeof targetTab.content === 'string' && targetTab.content.includes(data.ocrReplace.marker)) {
+          targetTab.content = targetTab.content.replace(data.ocrReplace.marker, data.ocrReplace.replacement || '');
+          if (targetTab.id === activeTabId) {
+            editorEl.value = targetTab.content;
+            updateLineNumbers();
+            if (window.FileAnchor && window.FileAnchor.scheduleMarks) window.FileAnchor.scheduleMarks(editorEl);
+          }
+          saveSessionDebounced();
+          return;
+        }
+        if (data.appendedEntry) {
+          const cur = targetTab.content || '';
+          const sep = cur && !cur.endsWith('\n') ? '\n\n' : (cur ? '\n' : '');
+          targetTab.content = cur + sep + data.appendedEntry;
+          targetTab.isDirty = true;
+          selectTab(targetTab.id);
+          editorEl.value = targetTab.content;
+          updateLineNumbers();
+          if (window.FileAnchor && window.FileAnchor.scheduleMarks) window.FileAnchor.scheduleMarks(editorEl);
+          saveSessionDebounced();
+          setTimeout(() => {
+            editorEl.scrollTop = editorEl.scrollHeight;
+          }, 50);
+          showMessage(t('scrapAppended', { command: data.command || 'CLI Pipe' }), 2500);
+          return;
+        }
         showMessage(t('scrapKeptUnsavedEdits'), 4000);
         return;
       }

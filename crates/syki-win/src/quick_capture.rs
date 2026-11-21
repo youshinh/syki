@@ -15,6 +15,7 @@ use syki_core::storage::note::cyrb53_utf16_sig;
 use syki_core::storage::{ConfigStore, JsonConfigStore, NoteFileStore, ScrapStore};
 use windows::core::{w, HSTRING};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE, DWMWA_USE_IMMERSIVE_DARK_MODE};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateFontW, CreatePen, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint,
     FillRect, GetStockObject, InvalidateRect, RoundRect, SelectObject, SetBkColor, SetBkMode,
@@ -61,15 +62,89 @@ const BN_CLICKED: u32 = 0;
 const ODS_SELECTED: u32 = 0x0001;
 const HTCAPTION: isize = 2;
 
-const COL_BG: u32 = 0x00F5_F9FA;
-const COL_FIELD: u32 = 0x00FF_FFFF;
-const COL_BORDER: u32 = 0x00D7_DFE2;
-const COL_BTN: u32 = 0x00E6_EEF0;
-const COL_BTN_SAVE: u32 = 0x0026_2A2B;
-const COL_BTN_REC: u32 = 0x003C_3CE7;
-const COL_TEXT: u32 = 0x0026_2A2B;
-const COL_TEXT_WHITE: u32 = 0x00FF_FFFF;
-const COL_HINT: u32 = 0x006E_7578;
+#[derive(Debug, Clone, Copy)]
+struct QcTheme {
+    is_dark: bool,
+    bg: u32,
+    field: u32,
+    border: u32,
+    btn: u32,
+    btn_pressed: u32,
+    btn_save: u32,
+    btn_save_pressed: u32,
+    btn_rec: u32,
+    text: u32,
+    text_on_save: u32,
+    hint: u32,
+}
+
+fn parse_hex_bgr(hex: &str) -> Option<u32> {
+    let s = hex.trim().strip_prefix('#')?;
+    if s.len() != 6 {
+        return None;
+    }
+    let r = u32::from_str_radix(&s[0..2], 16).ok()?;
+    let g = u32::from_str_radix(&s[2..4], 16).ok()?;
+    let b = u32::from_str_radix(&s[4..6], 16).ok()?;
+    Some((b << 16) | (g << 8) | r)
+}
+
+fn darken_bgr(bgr: u32, pct: u32) -> u32 {
+    let r = ((bgr & 0xFF) * pct / 100).min(255);
+    let g = (((bgr >> 8) & 0xFF) * pct / 100).min(255);
+    let b = (((bgr >> 16) & 0xFF) * pct / 100).min(255);
+    (b << 16) | (g << 8) | r
+}
+
+fn load_qc_theme(data_dir: &Path) -> QcTheme {
+    let val = std::fs::read_to_string(data_dir.join("config.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
+    let look = val
+        .as_ref()
+        .and_then(|v| v.pointer("/appearance/look"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("ink");
+    let is_dark = look != "paper";
+    let accent = val
+        .as_ref()
+        .and_then(|v| v.pointer("/appearance/accentCustom"))
+        .and_then(|v| v.as_str())
+        .and_then(parse_hex_bgr)
+        .unwrap_or(0x007D_9B88); // #889b7d
+
+    if is_dark {
+        QcTheme {
+            is_dark: true,
+            bg: 0x0019_1A18,
+            field: 0x0021_2320,
+            border: 0x0036_3934,
+            btn: 0x0028_2A26,
+            btn_pressed: 0x0037_3A34,
+            btn_save: accent,
+            btn_save_pressed: darken_bgr(accent, 82),
+            btn_rec: 0x0046_46D9,
+            text: 0x00EB_EEEC,
+            text_on_save: 0x0016_1815,
+            hint: 0x0090_958E,
+        }
+    } else {
+        QcTheme {
+            is_dark: false,
+            bg: 0x00EF_F5F7,
+            field: 0x00FF_FFFF,
+            border: 0x00CE_D8DD,
+            btn: 0x00E0_E9EC,
+            btn_pressed: 0x00D0_DBDF,
+            btn_save: accent,
+            btn_save_pressed: darken_bgr(accent, 82),
+            btn_rec: 0x0046_46D9,
+            text: 0x0025_2623,
+            text_on_save: 0x00FF_FFFF,
+            hint: 0x0078_756E,
+        }
+    }
+}
 
 static POPUP_OPEN: AtomicBool = AtomicBool::new(false);
 static CLASS_REGISTERED: AtomicBool = AtomicBool::new(false);
@@ -91,6 +166,8 @@ struct QuickCaptureContext {
     field_brush: isize,
     font: isize,
     hint_font: isize,
+    icon_font: isize,
+    theme: QcTheme,
     snapshots: Vec<Vec<u8>>,
     mic: Option<MicCaptureState>,
     status_hint: String,
@@ -169,19 +246,32 @@ fn load_vision_ocr_config(data_dir: &Path) -> Option<(crate::llm::LlmConfig, Str
     Some((cfg, prompt))
 }
 
-fn emit_open_scrap(scrap_path: &Path, sender: &EventSender) {
+fn emit_open_scrap(
+    scrap_path: &Path,
+    sender: &EventSender,
+    appended_entry: Option<&str>,
+    ocr_replace: Option<(&str, &str)>,
+) {
     if let Ok(loaded) = NoteFileStore::read_note(scrap_path) {
+        let mut payload = json!({
+            "path": loaded.path.to_string_lossy(),
+            "filePath": loaded.path.to_string_lossy(),
+            "title": loaded.path.file_name().and_then(|n| n.to_str()).unwrap_or("scrap.md"),
+            "fileName": loaded.path.file_name().and_then(|n| n.to_str()).unwrap_or("scrap.md"),
+            "content": loaded.content,
+            "encoding": loaded.encoding_name,
+            "sig": cyrb53_utf16_sig(&loaded.content),
+            "command": "Quick Capture"
+        });
+        if let Some(entry) = appended_entry {
+            payload["appendedEntry"] = json!(entry);
+        }
+        if let Some((marker, replacement)) = ocr_replace {
+            payload["ocrReplace"] = json!({ "marker": marker, "replacement": replacement });
+        }
         sender(RpcEvent {
             topic: "host:openFile".to_string(),
-            payload: json!({
-                "path": loaded.path.to_string_lossy(),
-                "filePath": loaded.path.to_string_lossy(),
-                "title": loaded.path.file_name().and_then(|n| n.to_str()).unwrap_or("scrap.md"),
-                "fileName": loaded.path.file_name().and_then(|n| n.to_str()).unwrap_or("scrap.md"),
-                "content": loaded.content,
-                "encoding": loaded.encoding_name,
-                "sig": cyrb53_utf16_sig(&loaded.content)
-            }),
+            payload,
         });
     }
 }
@@ -242,7 +332,7 @@ pub fn submit_quick_capture_with_snapshots(
         .map_err(|e| format!("quick capture append failed: {e}"))?;
 
     if let Some(sender) = event_sender {
-        emit_open_scrap(&scrap_path, sender);
+        emit_open_scrap(&scrap_path, sender, Some(&entry), None);
     }
 
     if let (Some((llm_cfg, prompt)), false) = (vision_cfg, ocr_jobs.is_empty()) {
@@ -263,7 +353,7 @@ pub fn submit_quick_capture_with_snapshots(
                         let updated = content.replacen(&marker, &replacement, 1);
                         if syki_core::storage::atomic::write_atomic_bytes(&target_path, updated.as_bytes()).is_ok() {
                             if let Some(ref tx) = sender_cloned {
-                                emit_open_scrap(&target_path, tx);
+                                emit_open_scrap(&target_path, tx, None, Some((&marker, &replacement)));
                             }
                         }
                     }
@@ -428,48 +518,60 @@ unsafe fn draw_round_button(dis: &DrawItemStruct) {
     let id = dis.ctl_id as usize;
     let pressed = (dis.item_state & ODS_SELECTED) != 0;
 
-    let (label, is_save, is_rec) = if let Ok(guard) = ACTIVE_CTX.lock() {
-        let ctx = guard.as_ref();
-        match id {
-            ID_BTN_SAVE => ("Save".to_string(), true, false),
-            ID_BTN_CANCEL => ("Cancel".to_string(), false, false),
-            ID_BTN_CAPTURE => {
-                let cnt = ctx.map(|c| c.snapshots.len()).unwrap_or(0);
-                let txt = if cnt > 0 {
-                    format!("Capture ({cnt})")
-                } else {
-                    "Capture".to_string()
-                };
-                (txt, false, false)
-            }
-            ID_BTN_MIC => {
-                let rec = ctx.map(|c| c.mic.is_some()).unwrap_or(false);
-                (if rec { "Stop".to_string() } else { "Mic".to_string() }, false, rec)
-            }
-            _ => (String::new(), false, false),
+    let (theme, icon_font, hint_font, snap_cnt, is_rec) = if let Ok(guard) = ACTIVE_CTX.lock() {
+        if let Some(ctx) = guard.as_ref() {
+            (
+                ctx.theme,
+                ctx.icon_font,
+                ctx.hint_font,
+                ctx.snapshots.len(),
+                ctx.mic.is_some(),
+            )
+        } else {
+            return;
         }
     } else {
-        (String::new(), false, false)
+        return;
+    };
+
+    let (glyph, badge, is_save, active_rec) = match id {
+        ID_BTN_SAVE => ("\u{E724}", String::new(), true, false),
+        ID_BTN_CANCEL => ("\u{E711}", String::new(), false, false),
+        ID_BTN_CAPTURE => (
+            "\u{E722}",
+            if snap_cnt > 0 { snap_cnt.to_string() } else { String::new() },
+            false,
+            false,
+        ),
+        ID_BTN_MIC => (if is_rec { "\u{E71A}" } else { "\u{E720}" }, String::new(), false, is_rec),
+        _ => ("", String::new(), false, false),
     };
 
     let fill_col = if is_save {
-        if pressed { 0x00d4_531d } else { COL_BTN_SAVE }
-    } else if is_rec {
-        COL_BTN_REC
+        if pressed { theme.btn_save_pressed } else { theme.btn_save }
+    } else if active_rec {
+        theme.btn_rec
     } else if pressed {
-        0x0044_4444
+        theme.btn_pressed
     } else {
-        COL_BTN
+        theme.btn
     };
     let border_col = if is_save {
-        COL_BTN_SAVE
-    } else if is_rec {
-        COL_BTN_REC
+        theme.btn_save
+    } else if active_rec {
+        theme.btn_rec
     } else {
-        COL_BORDER
+        theme.border
+    };
+    let txt_col = if is_save {
+        theme.text_on_save
+    } else if active_rec {
+        0x00FF_FFFF
+    } else {
+        theme.text
     };
 
-    let bg_brush = CreateSolidBrush(COLORREF(COL_BG));
+    let bg_brush = CreateSolidBrush(COLORREF(theme.bg));
     FillRect(dis.hdc, &dis.rc_item, bg_brush);
     let _ = DeleteObject(HGDIOBJ(bg_brush.0));
 
@@ -483,8 +585,8 @@ unsafe fn draw_round_button(dis: &DrawItemStruct) {
         dis.rc_item.top,
         dis.rc_item.right,
         dis.rc_item.bottom,
-        8,
-        8,
+        10,
+        10,
     );
     SelectObject(dis.hdc, old_b);
     SelectObject(dis.hdc, old_p);
@@ -492,18 +594,25 @@ unsafe fn draw_round_button(dis: &DrawItemStruct) {
     let _ = DeleteObject(HGDIOBJ(pen.0));
 
     SetBkMode(dis.hdc, TRANSPARENT);
-    SetTextColor(
-        dis.hdc,
-        COLORREF(if is_save || is_rec { COL_TEXT_WHITE } else { COL_TEXT }),
-    );
-    let mut text: Vec<u16> = label.encode_utf16().collect();
+    SetTextColor(dis.hdc, COLORREF(txt_col));
+    if icon_font != 0 {
+        SelectObject(dis.hdc, HGDIOBJ(icon_font as *mut _));
+    }
+    let mut wide: Vec<u16> = glyph.encode_utf16().collect();
     let mut rc = dis.rc_item;
-    let _ = DrawTextW(
-        dis.hdc,
-        &mut text,
-        &mut rc,
-        DT_CENTER | DT_VCENTER | DT_SINGLELINE,
-    );
+    if !badge.is_empty() {
+        rc.right -= 12;
+        let _ = DrawTextW(dis.hdc, &mut wide, &mut rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        if hint_font != 0 {
+            SelectObject(dis.hdc, HGDIOBJ(hint_font as *mut _));
+        }
+        let mut bwide: Vec<u16> = badge.encode_utf16().collect();
+        let mut brc = dis.rc_item;
+        brc.left = brc.right - 18;
+        let _ = DrawTextW(dis.hdc, &mut bwide, &mut brc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    } else {
+        let _ = DrawTextW(dis.hdc, &mut wide, &mut rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
 }
 
 unsafe fn read_edit_text(edit: HWND) -> String {
@@ -535,16 +644,26 @@ unsafe extern "system" fn quick_capture_wnd_proc(
             let mut rc = RECT::default();
             let _ = GetClientRect(hwnd, &mut rc);
 
-            let bg = CreateSolidBrush(COLORREF(COL_BG));
+            let (theme, hint, hint_font) = if let Ok(guard) = ACTIVE_CTX.lock() {
+                if let Some(ctx) = guard.as_ref() {
+                    (ctx.theme, ctx.status_hint.clone(), ctx.hint_font)
+                } else {
+                    return LRESULT(0);
+                }
+            } else {
+                return LRESULT(0);
+            };
+
+            let bg = CreateSolidBrush(COLORREF(theme.bg));
             FillRect(hdc, &rc, bg);
             let _ = DeleteObject(HGDIOBJ(bg.0));
 
-            let border_pen = CreatePen(PS_SOLID, 1, COLORREF(COL_BORDER));
+            let border_pen = CreatePen(PS_SOLID, 1, COLORREF(theme.border));
             let old_p = SelectObject(hdc, HGDIOBJ(border_pen.0));
             let old_b = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-            let _ = RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 10, 10);
+            let _ = RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 12, 12);
 
-            let field_brush = CreateSolidBrush(COLORREF(COL_FIELD));
+            let field_brush = CreateSolidBrush(COLORREF(theme.field));
             SelectObject(hdc, HGDIOBJ(field_brush.0));
             let _ = RoundRect(hdc, 14, 14, rc.right - 14, rc.bottom - 52, 8, 8);
             SelectObject(hdc, old_b);
@@ -552,38 +671,31 @@ unsafe extern "system" fn quick_capture_wnd_proc(
             let _ = DeleteObject(HGDIOBJ(field_brush.0));
             let _ = DeleteObject(HGDIOBJ(border_pen.0));
 
-            SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, COLORREF(COL_HINT));
-            let hint = if let Ok(guard) = ACTIVE_CTX.lock() {
-                if let Some(ctx) = guard.as_ref() {
-                    if ctx.hint_font != 0 {
-                        SelectObject(hdc, HGDIOBJ(ctx.hint_font as *mut _));
-                    }
-                    ctx.status_hint.clone()
-                } else {
-                    String::new()
+            if !hint.is_empty() {
+                SetBkMode(hdc, TRANSPARENT);
+                SetTextColor(hdc, COLORREF(theme.hint));
+                if hint_font != 0 {
+                    SelectObject(hdc, HGDIOBJ(hint_font as *mut _));
                 }
-            } else {
-                String::new()
-            };
-            let mut hint_rc = RECT {
-                left: 16,
-                top: rc.bottom - 40,
-                right: rc.right - 375,
-                bottom: rc.bottom - 12,
-            };
-            let mut hint_w: Vec<u16> = hint.encode_utf16().collect();
-            let _ = DrawTextW(hdc, &mut hint_w, &mut hint_rc, DT_VCENTER | DT_SINGLELINE);
+                let mut hint_rc = RECT {
+                    left: 16,
+                    top: rc.bottom - 40,
+                    right: rc.right - 220,
+                    bottom: rc.bottom - 12,
+                };
+                let mut hint_w: Vec<u16> = hint.encode_utf16().collect();
+                let _ = DrawTextW(hdc, &mut hint_w, &mut hint_rc, DT_VCENTER | DT_SINGLELINE);
+            }
 
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
         }
         WM_CTLCOLOREDIT => {
             let hdc = windows::Win32::Graphics::Gdi::HDC(w_param.0 as *mut _);
-            SetTextColor(hdc, COLORREF(COL_TEXT));
-            SetBkColor(hdc, COLORREF(COL_FIELD));
             if let Ok(guard) = ACTIVE_CTX.lock() {
                 if let Some(ctx) = guard.as_ref() {
+                    SetTextColor(hdc, COLORREF(ctx.theme.text));
+                    SetBkColor(hdc, COLORREF(ctx.theme.field));
                     return LRESULT(ctx.field_brush);
                 }
             }
@@ -608,7 +720,7 @@ unsafe extern "system" fn quick_capture_wnd_proc(
                         if let Some(ctx) = guard.as_mut() {
                             ctx.snapshots.push(png);
                             ctx.status_hint =
-                                format!("{} snapshot(s) attached", ctx.snapshots.len());
+                                format!("画像 {} 枚", ctx.snapshots.len());
                         }
                     }
                 }
@@ -623,11 +735,11 @@ unsafe extern "system" fn quick_capture_wnd_proc(
                 let stop_job = if let Ok(mut guard) = ACTIVE_CTX.lock() {
                     if let Some(ctx) = guard.as_mut() {
                         if let Some(mic) = ctx.mic.take() {
-                            ctx.status_hint = "Transcribing...".to_string();
+                            ctx.status_hint = "変換中...".to_string();
                             Some((mic, ctx.data_dir.clone(), HWND(ctx.edit_hwnd as *mut _)))
                         } else {
                             ctx.mic = Some(start_mic_capture());
-                            ctx.status_hint = "Recording... click Stop".to_string();
+                            ctx.status_hint = "録音中...".to_string();
                             None
                         }
                     } else {
@@ -650,14 +762,14 @@ unsafe extern "system" fn quick_capture_wnd_proc(
                             let _ = SetWindowTextW(edit, &h);
                             if let Ok(mut guard) = ACTIVE_CTX.lock() {
                                 if let Some(ctx) = guard.as_mut() {
-                                    ctx.status_hint = "Voice transcribed".to_string();
+                                    ctx.status_hint = "音声入力完了".to_string();
                                 }
                             }
                         }
                         Ok(_) => {
                             if let Ok(mut guard) = ACTIVE_CTX.lock() {
                                 if let Some(ctx) = guard.as_mut() {
-                                    ctx.status_hint = "No speech detected".to_string();
+                                    ctx.status_hint = "音声が検出されませんでした".to_string();
                                 }
                             }
                         }
@@ -739,6 +851,9 @@ unsafe extern "system" fn quick_capture_wnd_proc(
                     if ctx.hint_font != 0 {
                         let _ = DeleteObject(HGDIOBJ(ctx.hint_font as *mut _));
                     }
+                    if ctx.icon_font != 0 {
+                        let _ = DeleteObject(HGDIOBJ(ctx.icon_font as *mut _));
+                    }
                 }
             }
             POPUP_OPEN.store(false, Ordering::Release);
@@ -791,7 +906,30 @@ pub fn open_quick_capture_popup(data_dir: PathBuf, event_sender: Option<EventSen
             return;
         };
 
-        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 240, LWA_ALPHA);
+        let theme = load_qc_theme(&data_dir);
+
+        let dark_val: i32 = if theme.is_dark { 1 } else { 0 };
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            &dark_val as *const _ as *const _,
+            std::mem::size_of::<i32>() as u32,
+        );
+        let corner_val: i32 = 2; // DWMWCP_ROUND
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWINDOWATTRIBUTE(33),
+            &corner_val as *const _ as *const _,
+            std::mem::size_of::<i32>() as u32,
+        );
+        let backdrop_val: i32 = 3; // DWMSBT_TRANSIENTWINDOW (Acrylic)
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWINDOWATTRIBUTE(38),
+            &backdrop_val as *const _ as *const _,
+            std::mem::size_of::<i32>() as u32,
+        );
+        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 238, LWA_ALPHA);
 
         let edit_hwnd = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
@@ -819,12 +957,12 @@ pub fn open_quick_capture_popup(data_dir: PathBuf, event_sender: Option<EventSen
         let btn_capture = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("BUTTON"),
-            w!("Capture"),
+            w!(""),
             WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | BS_OWNERDRAW),
-            width - 360,
-            height - 42,
-            96,
-            28,
+            width - 208,
+            height - 43,
+            48,
+            30,
             Some(hwnd),
             Some(HMENU(ID_BTN_CAPTURE as *mut _)),
             None,
@@ -835,12 +973,12 @@ pub fn open_quick_capture_popup(data_dir: PathBuf, event_sender: Option<EventSen
         let btn_mic = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("BUTTON"),
-            w!("Mic"),
+            w!(""),
             WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | BS_OWNERDRAW),
-            width - 256,
-            height - 42,
-            64,
-            28,
+            width - 152,
+            height - 43,
+            36,
+            30,
             Some(hwnd),
             Some(HMENU(ID_BTN_MIC as *mut _)),
             None,
@@ -851,12 +989,12 @@ pub fn open_quick_capture_popup(data_dir: PathBuf, event_sender: Option<EventSen
         let btn_cancel = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("BUTTON"),
-            w!("Cancel"),
+            w!(""),
             WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | BS_OWNERDRAW),
-            width - 184,
-            height - 42,
-            76,
-            28,
+            width - 108,
+            height - 43,
+            36,
+            30,
             Some(hwnd),
             Some(HMENU(ID_BTN_CANCEL as *mut _)),
             None,
@@ -867,12 +1005,12 @@ pub fn open_quick_capture_popup(data_dir: PathBuf, event_sender: Option<EventSen
         let btn_save = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("BUTTON"),
-            w!("Save"),
+            w!(""),
             WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | BS_OWNERDRAW),
-            width - 100,
-            height - 42,
-            86,
-            28,
+            width - 64,
+            height - 43,
+            48,
+            30,
             Some(hwnd),
             Some(HMENU(ID_BTN_SAVE as *mut _)),
             None,
@@ -933,8 +1071,24 @@ pub fn open_quick_capture_popup(data_dir: PathBuf, event_sender: Option<EventSen
         );
         SetWindowLongPtrW(edit_hwnd, GWLP_USERDATA, orig_edit_proc);
 
-        let bg_brush = CreateSolidBrush(COLORREF(COL_BG));
-        let field_brush = CreateSolidBrush(COLORREF(COL_FIELD));
+        let icon_font = CreateFontW(
+            -15,
+            0,
+            0,
+            0,
+            400,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY,
+            (DEFAULT_PITCH.0 | FF_SWISS.0) as u32,
+            w!("Segoe Fluent Icons"),
+        );
+        let bg_brush = CreateSolidBrush(COLORREF(theme.bg));
+        let field_brush = CreateSolidBrush(COLORREF(theme.field));
 
         if let Ok(mut guard) = ACTIVE_CTX.lock() {
             *guard = Some(Box::new(QuickCaptureContext {
@@ -946,9 +1100,11 @@ pub fn open_quick_capture_popup(data_dir: PathBuf, event_sender: Option<EventSen
                 field_brush: field_brush.0 as isize,
                 font: if hfont.is_invalid() { 0 } else { hfont.0 as isize },
                 hint_font: if hint_font.is_invalid() { 0 } else { hint_font.0 as isize },
+                icon_font: if icon_font.is_invalid() { 0 } else { icon_font.0 as isize },
+                theme,
                 snapshots: Vec::new(),
                 mic: None,
-                status_hint: "Ctrl+Enter: Save   Esc: Cancel".to_string(),
+                status_hint: String::new(),
             }));
         }
 
