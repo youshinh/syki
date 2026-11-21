@@ -278,7 +278,7 @@
 
     function callMethod(method, args) {
       if (disposed) return Promise.reject(new Error('backend proxy disposed'));
-      const preload = win && win.__sykiPreload;
+      const preload = targetWindow && targetWindow.__sykiPreload;
       if (preload && args.length === 0) {
         if (method === 'getConfig' && typeof preload.config === 'string') {
           const v = preload.config;
