@@ -6,18 +6,22 @@ use std::sync::Mutex;
 use windows::core::w;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreatePen, DeleteDC,
-    DeleteObject, EndPaint, FillRect, GetDC, GetDIBits, GetStockObject, InvalidateRect, Rectangle,
-    ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBRUSH,
-    NULL_BRUSH, PAINTSTRUCT, PS_SOLID, SRCCOPY,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen,
+    CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect, GetDC, GetDIBits,
+    GetStockObject, InvalidateRect, LineTo, MoveToEx, Rectangle, ReleaseDC, RoundRect,
+    SelectObject, SetBkMode, SetTextColor, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CLEARTYPE_QUALITY,
+    CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS, DT_CENTER, DT_SINGLELINE,
+    DT_VCENTER, FF_SWISS, HBRUSH, HGDIOBJ, NULL_BRUSH, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID,
+    SRCCOPY, TRANSPARENT,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    GetSystemMetrics, PostQuitMessage, RegisterClassW, SetLayeredWindowAttributes, ShowWindow,
-    TranslateMessage, LWA_ALPHA, MSG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-    SM_YVIRTUALSCREEN, SW_SHOW, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
-    WM_RBUTTONUP, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW,
+    GetSystemMetrics, LoadCursorW, PostQuitMessage, RegisterClassW, SetLayeredWindowAttributes,
+    ShowWindow, TranslateMessage, IDC_CROSS, LWA_ALPHA, MSG, SM_CXSCREEN, SM_CXVIRTUALSCREEN,
+    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_SHOW, WM_ERASEBKGND, WM_KEYDOWN,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONUP, WNDCLASSW, WS_EX_LAYERED,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 static OVERLAY_CLASS_REG: AtomicBool = AtomicBool::new(false);
@@ -28,6 +32,10 @@ struct OverlayDragState {
     start_y: i32,
     end_x: i32,
     end_y: i32,
+    cursor_x: i32,
+    cursor_y: i32,
+    has_cursor: bool,
+    accent_bgr: u32,
     confirmed: bool,
     cancelled: bool,
 }
@@ -171,45 +179,176 @@ unsafe extern "system" fn overlay_wnd_proc(
             }
             LRESULT(0)
         }
+        WM_ERASEBKGND => LRESULT(1),
         WM_MOUSEMOVE => {
-            let mut redraw = false;
             if let Ok(mut guard) = OVERLAY_STATE.lock() {
                 if let Some(st) = guard.as_mut() {
+                    st.cursor_x = lx;
+                    st.cursor_y = ly;
+                    st.has_cursor = true;
                     if st.dragging {
                         st.end_x = lx;
                         st.end_y = ly;
-                        redraw = true;
                     }
                 }
             }
-            if redraw {
-                let _ = InvalidateRect(Some(hwnd), None, false);
-            }
+            let _ = InvalidateRect(Some(hwnd), None, false);
             LRESULT(0)
         }
         WM_PAINT => {
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
             let mut rc = RECT::default();
-            let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut rc);
-            let bg_brush = HBRUSH(GetStockObject(windows::Win32::Graphics::Gdi::BLACK_BRUSH).0);
-            let _ = FillRect(hdc, &rc, bg_brush);
+            let _ = GetClientRect(hwnd, &mut rc);
+            let cw = (rc.right - rc.left).max(1);
+            let ch = (rc.bottom - rc.top).max(1);
 
-            let sel = OVERLAY_STATE.lock().ok().and_then(|g| {
-                g.as_ref()
-                    .filter(|st| st.dragging)
-                    .and_then(|st| normalize_selection_rect(st.start_x, st.start_y, st.end_x, st.end_y))
-            });
-            if let Some((rx, ry, rw, rh)) = sel {
-                let pen = CreatePen(PS_SOLID, 3, COLORREF(0x00FF_FFFF));
-                let old_pen = SelectObject(hdc, pen.into());
-                let null_brush = GetStockObject(NULL_BRUSH);
-                let old_brush = SelectObject(hdc, null_brush);
-                let _ = Rectangle(hdc, rx, ry, rx + rw, ry + rh);
-                SelectObject(hdc, old_brush);
-                SelectObject(hdc, old_pen);
-                let _ = DeleteObject(pen.into());
+            let mem_dc = CreateCompatibleDC(Some(hdc));
+            let mem_bmp = CreateCompatibleBitmap(hdc, cw, ch);
+            let old_bmp = SelectObject(mem_dc, HGDIOBJ(mem_bmp.0));
+
+            let bg_brush = CreateSolidBrush(COLORREF(0x0014_1615));
+            let _ = FillRect(mem_dc, &rc, bg_brush);
+            let _ = DeleteObject(HGDIOBJ(bg_brush.0));
+
+            let (dragging, has_cursor, cx, cy, sel, accent_bgr) = OVERLAY_STATE
+                .lock()
+                .ok()
+                .and_then(|g| {
+                    g.as_ref().map(|st| {
+                        (
+                            st.dragging,
+                            st.has_cursor,
+                            st.cursor_x,
+                            st.cursor_y,
+                            if st.dragging {
+                                normalize_selection_rect(st.start_x, st.start_y, st.end_x, st.end_y)
+                            } else {
+                                None
+                            },
+                            st.accent_bgr,
+                        )
+                    })
+                })
+                .unwrap_or((false, false, 0, 0, None, 0x00C2_7400));
+
+            if !dragging && has_cursor {
+                let guide_pen = CreatePen(PS_SOLID, 1, COLORREF(0x0058_5E5A));
+                let old_p = SelectObject(mem_dc, HGDIOBJ(guide_pen.0));
+                let _ = MoveToEx(mem_dc, 0, cy, None);
+                let _ = LineTo(mem_dc, cw, cy);
+                let _ = MoveToEx(mem_dc, cx, 0, None);
+                let _ = LineTo(mem_dc, cx, ch);
+                SelectObject(mem_dc, old_p);
+                let _ = DeleteObject(HGDIOBJ(guide_pen.0));
             }
+
+            let vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+            let vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+            let prim_w = GetSystemMetrics(SM_CXSCREEN).max(640);
+            let pill_w = 430;
+            let pill_h = 36;
+            let pill_x = ((prim_w - pill_w) / 2) - vx;
+            let pill_y = 28 - vy;
+            let pill_brush = CreateSolidBrush(COLORREF(0x001C_1E1D));
+            let pill_pen = CreatePen(PS_SOLID, 1, COLORREF(accent_bgr));
+            let old_b = SelectObject(mem_dc, HGDIOBJ(pill_brush.0));
+            let old_p = SelectObject(mem_dc, HGDIOBJ(pill_pen.0));
+            let _ = RoundRect(mem_dc, pill_x, pill_y, pill_x + pill_w, pill_y + pill_h, 18, 18);
+            SelectObject(mem_dc, old_b);
+            SelectObject(mem_dc, old_p);
+            let _ = DeleteObject(HGDIOBJ(pill_brush.0));
+            let _ = DeleteObject(HGDIOBJ(pill_pen.0));
+
+            let font = CreateFontW(
+                -14,
+                0,
+                0,
+                0,
+                500,
+                0,
+                0,
+                0,
+                DEFAULT_CHARSET,
+                OUT_DEFAULT_PRECIS,
+                CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY,
+                (DEFAULT_PITCH.0 | FF_SWISS.0) as u32,
+                w!("Segoe UI"),
+            );
+            let old_f = if !font.is_invalid() {
+                SelectObject(mem_dc, HGDIOBJ(font.0))
+            } else {
+                HGDIOBJ::default()
+            };
+            SetBkMode(mem_dc, TRANSPARENT);
+            SetTextColor(mem_dc, COLORREF(0x00F2_F4F3));
+            let mut hint_rc = RECT {
+                left: pill_x,
+                top: pill_y,
+                right: pill_x + pill_w,
+                bottom: pill_y + pill_h,
+            };
+            let mut hint_w: Vec<u16> = "ドラッグして範囲を選択   ·   Esc / 右クリックでキャンセル"
+                .encode_utf16()
+                .collect();
+            let _ = DrawTextW(mem_dc, &mut hint_w, &mut hint_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+            if let Some((rx, ry, rw, rh)) = sel {
+                let acc_pen = CreatePen(PS_SOLID, 2, COLORREF(accent_bgr));
+                let old_p = SelectObject(mem_dc, HGDIOBJ(acc_pen.0));
+                let old_b = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                let _ = Rectangle(mem_dc, rx, ry, rx + rw, ry + rh);
+                SelectObject(mem_dc, old_b);
+                SelectObject(mem_dc, old_p);
+                let _ = DeleteObject(HGDIOBJ(acc_pen.0));
+
+                let white_pen = CreatePen(PS_SOLID, 1, COLORREF(0x00FF_FFFF));
+                let old_p = SelectObject(mem_dc, HGDIOBJ(white_pen.0));
+                let old_b = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                let _ = Rectangle(mem_dc, rx + 2, ry + 2, (rx + rw - 2).max(rx + 2), (ry + rh - 2).max(ry + 2));
+                SelectObject(mem_dc, old_b);
+                SelectObject(mem_dc, old_p);
+                let _ = DeleteObject(HGDIOBJ(white_pen.0));
+
+                let corner_pen = CreatePen(PS_SOLID, 2, COLORREF(0x00FF_FFFF));
+                let old_p = SelectObject(mem_dc, HGDIOBJ(corner_pen.0));
+                let cl = 10.min(rw / 2).min(rh / 2);
+                let (x0, y0, x1, y1) = (rx, ry, rx + rw, ry + rh);
+                let _ = MoveToEx(mem_dc, x0, y0 + cl, None); let _ = LineTo(mem_dc, x0, y0); let _ = LineTo(mem_dc, x0 + cl, y0);
+                let _ = MoveToEx(mem_dc, x1 - cl, y0, None); let _ = LineTo(mem_dc, x1, y0); let _ = LineTo(mem_dc, x1, y0 + cl);
+                let _ = MoveToEx(mem_dc, x0, y1 - cl, None); let _ = LineTo(mem_dc, x0, y1); let _ = LineTo(mem_dc, x0 + cl, y1);
+                let _ = MoveToEx(mem_dc, x1 - cl, y1, None); let _ = LineTo(mem_dc, x1, y1); let _ = LineTo(mem_dc, x1, y1 - cl);
+                SelectObject(mem_dc, old_p);
+                let _ = DeleteObject(HGDIOBJ(corner_pen.0));
+
+                let bw = 108;
+                let bh = 24;
+                let bx = (x1 + 8).min(cw - bw - 8).max(8);
+                let by = if y1 + 8 + bh < ch { y1 + 8 } else { (y0 - bh - 8).max(8) };
+                let b_brush = CreateSolidBrush(COLORREF(0x001C_1E1D));
+                let b_pen = CreatePen(PS_SOLID, 1, COLORREF(accent_bgr));
+                let old_b = SelectObject(mem_dc, HGDIOBJ(b_brush.0));
+                let old_p = SelectObject(mem_dc, HGDIOBJ(b_pen.0));
+                let _ = RoundRect(mem_dc, bx, by, bx + bw, by + bh, 10, 10);
+                SelectObject(mem_dc, old_b);
+                SelectObject(mem_dc, old_p);
+                let _ = DeleteObject(HGDIOBJ(b_brush.0));
+                let _ = DeleteObject(HGDIOBJ(b_pen.0));
+
+                let mut dim_rc = RECT { left: bx, top: by, right: bx + bw, bottom: by + bh };
+                let mut dim_w: Vec<u16> = format!("{rw} × {rh}").encode_utf16().collect();
+                let _ = DrawTextW(mem_dc, &mut dim_w, &mut dim_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            }
+
+            if !font.is_invalid() {
+                SelectObject(mem_dc, old_f);
+                let _ = DeleteObject(HGDIOBJ(font.0));
+            }
+            let _ = BitBlt(hdc, 0, 0, cw, ch, Some(mem_dc), 0, 0, SRCCOPY);
+            SelectObject(mem_dc, old_bmp);
+            let _ = DeleteObject(HGDIOBJ(mem_bmp.0));
+            let _ = DeleteDC(mem_dc);
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
         }
@@ -253,10 +392,16 @@ unsafe extern "system" fn overlay_wnd_proc(
 /// Launches a transparent Win32 region-selection overlay across the virtual screen
 /// and captures the selected rectangle as PNG bytes (`Ok(None)` if cancelled).
 pub fn capture_region_interactive() -> Result<Option<Vec<u8>>, String> {
+    capture_region_interactive_with_accent(0x00C2_7400)
+}
+
+/// Launches the screen-region capture overlay tinted with the given Win32 BGR accent color.
+pub fn capture_region_interactive_with_accent(accent_bgr: u32) -> Result<Option<Vec<u8>>, String> {
     unsafe {
         if !OVERLAY_CLASS_REG.swap(true, Ordering::AcqRel) {
             let wc = WNDCLASSW {
                 lpfnWndProc: Some(overlay_wnd_proc),
+                hCursor: LoadCursorW(None, IDC_CROSS).unwrap_or_default(),
                 lpszClassName: w!("SykiImgCapOverlayClass"),
                 ..Default::default()
             };
@@ -274,6 +419,10 @@ pub fn capture_region_interactive() -> Result<Option<Vec<u8>>, String> {
             start_y: 0,
             end_x: 0,
             end_y: 0,
+            cursor_x: 0,
+            cursor_y: 0,
+            has_cursor: false,
+            accent_bgr,
             confirmed: false,
             cancelled: false,
         });
@@ -294,7 +443,7 @@ pub fn capture_region_interactive() -> Result<Option<Vec<u8>>, String> {
         )
         .map_err(|e| format!("overlay CreateWindowExW failed: {e}"))?;
 
-        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 64, LWA_ALPHA);
+        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 115, LWA_ALPHA);
         let _ = ShowWindow(hwnd, SW_SHOW);
 
         let mut msg = MSG::default();

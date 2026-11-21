@@ -106,12 +106,36 @@ fn load_qc_theme(data_dir: &Path) -> QcTheme {
         .and_then(|v| v.as_str())
         .unwrap_or("ink");
     let is_dark = look != "paper";
-    let accent = val
+    let accent_name = val
         .as_ref()
-        .and_then(|v| v.pointer("/appearance/accentCustom"))
-        .and_then(|v| v.as_str())
-        .and_then(parse_hex_bgr)
-        .unwrap_or(0x007D_9B88); // #889b7d
+        .and_then(|v| {
+            v.pointer("/appearance/accent")
+                .and_then(|a| a.as_str())
+                .or_else(|| v.pointer("/general/theme").and_then(|a| a.as_str()))
+        })
+        .unwrap_or("olive");
+    let accent = match accent_name {
+        "blue" => {
+            if is_dark { 0x00C2_7400 } else { 0x00B0_6900 }
+        }
+        "forest" => 0x0056_662E,
+        "charcoal" => {
+            if is_dark { 0x0050_5050 } else { 0x004A_4A4A }
+        }
+        "vermilion" => 0x002C_47B8,
+        "custom" => val
+            .as_ref()
+            .and_then(|v| v.pointer("/appearance/accentCustom"))
+            .and_then(|v| v.as_str())
+            .and_then(parse_hex_bgr)
+            .unwrap_or(0x002F_6B55),
+        _ => 0x002F_6B55, // olive #556b2f
+    };
+    let r = accent & 0xFF;
+    let g = (accent >> 8) & 0xFF;
+    let b = (accent >> 16) & 0xFF;
+    let luma = (299 * r + 587 * g + 114 * b) / 1000;
+    let text_on_save = if luma > 155 { 0x0016_1815 } else { 0x00FF_FFFF };
 
     if is_dark {
         QcTheme {
@@ -125,7 +149,7 @@ fn load_qc_theme(data_dir: &Path) -> QcTheme {
             btn_save_pressed: darken_bgr(accent, 82),
             btn_rec: 0x0046_46D9,
             text: 0x00EB_EEEC,
-            text_on_save: 0x0016_1815,
+            text_on_save,
             hint: 0x0090_958E,
         }
     } else {
@@ -140,7 +164,7 @@ fn load_qc_theme(data_dir: &Path) -> QcTheme {
             btn_save_pressed: darken_bgr(accent, 82),
             btn_rec: 0x0046_46D9,
             text: 0x0025_2623,
-            text_on_save: 0x00FF_FFFF,
+            text_on_save,
             hint: 0x0078_756E,
         }
     }
@@ -713,9 +737,14 @@ unsafe extern "system" fn quick_capture_wnd_proc(
             let cmd_id = w_param.0 & 0xFFFF;
             let notify = (w_param.0 >> 16) as u32;
             if cmd_id == ID_BTN_CAPTURE && (notify == BN_CLICKED || l_param.0 == 0) {
+                let accent_bgr = ACTIVE_CTX
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.as_ref().map(|c| c.theme.btn_save))
+                    .unwrap_or(0x00C2_7400);
                 let _ = ShowWindow(hwnd, SW_HIDE);
                 std::thread::sleep(std::time::Duration::from_millis(80));
-                if let Ok(Some(png)) = imgcap::capture_region_interactive() {
+                if let Ok(Some(png)) = imgcap::capture_region_interactive_with_accent(accent_bgr) {
                     if let Ok(mut guard) = ACTIVE_CTX.lock() {
                         if let Some(ctx) = guard.as_mut() {
                             ctx.snapshots.push(png);
