@@ -7,6 +7,8 @@
 
 pub mod ipc;
 pub mod rpc;
+pub mod search;
+pub mod semindex;
 pub mod storage;
 
 /// Version reported by the CLI, the GUI banner and the `info` RPC.

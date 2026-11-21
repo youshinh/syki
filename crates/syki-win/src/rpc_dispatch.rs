@@ -6,9 +6,14 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 use syki_core::rpc::{RpcEvent, RpcRequest, RpcResponse, RuntimeEnv};
+use syki_core::search::{scrap_filter_options, search_scraps_parallel, ScrapFilter};
+use syki_core::semindex::{
+    build_local_semantic_index, embed_local_hash, semantic_status, MmapVectorIndex,
+};
 use syki_core::storage::note::cyrb53_utf16_sig;
 use syki_core::storage::{
-    ActiveFileWatcher, ConfigStore, JsonConfigStore, LoadedNote, NoteFileStore, SessionStore,
+    ActiveFileWatcher, ConfigStore, JsonConfigStore, LoadedNote, NoteFileStore, ScrapStore,
+    SessionStore,
 };
 
 use crate::{assets_store, clipboard, dialogs, ime, shell_pipe};
@@ -375,6 +380,83 @@ impl CoreState {
                 let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
                 let cancelled = self.shell_pipe.cancel(&req_id);
                 RpcResponse::ok(&req.id, json!(cancelled))
+            }
+
+            "getScrapDir" => {
+                let dir = ScrapStore::resolve_scrap_dir(&self.config_store.scrap_dir());
+                RpcResponse::ok(&req.id, json!(dir.to_string_lossy()))
+            }
+
+            "searchScraps" => {
+                let query = param_str(&req.params, 0, "query").unwrap_or_default();
+                let limit = param_u64(&req.params, 1, "maxResults").unwrap_or(100) as usize;
+                let filter_raw = param_str(&req.params, 2, "filter")
+                    .or_else(|| {
+                        param_value(&req.params, 2, "filter")
+                            .map(|v| v.to_string())
+                    })
+                    .unwrap_or_default();
+                let filter = match ScrapFilter::parse(&filter_raw) {
+                    Ok(f) => f,
+                    Err(e) => return RpcResponse::err(&req.id, e),
+                };
+                let dir = self.config_store.scrap_dir();
+                let results = search_scraps_parallel(&dir, &query, limit, &filter);
+                RpcResponse::ok(&req.id, serde_json::to_value(results).unwrap_or(json!([])))
+            }
+
+            "scrapFilterOptions" => {
+                let dir = self.config_store.scrap_dir();
+                let opts = scrap_filter_options(&dir);
+                RpcResponse::ok(&req.id, serde_json::to_value(opts).unwrap_or(json!({})))
+            }
+
+            "semanticStatus" => {
+                let index_dir = self.env.data_dir.join("semindex");
+                let enabled = param_value(&req.params, 0, "section")
+                    .and_then(|v| v.get("enabled").and_then(|b| b.as_bool()))
+                    .unwrap_or(true);
+                let report = semantic_status(&index_dir, enabled);
+                RpcResponse::ok(&req.id, serde_json::to_value(report).unwrap_or(json!({})))
+            }
+
+            "semanticUpdate" => {
+                let scrap_dir = ScrapStore::resolve_scrap_dir(&self.config_store.scrap_dir());
+                let index_dir = self.env.data_dir.join("semindex");
+                match build_local_semantic_index(&scrap_dir, &index_dir) {
+                    Ok((files, chunks)) => {
+                        if let Some(tx) = self.event_sender.lock().expect("event_sender mutex").as_ref() {
+                            tx(RpcEvent {
+                                topic: "semantic:progress".to_string(),
+                                payload: json!({
+                                    "filesDone": files,
+                                    "filesTotal": files,
+                                    "chunksDone": chunks,
+                                    "chunksTotal": chunks
+                                }),
+                            });
+                        }
+                        let report = semantic_status(&index_dir, true);
+                        RpcResponse::ok(&req.id, serde_json::to_value(report).unwrap_or(json!({})))
+                    }
+                    Err(e) => RpcResponse::err(&req.id, e),
+                }
+            }
+
+            "cancelSemanticUpdate" => RpcResponse::ok(&req.id, json!(true)),
+
+            "searchScrapsSemantic" => {
+                let query = param_str(&req.params, 0, "query").unwrap_or_default();
+                let limit = param_u64(&req.params, 1, "limit").unwrap_or(20) as usize;
+                let index_dir = self.env.data_dir.join("semindex");
+                if let Ok(idx) = MmapVectorIndex::open_mmap(&index_dir) {
+                    let q_vec = embed_local_hash(&query, idx.dim());
+                    let hits = idx.search(&q_vec, limit);
+                    return RpcResponse::ok(&req.id, serde_json::to_value(hits).unwrap_or(json!([])));
+                }
+                let dir = self.config_store.scrap_dir();
+                let fallback = search_scraps_parallel(&dir, &query, limit, &ScrapFilter::default());
+                RpcResponse::ok(&req.id, serde_json::to_value(fallback).unwrap_or(json!([])))
             }
 
             other => RpcResponse::err(&req.id, format!("not_implemented_yet: {other}")),
@@ -771,9 +853,50 @@ mod tests {
         let (root, state) = temp_env("ext");
         let bad = state.dispatch(&req("openExternal", json!(["file:///C:/Windows/win.ini"])));
         assert!(!bad.ok);
-        let unimpl = state.dispatch(&req("searchScraps", json!(["query"])));
+        let unimpl = state.dispatch(&req("ptyStart", json!([])));
         assert!(!unimpl.ok);
         assert!(unimpl.error.unwrap().starts_with("not_implemented_yet:"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn search_scraps_and_semantic_index_dispatch() {
+        let (root, state) = temp_env("search-sem");
+        let scrap_dir = root.join("scraps");
+        std::fs::create_dir_all(&scrap_dir).unwrap();
+        std::fs::write(
+            scrap_dir.join("2026-11-21.md"),
+            "## [09:00] #rust\nSIMD mmap vector search\n",
+        )
+        .unwrap();
+        state
+            .dispatch(&req(
+                "saveConfig",
+                json!([{ "general": { "scrapDir": scrap_dir.to_string_lossy() } }]),
+            ));
+
+        let found = state.dispatch(&req("searchScraps", json!(["mmap", 10, ""])));
+        assert!(found.ok);
+        assert_eq!(found.result.unwrap().as_array().unwrap().len(), 1);
+
+        let opts = state.dispatch(&req("scrapFilterOptions", json!({})));
+        assert!(opts.ok);
+        assert_eq!(opts.result.unwrap()["files"], 1);
+
+        let upd = state.dispatch(&req("semanticUpdate", json!([{}, false, true])));
+        assert!(upd.ok);
+        assert_eq!(upd.result.unwrap()["state"], "ready");
+
+        let sem_hits = state.dispatch(&req("searchScrapsSemantic", json!(["vector search", 5])));
+        assert!(sem_hits.ok);
+        let hits = sem_hits.result.unwrap();
+        let arr = hits.as_array().unwrap();
+        assert!(!arr.is_empty());
+        assert!(arr[0]["matches"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("vector search"));
+
         let _ = std::fs::remove_dir_all(root);
     }
 
