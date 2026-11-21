@@ -673,10 +673,16 @@ pub fn run_webview_host_with_handle(
         CreateCoreWebView2EnvironmentCompletedHandler::wait_for_async_operation(
             Box::new(move |handler| unsafe {
                 let user_data_w = CoTaskMemPWSTR::from(user_data_for_env.as_str());
+                let opts = webview2_com::CoreWebView2EnvironmentOptions::default();
+                opts.set_additional_browser_arguments(
+                    "--disable-background-networking --disable-component-update --no-pings"
+                        .to_string(),
+                );
+                let opts_iface: ICoreWebView2EnvironmentOptions = opts.into();
                 CreateCoreWebView2EnvironmentWithOptions(
                     PCWSTR::null(),
                     *user_data_w.as_ref().as_pcwstr(),
-                    None::<&ICoreWebView2EnvironmentOptions>,
+                    &opts_iface,
                     &handler,
                 )
                 .map_err(webview2_com::Error::WindowsError)

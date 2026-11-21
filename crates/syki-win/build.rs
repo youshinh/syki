@@ -40,7 +40,87 @@ fn extract_attr_href_or_src(line: &str, attr: &str) -> Option<String> {
     Some(raw.split('?').next().unwrap_or(raw).to_string())
 }
 
-fn build_bundled_assets(frontend_root: &Path) -> Option<(Vec<u8>, Vec<u8>)> {
+fn minify_css(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut in_comment = false;
+    for raw_line in src.lines() {
+        let mut s = raw_line;
+        loop {
+            if in_comment {
+                if let Some(end) = s.find("*/") {
+                    s = &s[end + 2..];
+                    in_comment = false;
+                } else {
+                    s = "";
+                    break;
+                }
+            } else if let Some(start) = s.find("/*") {
+                out.push_str(s[..start].trim());
+                if let Some(end) = s[start + 2..].find("*/") {
+                    s = &s[start + 2 + end + 2..];
+                } else {
+                    in_comment = true;
+                    s = "";
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        let t = s.trim();
+        if !t.is_empty() {
+            out.push_str(t);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+fn minify_js_safe(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut in_block_comment = false;
+    for raw_line in src.lines() {
+        let t = raw_line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if in_block_comment {
+            if let Some(end) = t.find("*/") {
+                in_block_comment = false;
+                let rest = t[end + 2..].trim();
+                if !rest.is_empty() && !rest.starts_with("//") {
+                    out.push_str(&rest.replace("</script>", "<\\/script>"));
+                    out.push('\n');
+                }
+            }
+            continue;
+        }
+        if t.starts_with("//") {
+            continue;
+        }
+        if t.starts_with("/*") {
+            if let Some(end) = t[2..].find("*/") {
+                let rest = t[2 + end + 2..].trim();
+                if !rest.is_empty() && !rest.starts_with("//") {
+                    out.push_str(&rest.replace("</script>", "<\\/script>"));
+                    out.push('\n');
+                }
+            } else {
+                in_block_comment = true;
+            }
+            continue;
+        }
+        if t.contains("</script>") {
+            out.push_str(&t.replace("</script>", "<\\/script>"));
+        } else {
+            out.push_str(t);
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn build_bundled_assets(frontend_root: &Path) -> Option<Vec<u8>> {
     let index_path = frontend_root.join("index.html");
     let raw_html = fs::read_to_string(&index_path).ok()?;
 
@@ -59,8 +139,7 @@ fn build_bundled_assets(frontend_root: &Path) -> Option<(Vec<u8>, Vec<u8>)> {
             if let Some(rel) = extract_attr_href_or_src(trimmed, "href") {
                 if rel.starts_with("css/") {
                     if let Ok(css) = fs::read_to_string(frontend_root.join(&rel)) {
-                        bundled_css.push_str(&css);
-                        bundled_css.push('\n');
+                        bundled_css.push_str(&minify_css(&css));
                         if !css_slot_inserted {
                             out_html.push_str("  <!--SYKI_BUNDLED_CSS-->\n");
                             css_slot_inserted = true;
@@ -74,10 +153,10 @@ fn build_bundled_assets(frontend_root: &Path) -> Option<(Vec<u8>, Vec<u8>)> {
         if trimmed.starts_with("<script src=\"js/") && trimmed.ends_with("</script>") {
             if let Some(rel) = extract_attr_href_or_src(trimmed, "src") {
                 if let Ok(js) = fs::read_to_string(frontend_root.join(&rel)) {
-                    bundled_js.push_str(&js);
-                    bundled_js.push_str("\n;\n");
+                    bundled_js.push_str(&minify_js_safe(&js));
+                    bundled_js.push_str(";\n");
                     if !js_slot_inserted {
-                        out_html.push_str("  <script defer src=\"js/app.bundle.js\"></script>\n");
+                        out_html.push_str("  <!--SYKI_BUNDLED_JS-->\n");
                         js_slot_inserted = true;
                     }
                     continue;
@@ -89,9 +168,12 @@ fn build_bundled_assets(frontend_root: &Path) -> Option<(Vec<u8>, Vec<u8>)> {
         out_html.push('\n');
     }
 
-    let style_tag = format!("<style>\n{bundled_css}</style>");
-    let final_html = out_html.replace("  <!--SYKI_BUNDLED_CSS-->\n", &style_tag);
-    Some((final_html.into_bytes(), bundled_js.into_bytes()))
+    let style_tag = format!("<style>\n{bundled_css}</style>\n");
+    let script_tag = format!("<script>\n{bundled_js}</script>\n");
+    let final_html = out_html
+        .replace("  <!--SYKI_BUNDLED_CSS-->\n", &style_tag)
+        .replace("  <!--SYKI_BUNDLED_JS-->\n", &script_tag);
+    Some(final_html.into_bytes())
 }
 
 fn collect_files(root: &Path, dir: &Path, out: &mut Vec<(String, &'static str, String)>) {
@@ -174,21 +256,10 @@ fn main() {
     };
 
     let mut next_idx = 0usize;
-    if let Some((_, ref bundle_js)) = bundled {
-        emit_asset(
-            next_idx,
-            "/js/app.bundle.js",
-            "application/javascript; charset=utf-8",
-            bundle_js,
-            None,
-        );
-        next_idx += 1;
-    }
-
     for (url_path, mime, abs_path) in entries {
         assert!(!abs_path.contains('"'), "unexpected quote in path: {abs_path}");
         if url_path == "/index.html" {
-            if let Some((ref html_bytes, _)) = bundled {
+            if let Some(ref html_bytes) = bundled {
                 emit_asset(next_idx, &url_path, mime, html_bytes, None);
                 next_idx += 1;
                 continue;

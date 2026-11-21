@@ -47,7 +47,7 @@ pub fn decode_asset_bytes(asset: EmbeddedAsset) -> Vec<u8> {
     }
     use std::io::Read;
     let mut dec = flate2::read::GzDecoder::new(asset.bytes);
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(asset.bytes.len().saturating_mul(3));
     if dec.read_to_end(&mut out).is_ok() {
         out
     } else {
