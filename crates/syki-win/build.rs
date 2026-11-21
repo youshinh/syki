@@ -3,6 +3,9 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use flate2::write::GzEncoder;
+use flate2::Compression;
+
 fn mime_for_path(path: &Path) -> &'static str {
     match path
         .extension()
@@ -71,17 +74,41 @@ fn main() {
     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
+    let gz_dir = out_dir.join("gz_assets");
+    fs::create_dir_all(&gz_dir).expect("create gz_assets dir");
+
     let dest = out_dir.join("embedded_assets.rs");
     let mut file = fs::File::create(&dest).expect("create embedded_assets.rs");
 
-    writeln!(file, "static EMBEDDED_ASSETS: &[(&str, &str, &[u8])] = &[").unwrap();
-    for (url_path, mime, abs_path) in entries {
+    writeln!(
+        file,
+        "static EMBEDDED_ASSETS: &[(&str, &str, bool, &[u8])] = &["
+    )
+    .unwrap();
+    for (idx, (url_path, mime, abs_path)) in entries.into_iter().enumerate() {
         assert!(!abs_path.contains('"'), "unexpected quote in path: {abs_path}");
-        writeln!(
-            file,
-            "    ({url_path:?}, {mime:?}, include_bytes!(r#\"{abs_path}\"#)),"
-        )
-        .unwrap();
+        let raw_bytes = fs::read(&abs_path).expect("read asset bytes");
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::best());
+        encoder.write_all(&raw_bytes).expect("gzip encode");
+        let gz_bytes = encoder.finish().expect("gzip finish");
+
+        if gz_bytes.len() + 32 < raw_bytes.len() {
+            let gz_path = gz_dir.join(format!("asset_{idx}.gz"));
+            fs::write(&gz_path, &gz_bytes).expect("write compressed asset");
+            let gz_str = gz_path.to_string_lossy();
+            let clean_gz = gz_str.strip_prefix(r"\\?\").unwrap_or(&gz_str);
+            writeln!(
+                file,
+                "    ({url_path:?}, {mime:?}, true, include_bytes!(r#\"{clean_gz}\"#)),"
+            )
+            .unwrap();
+        } else {
+            writeln!(
+                file,
+                "    ({url_path:?}, {mime:?}, false, include_bytes!(r#\"{abs_path}\"#)),"
+            )
+            .unwrap();
+        }
     }
     writeln!(file, "];").unwrap();
 }

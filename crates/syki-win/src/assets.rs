@@ -1,9 +1,10 @@
-//! In-memory frontend asset registry bundled at compile time via `include_bytes!`.
+//! In-memory frontend asset registry bundled at compile time (gzip-compressed when smaller).
 
 /// Static asset resolved from the virtual origin `https://app.syki.local/`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EmbeddedAsset {
     pub mime: &'static str,
+    pub is_gzip: bool,
     pub bytes: &'static [u8],
 }
 
@@ -29,15 +30,31 @@ pub fn resolve_static_asset(path: &str) -> Option<EmbeddedAsset> {
     }
 
     let idx = EMBEDDED_ASSETS
-        .binary_search_by_key(&normalized.as_str(), |(k, _, _)| *k)
+        .binary_search_by_key(&normalized.as_str(), |(k, _, _, _)| *k)
         .ok()?;
-    let (_, mime, bytes) = EMBEDDED_ASSETS[idx];
-    Some(EmbeddedAsset { mime, bytes })
+    let (_, mime, is_gzip, bytes) = EMBEDDED_ASSETS[idx];
+    Some(EmbeddedAsset {
+        mime,
+        is_gzip,
+        bytes,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
+
+    fn decode_asset(asset: EmbeddedAsset) -> String {
+        if asset.is_gzip {
+            let mut dec = flate2::read::GzDecoder::new(asset.bytes);
+            let mut out = String::new();
+            dec.read_to_string(&mut out).expect("valid gzip utf8");
+            out
+        } else {
+            std::str::from_utf8(asset.bytes).expect("utf8").to_string()
+        }
+    }
 
     #[test]
     fn root_resolves_to_index_html() {
@@ -55,9 +72,7 @@ mod tests {
         let proxy =
             resolve_static_asset("/js/backend_proxy.js?v=1.0.0").expect("backend_proxy.js bundled");
         assert_eq!(proxy.mime, "application/javascript; charset=utf-8");
-        assert!(std::str::from_utf8(proxy.bytes)
-            .expect("utf8 js")
-            .contains("createPostMessageBackendProxy"));
+        assert!(decode_asset(proxy).contains("createPostMessageBackendProxy"));
 
         assert!(
             resolve_static_asset("/js/backend_proxy_test.js").is_none(),

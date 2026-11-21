@@ -13,12 +13,12 @@ use std::sync::{mpsc, Arc, Mutex};
 use syki_core::rpc::{RpcEvent, RpcRequest, RpcResponse};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2, ICoreWebView2Controller,
-    ICoreWebView2EnvironmentOptions, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+    ICoreWebView2EnvironmentOptions, ICoreWebView2_3, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
 };
 use webview2_com::{
     CallDevToolsProtocolMethodCompletedHandler, CoTaskMemPWSTR,
     CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
-    WebMessageReceivedEventHandler, WebResourceRequestedEventHandler,
+    TrySuspendCompletedHandler, WebMessageReceivedEventHandler, WebResourceRequestedEventHandler,
 };
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{E_POINTER, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -210,21 +210,30 @@ pub fn default_tracer_handler(req: &RpcRequest) -> RpcResponse {
 }
 
 /// Resolves a URI under [`VIRTUAL_ORIGIN`] against dynamic routes first, then bundled assets.
-/// External origins return `None` without fallback.
-pub fn resolve_virtual_request(
+/// Returns `(status, mime, is_gzip, body)`. External origins return `None` without fallback.
+pub fn resolve_virtual_request_with_encoding(
     uri: &str,
     dynamic_handler: Option<&DynamicRouteHandler>,
-) -> Option<(u16, &'static str, Vec<u8>)> {
+) -> Option<(u16, &'static str, bool, Vec<u8>)> {
     if !uri.starts_with(VIRTUAL_ORIGIN) {
         return None;
     }
     let rel = &uri[VIRTUAL_ORIGIN.len() - 1..];
     if let Some(handler) = dynamic_handler {
-        if let Some(resp) = handler(rel) {
-            return Some(resp);
+        if let Some((status, mime, bytes)) = handler(rel) {
+            return Some((status, mime, false, bytes));
         }
     }
-    crate::assets::resolve_static_asset(rel).map(|a| (200, a.mime, a.bytes.to_vec()))
+    crate::assets::resolve_static_asset(rel)
+        .map(|a| (200, a.mime, a.is_gzip, a.bytes.to_vec()))
+}
+
+/// Backward-compatible wrapper returning `(status, mime, body)`.
+pub fn resolve_virtual_request(
+    uri: &str,
+    dynamic_handler: Option<&DynamicRouteHandler>,
+) -> Option<(u16, &'static str, Vec<u8>)> {
+    resolve_virtual_request_with_encoding(uri, dynamic_handler).map(|(s, m, _, b)| (s, m, b))
 }
 
 struct WindowState {
@@ -296,6 +305,11 @@ extern "system" fn host_wnd_proc(
             if !ptr.is_null() {
                 let state = unsafe { &*ptr };
                 state.canvas.borrow_mut().wake();
+                if let Some(wv) = state.webview.borrow().as_ref() {
+                    if let Ok(wv3) = windows::core::Interface::cast::<ICoreWebView2_3>(wv) {
+                        let _ = unsafe { wv3.Resume() };
+                    }
+                }
                 if let Some(ctrl) = state.controller.borrow().as_ref() {
                     let _ = unsafe { ctrl.SetIsVisible(true) };
                 }
@@ -326,9 +340,25 @@ extern "system" fn host_wnd_proc(
                         if let Some(ctrl) = state.controller.borrow().as_ref() {
                             let _ = unsafe { ctrl.SetIsVisible(false) };
                         }
+                        if let Some(wv) = state.webview.borrow().as_ref() {
+                            if let Ok(wv3) = windows::core::Interface::cast::<ICoreWebView2_3>(wv) {
+                                let handler = TrySuspendCompletedHandler::create(Box::new(
+                                    |_hr, _is_suspended| {
+                                        trim_working_set_async();
+                                        Ok(())
+                                    },
+                                ));
+                                if unsafe { wv3.TrySuspend(&handler) }.is_err() {
+                                    trim_working_set_async();
+                                }
+                            } else {
+                                trim_working_set_async();
+                            }
+                        } else {
+                            trim_working_set_async();
+                        }
                     }
                     let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
-                    trim_working_set_async();
                 }
                 WIN_CMD_FORCE_QUIT => {
                     let _ = unsafe { DestroyWindow(hwnd) };
@@ -688,19 +718,33 @@ pub fn run_webview_host_with_handle(
                 req.Uri(&mut uri_raw)?;
                 let uri = CoTaskMemPWSTR::from(uri_raw).to_string();
 
-                let (status, mime, body) = match resolve_virtual_request(
+                let (status, mime, is_gzip, body) = match resolve_virtual_request_with_encoding(
                     &uri,
                     dyn_for_res.as_deref(),
                 ) {
                     Some(hit) => hit,
-                    None if !uri.starts_with(VIRTUAL_ORIGIN) => {
-                        (403, "text/plain; charset=utf-8", b"Forbidden".to_vec())
-                    }
-                    None => (404, "text/plain; charset=utf-8", b"Not Found".to_vec()),
+                    None if !uri.starts_with(VIRTUAL_ORIGIN) => (
+                        403,
+                        "text/plain; charset=utf-8",
+                        false,
+                        b"Forbidden".to_vec(),
+                    ),
+                    None => (
+                        404,
+                        "text/plain; charset=utf-8",
+                        false,
+                        b"Not Found".to_vec(),
+                    ),
                 };
 
                 let stream: Option<IStream> = SHCreateMemStream(Some(&body));
-                let headers = format!("Content-Type: {mime}\r\nCache-Control: no-store");
+                let headers = if is_gzip {
+                    format!(
+                        "Content-Type: {mime}\r\nContent-Encoding: gzip\r\nCache-Control: no-store"
+                    )
+                } else {
+                    format!("Content-Type: {mime}\r\nCache-Control: no-store")
+                };
                 let reason_w = CoTaskMemPWSTR::from(reason_phrase_for(status));
                 let headers_w = CoTaskMemPWSTR::from(headers.as_str());
                 let response = env_for_res.CreateWebResourceResponse(
