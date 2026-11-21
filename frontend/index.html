@@ -876,11 +876,8 @@
           <!-- 1. 一般 (General & Editor) -->
           <div id="pane-general" class="settings-pane">
             <div class="settings-section-header" data-basic>
-              <h4 data-i18n="sectionAppearance">外観 & ウィンドウ</h4>
+              <h4 data-i18n="sectionBasicGeneral">基本設定（外観・言語・保存）</h4>
             </div>
-            <!-- The look of the window (config.appearance, js/appearance.js). A look, an accent and a font change the window as soon as
-                 they are chosen (Cancel puts the saved ones back); Save keeps them. A later setting of the same kind (the bars and the
-                 split boundary are two) is one more row here, one line in readAppearanceControls and one in showAppearanceControls (app.js). -->
             <div class="form-group">
               <label for="cfg-look" data-i18n="lookLabel">Look:</label>
               <select id="cfg-look" class="form-select">
@@ -936,6 +933,36 @@
                 <option value="PlemolJP"></option>
               </datalist>
               <small data-i18n="editorFontHint">The name of a font installed on this computer. Empty uses the default. The size is changed with Ctrl + and Ctrl - (Ctrl 0 resets it).</small>
+            </div>
+            <div class="form-group">
+              <label for="cfg-language" data-i18n="languageLabel">Language:</label>
+              <select id="cfg-language" class="form-select">
+                <option value="ja">日本語 (Japanese)</option>
+                <option value="en">English (Default)</option>
+              </select>
+              <small data-i18n="languageImeGuardianHint">Choosing Japanese also turns on IME Guardian, in the Editor &amp; Input section below (you can turn it off there).</small>
+            </div>
+            <div class="form-group inline-group">
+              <label>
+                <input type="checkbox" id="cfg-autosave" checked> <span data-i18n="autoSaveLabel">Autosave on 1.5s pause (a new note gets a file in the folder below)</span>
+              </label>
+            </div>
+            <div class="form-group">
+              <label for="cfg-default-note-dir" data-i18n="defaultNoteDirLabel">Folder for new notes:</label>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <input type="text" id="cfg-default-note-dir" data-i18n-placeholder="defaultNoteDirPlaceholder" placeholder="(daily scraps folder)" style="flex: 1; background: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); padding: 7px 10px; border-radius: 4px; font-size: 13px;">
+                <button id="btn-browse-note-dir" type="button" class="btn-secondary" data-i18n="btnBrowse">Browse...</button>
+              </div>
+              <small data-i18n="defaultNoteDirHint">Where autosave puts a note that has no file yet, and where the Save dialog starts for it. Empty: the daily scraps folder. A name that is taken gets -2, -3; nothing is replaced.</small>
+            </div>
+            <div class="form-group inline-group">
+              <label>
+                <input type="checkbox" id="cfg-restore-session" checked> <span data-i18n="restoreSessionLabel">Restore open tabs & unsaved notes on startup</span>
+              </label>
+            </div>
+
+            <div class="settings-section-header" style="margin-top: 18px;">
+              <h4 data-i18n="sectionAppearanceAdvanced">詳細設定：ウィンドウ・表示・起動</h4>
             </div>
             <div class="form-group">
               <label for="cfg-bars" data-i18n="barsLabel">Header and status bar:</label>
@@ -1008,47 +1035,6 @@
                 <input type="checkbox" id="cfg-tab-dock" checked> <span data-i18n="tabDockLabel">Magnify the index tabs under the pointer</span>
               </label>
               <small data-i18n="tabDockHint">The tabs at the window's edge come out wide enough to read when the pointer reaches them, and the one under the pointer comes out the furthest, like the Mac Dock. Off: they open all at once.</small>
-              <label style="display: flex; align-items: center; gap: 8px; margin-top: 8px;">
-                <input type="checkbox" id="cfg-tab-dock-follow-os"> <span data-i18n="tabDockFollowOsLabel">Follow the system's "reduce motion"</span>
-              </label>
-              <small data-i18n="tabDockFollowOsHint">When on, the tabs switch at once instead of easing out.</small>
-              <div class="settings-slider-row">
-                <label for="cfg-tab-dock-strength" data-i18n="tabDockStrengthLabel">Strength</label>
-                <input type="range" id="cfg-tab-dock-strength" min="20" max="100" step="5" value="100">
-                <output id="cfg-tab-dock-strength-value" for="cfg-tab-dock-strength">100%</output>
-              </div>
-              <div class="settings-slider-row">
-                <label for="cfg-tab-strip-width" data-i18n="tabStripWidthLabel">Width of the tab edge</label>
-                <input type="range" id="cfg-tab-strip-width" min="12" max="48" step="2" value="24">
-                <output id="cfg-tab-strip-width-value" for="cfg-tab-strip-width">24px</output>
-              </div>
-              <small data-i18n="tabStripWidthHint">How wide the strip at the window's edge is while it is closed. The narrowest, 12px, is the old width; a wider one is easier to reach with the pointer, and covers the line numbers.</small>
-              <div class="settings-slider-row">
-                <label for="cfg-tab-hide-delay" data-i18n="tabHideDelayLabel">Retract delay</label>
-                <input type="range" id="cfg-tab-hide-delay" min="0" max="1500" step="50" value="300">
-                <output id="cfg-tab-hide-delay-value" for="cfg-tab-hide-delay">300ms</output>
-              </div>
-              <small data-i18n="tabHideDelayHint">How long the index tabs stay open after the pointer leaves them. A longer delay prevents accidental closing when moving the mouse.</small>
-              <div class="settings-slider-row">
-                <label for="cfg-tab-hide-duration" data-i18n="tabHideDurationLabel">Retract animation duration</label>
-                <input type="range" id="cfg-tab-hide-duration" min="100" max="2000" step="50" value="250">
-                <output id="cfg-tab-hide-duration-value" for="cfg-tab-hide-duration">250ms</output>
-              </div>
-              <small data-i18n="tabHideDurationHint">How long the retract animation takes when the index tabs return to the edge. Longer values slow down the retraction.</small>
-            </div>
-            <div class="settings-subhead" data-i18n="subheadStartup">Language &amp; start-up</div>
-            <div class="form-group">
-              <label for="cfg-language" data-i18n="languageLabel">Language:</label>
-              <select id="cfg-language" class="form-select">
-                <option value="ja">日本語 (Japanese)</option>
-                <option value="en">English (Default)</option>
-              </select>
-              <small data-i18n="languageImeGuardianHint">Choosing Japanese also turns on IME Guardian, in the Editor &amp; Input section below (you can turn it off there).</small>
-            </div>
-            <div class="form-group inline-group">
-              <label>
-                <input type="checkbox" id="cfg-restore-session" checked> <span data-i18n="restoreSessionLabel">Restore open tabs & unsaved notes on startup</span>
-              </label>
             </div>
             <div class="form-group inline-group">
               <label>
@@ -1061,34 +1047,9 @@
               </label>
               <small id="tray-resident-os-hint" class="hidden" data-i18n="trayResidentUnsupportedHint">Not available on this platform yet; this setting currently has no effect.</small>
             </div>
-            <div class="form-group inline-group" id="webview-memory-group">
-              <label>
-                <input type="checkbox" id="cfg-trim-webview" checked> <span data-i18n="trimWebViewLabel">Give back the memory of the page while the window is hidden</span>
-              </label>
-              <small data-i18n="trimWebViewHint">When the window is hidden to the tray or minimized, Windows takes back the memory the page is not using (WebView2). It comes back a little at a time when the window is shown, which can make that first moment slightly slower. Windows only.</small>
-            </div>
-            <div class="form-group inline-group" id="webview-gpu-group">
-              <label>
-                <input type="checkbox" id="cfg-webview-inproc-gpu"> <span data-i18n="webViewInProcGpuLabel">Run the graphics work inside the page process (needs a restart)</span>
-              </label>
-              <small data-i18n="webViewInProcGpuHint">One process less, so a little less memory. If the screen flickers or goes blank, turn it off. Windows only; takes effect the next time syki starts.</small>
-            </div>
 
-            <div class="settings-section-header" data-basic style="margin-top: 18px;">
-              <h4 data-i18n="sectionEditor">エディタ & 入力</h4>
-            </div>
-            <div class="form-group inline-group">
-              <label>
-                <input type="checkbox" id="cfg-autosave" checked> <span data-i18n="autoSaveLabel">Autosave on 1.5s pause (a new note gets a file in the folder below)</span>
-              </label>
-            </div>
-            <div class="form-group">
-              <label for="cfg-default-note-dir" data-i18n="defaultNoteDirLabel">Folder for new notes:</label>
-              <div style="display: flex; gap: 8px; align-items: center;">
-                <input type="text" id="cfg-default-note-dir" data-i18n-placeholder="defaultNoteDirPlaceholder" placeholder="(daily scraps folder)" style="flex: 1; background: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); padding: 7px 10px; border-radius: 4px; font-size: 13px;">
-                <button id="btn-browse-note-dir" type="button" class="btn-secondary" data-i18n="btnBrowse">Browse...</button>
-              </div>
-              <small data-i18n="defaultNoteDirHint">Where autosave puts a note that has no file yet, and where the Save dialog starts for it. Empty: the daily scraps folder. A name that is taken gets -2, -3; nothing is replaced.</small>
+            <div class="settings-section-header" style="margin-top: 18px;">
+              <h4 data-i18n="sectionEditor">詳細設定：エディタ & 入力 (IME・貼り付け)</h4>
             </div>
             <div class="settings-subhead" data-i18n="subheadIme">Japanese input (IME)</div>
             <div class="form-group inline-group">
@@ -1126,8 +1087,8 @@
             </div>
 
             <!-- Updates and privacy: the start-up update check (general.checkUpdates) and the cloud hosts the ask bars may send text to (general.cloudConsent) -->
-            <div class="settings-section-header" data-basic style="margin-top: 18px;">
-              <h4 data-i18n="sectionUpdatesPrivacy">Updates &amp; Privacy</h4>
+            <div class="settings-section-header" style="margin-top: 18px;">
+              <h4 data-i18n="sectionUpdatesPrivacy">詳細設定：更新とプライバシー</h4>
             </div>
             <div class="form-group inline-group">
               <label>
@@ -1158,9 +1119,9 @@
 
           <!-- 2. AIモデル (AI Models: Text, Ghost Text, Vision, Image Gen) -->
           <div id="pane-model" class="settings-pane hidden">
-            <!-- Text LLM -->
+            <!-- 基本AI設定 -->
             <div class="settings-section-header" data-basic>
-              <h4 data-i18n="sectionTextLLM">Writing & commands</h4>
+              <h4 data-i18n="sectionTextLLM">基本 AI 設定（テキスト・日常機能）</h4>
             </div>
             <div class="form-group">
               <label for="cfg-text-provider" data-i18n="textProviderLabel">AI Provider Preset:</label>
@@ -1216,6 +1177,26 @@
               <label for="cfg-api-key" data-i18n="apiKeyLabel">API Key (for cloud APIs):</label>
               <input type="password" id="cfg-api-key" placeholder="sk-... or AIzaSy... (leave empty for local models)">
             </div>
+            <div class="form-group inline-group" style="margin-top: 10px;">
+              <label>
+                <input type="checkbox" id="cfg-ai-correction" checked> <span data-i18n="aiCorrectionLabel">Enable AI typo & error correction (Alt+C)</span>
+              </label>
+            </div>
+            <div class="form-group inline-group">
+              <label>
+                <input type="checkbox" id="cfg-auto-enabled" checked> <span data-i18n="enableAutocomplete">Enable inline autocomplete (Ghost Text)</span>
+              </label>
+            </div>
+            <div class="form-group inline-group">
+              <label>
+                <input type="checkbox" id="cfg-paste-image-ocr" checked> <span data-i18n="pasteImageOcrLabel">Automatically transcribe pasted images (Ctrl+V) using Gemini OCR</span>
+              </label>
+            </div>
+
+            <!-- AI詳細オプション -->
+            <div class="settings-section-header" style="margin-top: 18px;">
+              <h4 data-i18n="sectionAIAdvanced">詳細設定：システムプロンプト・接続継承・書き換え履歴</h4>
+            </div>
             <div class="form-group inline-group" style="margin-bottom: 12px;">
               <label>
                 <input type="checkbox" id="cfg-inherit-to-all" checked> <span data-i18n="inheritToAllLabel">Inherit text LLM connection (API Key) to Vision & Image settings if empty (Dedicated image models are kept)</span>
@@ -1224,18 +1205,6 @@
             <div class="form-group">
               <label for="cfg-system-prompt" data-i18n="systemPromptLabel">System Prompt:</label>
               <textarea id="cfg-system-prompt" rows="2" placeholder="You are a helpful assistant. Provide concise, accurate markdown responses."></textarea>
-            </div>
-
-            <div class="settings-subhead" data-i18n="subheadRewrite">Rewrite &amp; correction</div>
-            <div class="form-group inline-group" style="margin-top: 10px;">
-              <label>
-                <input type="checkbox" id="cfg-ai-correction" checked> <span data-i18n="aiCorrectionLabel">Enable AI typo & error correction (Alt+C)</span>
-              </label>
-            </div>
-            <div class="form-group" style="margin-top: 10px;">
-              <label for="cfg-rewrite-history-dir" data-i18n="rewriteHistoryDirLabel">Rewrite backup folder:</label>
-              <input type="text" id="cfg-rewrite-history-dir" placeholder="history (relative to note, or 'source', '_history')" value="history">
-              <small data-i18n="rewriteHistoryDirHint">Folder name where the original text is archived before a rewrite replaces it. Saved relative to the edited file.</small>
             </div>
             <div class="form-group inline-group" style="margin-top: 10px;">
               <label>
@@ -1246,22 +1215,7 @@
 
             <!-- Autocomplete -->
             <div class="settings-section-header" style="margin-top: 18px;">
-              <h4 data-i18n="sectionAutocomplete">Inline Autocomplete (Ghost Text)</h4>
-            </div>
-            <div class="form-group inline-group">
-              <label>
-                <input type="checkbox" id="cfg-auto-enabled" checked> <span data-i18n="enableAutocomplete">Enable inline autocomplete (Ghost Text)</span>
-              </label>
-            </div>
-            <div class="form-row" style="display: flex; gap: 12px;">
-              <div class="form-group" style="flex: 1;">
-                <label for="cfg-auto-delay" data-i18n="autoDelayLabel">Suggestion delay (ms):</label>
-                <input type="number" id="cfg-auto-delay" min="200" max="2000" step="50" value="500">
-              </div>
-              <div class="form-group" style="flex: 1;">
-                <label for="cfg-auto-tokens" data-i18n="autoMaxTokensLabel">Max prediction tokens:</label>
-                <input type="number" id="cfg-auto-tokens" min="10" max="100" step="5" value="30">
-              </div>
+              <h4 data-i18n="sectionAutocomplete">詳細設定：インライン補完 (Ghost Text) 接続上書き</h4>
             </div>
             <details class="ai-override-box">
               <summary><span data-i18n="aiOverrideSummary">Connection &amp; model override</span><span class="ai-override-badge"></span></summary>
@@ -1291,12 +1245,7 @@
             <div class="settings-section-header" style="margin-top: 18px;">
               <h4 data-i18n="sectionVisionOCR">Image OCR & Vision</h4>
             </div>
-            <div class="form-group inline-group" style="margin-bottom: 12px;">
-              <label>
-                <input type="checkbox" id="cfg-paste-image-ocr" checked> <span data-i18n="pasteImageOcrLabel">Automatically transcribe pasted images (Ctrl+V) using Gemini OCR</span>
-              </label>
-            </div>
-            <small style="display: block; margin: -6px 0 12px 22px;" data-i18n="pasteImageOcrHint">When it is off, or the image model has no API setup, a pasted image is saved to assets and linked instead (like Ctrl+Shift+V).</small>
+            <small style="display: block; margin: 0 0 12px 0;" data-i18n="pasteImageOcrHint">When it is off, or the image model has no API setup, a pasted image is saved to assets and linked instead (like Ctrl+Shift+V).</small>
             <div class="form-group">
               <label for="cfg-vision-prompt" data-i18n="visionPromptLabel">Vision prompt instruction:</label>
               <textarea id="cfg-vision-prompt" rows="2" placeholder="Transcribe the content of this image (text, diagrams, tables, code, etc.) into structured, faithful Markdown format."></textarea>
@@ -1343,24 +1292,14 @@
                 </select>
               </div>
               <div id="voice-gemini-rt">
-                <div class="form-row" style="display: flex; gap: 12px;">
-                  <div class="form-group" style="flex: 2;">
-                    <label for="cfg-voice-model-rt" data-i18n="voiceModelLabel">Voice model:</label>
-                    <input type="text" id="cfg-voice-model-rt" list="voice-model-suggestions" placeholder="gemini-3.5-transcribe">
-                <datalist id="voice-model-suggestions">
-                  <option value="gemini-3.5-transcribe">Gemini 3.5 Transcribe (Recommended)</option>
-                  <option value="gemini-flash-lite-latest">Gemini Flash Lite (generateContent)</option>
-                </datalist>
-                    <small data-i18n="voiceModelHint">Auto uses the Interactions API for models named ...transcribe and generateContent for all others.</small>
-                  </div>
-                  <div class="form-group" style="flex: 1;">
-                    <label for="cfg-voice-api-style-rt" data-i18n="voiceApiStyleLabel">API style:</label>
-                    <select id="cfg-voice-api-style-rt" class="form-select">
-                      <option value="auto" data-i18n="voiceApiStyleAuto">Auto</option>
-                      <option value="interactions" data-i18n="voiceApiStyleInteractions">Interactions API</option>
-                      <option value="generateContent" data-i18n="voiceApiStyleGenerateContent">generateContent</option>
-                    </select>
-                  </div>
+                <div class="form-group">
+                  <label for="cfg-voice-model-rt" data-i18n="voiceModelLabel">Voice model:</label>
+                  <input type="text" id="cfg-voice-model-rt" list="voice-model-suggestions" placeholder="gemini-3.5-transcribe">
+                  <datalist id="voice-model-suggestions">
+                    <option value="gemini-3.5-transcribe">Gemini 3.5 Transcribe (Recommended)</option>
+                    <option value="gemini-flash-lite-latest">Gemini Flash Lite (generateContent)</option>
+                  </datalist>
+                  <small data-i18n="voiceModelHint">Auto uses the Interactions API for models named ...transcribe and generateContent for all others.</small>
                 </div>
               </div>
               <div id="speech-whisper-rt" class="hidden">
@@ -1413,20 +1352,10 @@
                 </select>
               </div>
               <div id="voice-gemini-bt">
-                <div class="form-row" style="display: flex; gap: 12px;">
-                  <div class="form-group" style="flex: 2;">
-                    <label for="cfg-voice-model-bt" data-i18n="voiceModelLabel">Voice model:</label>
-                    <input type="text" id="cfg-voice-model-bt" list="voice-model-suggestions" placeholder="gemini-3.5-transcribe">
-                    <small data-i18n="voiceModelHint">Auto uses the Interactions API for models named ...transcribe and generateContent for all others.</small>
-                  </div>
-                  <div class="form-group" style="flex: 1;">
-                    <label for="cfg-voice-api-style-bt" data-i18n="voiceApiStyleLabel">API style:</label>
-                    <select id="cfg-voice-api-style-bt" class="form-select">
-                      <option value="auto" data-i18n="voiceApiStyleAuto">Auto</option>
-                      <option value="interactions" data-i18n="voiceApiStyleInteractions">Interactions API</option>
-                      <option value="generateContent" data-i18n="voiceApiStyleGenerateContent">generateContent</option>
-                    </select>
-                  </div>
+                <div class="form-group">
+                  <label for="cfg-voice-model-bt" data-i18n="voiceModelLabel">Voice model:</label>
+                  <input type="text" id="cfg-voice-model-bt" list="voice-model-suggestions" placeholder="gemini-3.5-transcribe">
+                  <small data-i18n="voiceModelHint">Auto uses the Interactions API for models named ...transcribe and generateContent for all others.</small>
                 </div>
               </div>
               <div id="speech-whisper-bt" class="hidden">
@@ -1477,26 +1406,16 @@
                 <small data-i18n="voiceModeHint">Smart drops fillers and tidies the text; Verbatim keeps every word.</small>
               </div>
             </div>
-            <div class="form-row" style="display: flex; gap: 12px;">
-              <div class="form-group" style="flex: 2;">
-                <label for="cfg-voice-vocabulary" data-i18n="voiceVocabularyLabel">Custom vocabulary:</label>
-                <textarea id="cfg-voice-vocabulary" rows="2" spellcheck="false"></textarea>
-                <small data-i18n="voiceVocabularyHint">One term per line (names, jargon). Up to 100 recommended.</small>
-              </div>
-              <div class="form-group" style="flex: 1;">
-                <label for="cfg-voice-silence" data-i18n="voiceSilenceLabel">Silence timeout (s):</label>
-                <input type="number" id="cfg-voice-silence" min="1" max="30" step="1" value="5">
-              </div>
+            <div class="form-group">
+              <label for="cfg-voice-vocabulary" data-i18n="voiceVocabularyLabel">Custom vocabulary:</label>
+              <textarea id="cfg-voice-vocabulary" rows="2" spellcheck="false"></textarea>
+              <small data-i18n="voiceVocabularyHint">One term per line (names, jargon). Up to 100 recommended.</small>
             </div>
             <div class="form-group inline-group">
               <label>
                 <input type="checkbox" id="cfg-bar-voice" checked> <span data-i18n="barVoiceLabel">Voice button in the ask, rewrite and command bars</span>
               </label>
               <small data-i18n="barVoiceHint">A microphone button in the bars of Ctrl+L, Ctrl+K and Ctrl+E (AI mode). What you say goes into the box; Enter sends it. It uses the Realtime engine above.</small>
-            </div>
-            <div class="form-group">
-              <label for="cfg-voice-bar-silence" data-i18n="barVoiceSilenceLabel">Pause that ends a bar's recording (s):</label>
-              <input type="number" id="cfg-voice-bar-silence" min="1" max="5" step="0.5" value="1.5">
             </div>
             <div class="form-group inline-group hidden" id="cfg-voice-system-audio-group">
               <label>
@@ -1515,20 +1434,14 @@
               </label>
               <small data-i18n="voiceRefineHint">Removes fillers and self-corrections and fits the line you are on (lists, tasks, tables). With text selected, what you say is applied to the selection as an edit instruction. If it fails or is slow, the transcript is inserted as spoken.</small>
             </div>
-            <div class="form-row" style="display: flex; gap: 12px;">
-              <div class="form-group" style="flex: 2;">
-                <label for="cfg-voice-refine-model" data-i18n="voiceRefineModelLabel">Refine model:</label>
-                <input type="text" id="cfg-voice-refine-model" list="voice-refine-model-suggestions" placeholder="gemini-flash-lite-latest" spellcheck="false" autocomplete="off">
-                <datalist id="voice-refine-model-suggestions">
-                  <option value="gemini-flash-lite-latest">Gemini Flash Lite (Fast &amp; Low Latency)</option>
-                  <option value="gemini-3.8-flash">Gemini 3.8 Flash (High Quality)</option>
-                  <option value="gemini-4-hydrogen">Gemini 4 Hydrogen (Fast Daily)</option>
-                </datalist>
-              </div>
-              <div class="form-group" style="flex: 1;">
-                <label for="cfg-voice-refine-timeout" data-i18n="voiceRefineTimeoutLabel">Refine timeout (s):</label>
-                <input type="number" id="cfg-voice-refine-timeout" min="1" max="30" step="1" value="5">
-              </div>
+            <div class="form-group">
+              <label for="cfg-voice-refine-model" data-i18n="voiceRefineModelLabel">Refine model:</label>
+              <input type="text" id="cfg-voice-refine-model" list="voice-refine-model-suggestions" placeholder="gemini-flash-lite-latest" spellcheck="false" autocomplete="off">
+              <datalist id="voice-refine-model-suggestions">
+                <option value="gemini-flash-lite-latest">Gemini Flash Lite (Fast &amp; Low Latency)</option>
+                <option value="gemini-3.8-flash">Gemini 3.8 Flash (High Quality)</option>
+                <option value="gemini-4-hydrogen">Gemini 4 Hydrogen (Fast Daily)</option>
+              </datalist>
             </div>
             <div class="form-group">
               <label for="cfg-voice-prompt" data-i18n="voicePromptLabel">Transcription prompt:</label>
@@ -1556,16 +1469,10 @@
                 </div>
                 <details id="speech-advanced" class="form-group">
                   <summary data-i18n="speechAdvanced">Advanced</summary>
-                  <div class="form-row" style="display: flex; gap: 12px; margin-top: 8px;">
-                    <div class="form-group" style="flex: 1;">
-                      <label for="cfg-speech-language" data-i18n="speechLanguageLabel">Language:</label>
-                      <input type="text" id="cfg-speech-language" placeholder="ja" spellcheck="false" autocomplete="off">
-                      <small data-i18n="speechLanguageHint">Empty = auto-detect. Examples: ja, en</small>
-                    </div>
-                    <div class="form-group" style="flex: 1;">
-                      <label for="cfg-speech-threads" data-i18n="speechThreadsLabel">Threads (0 = auto):</label>
-                      <input type="number" id="cfg-speech-threads" min="0" max="64" step="1" value="0">
-                    </div>
+                  <div class="form-group">
+                    <label for="cfg-speech-language" data-i18n="speechLanguageLabel">Language:</label>
+                    <input type="text" id="cfg-speech-language" placeholder="ja" spellcheck="false" autocomplete="off">
+                    <small data-i18n="speechLanguageHint">Empty = auto-detect. Examples: ja, en</small>
                   </div>
                   <div class="form-group">
                     <label for="cfg-speech-prompt" data-i18n="speechPromptLabel">Initial prompt:</label>
@@ -1765,11 +1672,6 @@
               </select>
               <small data-i18n="cliResultPlacementHint">With text selected. Without a selection, and with results not opened in a tab, the output is added at the end of the note.</small>
             </div>
-            <div class="form-group" style="margin-top: 14px;">
-              <label for="cfg-max-pipe-size" data-i18n="maxPipeSizeLabel">Max Pipe Input Size (MB):</label>
-              <input type="number" id="cfg-max-pipe-size" min="1" max="100" value="10" style="width: 120px; background: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); padding: 6px 10px; border-radius: 4px; font-size: 13px;">
-              <small data-i18n="maxPipeSizeHint">Failsafe limit for terminal standard input pipes to prevent memory spikes.</small>
-            </div>
 
             <!-- Section 5: OS連携 (送る) -->
             <div id="sendto-section" class="settings-section-header" style="margin-top: 18px;">
@@ -1810,13 +1712,12 @@
             <div class="settings-section-header" data-basic>
               <h4 data-i18n="sectionScrapFolder">Daily scraps folder</h4>
             </div>
-            <div class="form-group">
-              <label for="cfg-scrap-dir" data-i18n="scrapDirLabel">Daily Scraps Folder Path:</label>
-              <div style="display: flex; gap: 8px;">
-                <input type="text" id="cfg-scrap-dir" placeholder="~/Documents/syki-lite/scraps" style="flex: 1; background: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); padding: 7px 10px; border-radius: 4px; font-size: 13px;">
-                <button id="btn-browse-scrap-dir" type="button" class="btn-secondary" data-i18n="btnBrowse">Browse...</button>
+            <div class="local-ai-card" style="background: var(--veil-04); border: 1px solid var(--border-color); border-radius: 6px; padding: 12px 14px;">
+              <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                <strong style="font-size: 13px;" data-i18n="scrapAutoConfiguredTitle">データ保存先（自動設定済み）</strong>
+                <span style="font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--veil-10); color: var(--text-muted);" data-i18n="badgeAuto">Auto</span>
               </div>
-              <small data-i18n="scrapDirHint">Folder where piped logs (cat file | syki) and daily notes are saved.</small>
+              <small data-i18n="scrapAutoConfiguredHint">デイリースクラップおよびパイプ出力は OS 標準のデータ保存先（~/Documents/syki-sok/scraps）へ自動保存されます。手動変更が必要な場合のみ config.json の scraps.scrapDir で上書きできます。</small>
             </div>
           </div>
 

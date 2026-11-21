@@ -95,7 +95,7 @@ impl CoreState {
             ),
             "uiReady" => RpcResponse::ok(&req.id, json!(true)),
 
-            "getConfig" => match self.config_store.load_raw() {
+            "getConfig" => match self.config_store.load_resolved_json() {
                 Ok(raw) => RpcResponse::ok(&req.id, Value::String(raw)),
                 Err(e) => RpcResponse::err(&req.id, format!("getConfig failed: {e}")),
             },

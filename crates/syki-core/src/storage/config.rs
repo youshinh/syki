@@ -108,6 +108,153 @@ fn non_empty_str(val: Option<&serde_json::Value>) -> Option<&str> {
         .filter(|s| !s.is_empty())
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct AutoDetectHints {
+    pub default_scrap_dir: Option<String>,
+    pub llm_base_url: Option<String>,
+    pub llm_model: Option<String>,
+}
+
+impl AutoDetectHints {
+    pub fn from_system() -> Self {
+        let (llm_base_url, llm_model) = if std::env::var("GEMINI_API_KEY")
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+        {
+            (
+                Some("https://generativelanguage.googleapis.com".to_string()),
+                Some("gemini-3.8-flash".to_string()),
+            )
+        } else if std::env::var("OPENAI_API_KEY")
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+        {
+            (
+                Some("https://api.openai.com/v1".to_string()),
+                Some("gpt-6.1-sol".to_string()),
+            )
+        } else {
+            (None, None)
+        };
+        Self {
+            default_scrap_dir: Some("~/Documents/syki-sok/scraps".to_string()),
+            llm_base_url,
+            llm_model,
+        }
+    }
+}
+
+fn ensure_object<'a>(
+    parent: &'a mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> &'a mut serde_json::Map<String, serde_json::Value> {
+    if !parent.get(key).map(|v| v.is_object()).unwrap_or(false) {
+        parent.insert(key.to_string(), serde_json::Value::Object(Default::default()));
+    }
+    parent
+        .get_mut(key)
+        .and_then(|v| v.as_object_mut())
+        .expect("object inserted")
+}
+
+fn set_default_if_missing(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    default: serde_json::Value,
+) {
+    let missing = match obj.get(key) {
+        None | Some(serde_json::Value::Null) => true,
+        Some(serde_json::Value::String(s)) => s.trim().is_empty(),
+        _ => false,
+    };
+    if missing {
+        obj.insert(key.to_string(), default);
+    }
+}
+
+pub fn resolve_config_with_defaults(raw_json: &str, hints: &AutoDetectHints) -> serde_json::Value {
+    let mut root = match serde_json::from_str::<serde_json::Value>(raw_json) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+
+    let legacy_scrap_dir = root
+        .get("scrap_dir")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let legacy_pipe_mb = root.get("max_pipe_size_mb").cloned();
+
+    {
+        let general = ensure_object(&mut root, "general");
+        set_default_if_missing(general, "trimWebViewWhenHidden", serde_json::json!(true));
+        set_default_if_missing(general, "webViewInProcessGpu", serde_json::json!(false));
+        set_default_if_missing(general, "tabDockFollowOs", serde_json::json!(true));
+        set_default_if_missing(general, "tabDockStrength", serde_json::json!(100));
+        set_default_if_missing(general, "tabStripWidth", serde_json::json!(24));
+        set_default_if_missing(general, "tabHideDelayMs", serde_json::json!(300));
+        set_default_if_missing(general, "tabHideDurationMs", serde_json::json!(250));
+        set_default_if_missing(general, "rewriteHistoryDir", serde_json::json!("history"));
+    }
+
+    {
+        let scraps = ensure_object(&mut root, "scraps");
+        let default_scrap = legacy_scrap_dir
+            .or_else(|| hints.default_scrap_dir.clone())
+            .unwrap_or_else(|| "~/Documents/syki-sok/scraps".to_string());
+        set_default_if_missing(scraps, "scrapDir", serde_json::json!(default_scrap));
+        set_default_if_missing(
+            scraps,
+            "maxPipeSizeMB",
+            legacy_pipe_mb.unwrap_or_else(|| serde_json::json!(10)),
+        );
+    }
+
+    {
+        let autocomplete = ensure_object(&mut root, "autocomplete");
+        set_default_if_missing(autocomplete, "delayMs", serde_json::json!(500));
+        set_default_if_missing(autocomplete, "maxTokens", serde_json::json!(30));
+    }
+
+    {
+        let voice = ensure_object(&mut root, "voice");
+        set_default_if_missing(voice, "silence_timeout_sec", serde_json::json!(5));
+        set_default_if_missing(voice, "barSilenceSec", serde_json::json!(1.5));
+        let refine = ensure_object(voice, "refine");
+        set_default_if_missing(refine, "timeoutSec", serde_json::json!(5));
+        let rt = ensure_object(voice, "realtime");
+        set_default_if_missing(rt, "apiStyle", serde_json::json!("auto"));
+        let bt = ensure_object(voice, "batch");
+        set_default_if_missing(bt, "apiStyle", serde_json::json!("auto"));
+    }
+
+    {
+        let whisper = ensure_object(&mut root, "whisper");
+        set_default_if_missing(whisper, "threads", serde_json::json!(0));
+    }
+
+    if hints.llm_base_url.is_some() || hints.llm_model.is_some() {
+        let text = ensure_object(&mut root, "text");
+        if let Some(url) = &hints.llm_base_url {
+            set_default_if_missing(text, "baseUrl", serde_json::json!(url));
+        }
+        if let Some(model) = &hints.llm_model {
+            set_default_if_missing(text, "model", serde_json::json!(model));
+        }
+    }
+
+    serde_json::Value::Object(root)
+}
+
+impl JsonConfigStore {
+    pub fn load_resolved_json(&self) -> Result<String, StorageError> {
+        let raw = self.load_raw()?;
+        let resolved = resolve_config_with_defaults(&raw, &AutoDetectHints::from_system());
+        Ok(serde_json::to_string(&resolved)?)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,5 +307,84 @@ mod tests {
             .save_raw(r#"{"scraps":{"scrapDir":"D:\\other"}}"#)
             .expect("overwrite valid");
         assert_eq!(store.scrap_dir(), PathBuf::from(r"D:\other"));
+    }
+
+    #[test]
+    fn resolve_config_with_defaults_populates_zero_config_fields() {
+        let hints = AutoDetectHints {
+            default_scrap_dir: Some("~/Documents/syki-sok/scraps".to_string()),
+            llm_base_url: Some("http://127.0.0.1:11434".to_string()),
+            llm_model: Some("qwen3:latest".to_string()),
+        };
+        let resolved = resolve_config_with_defaults("{}", &hints);
+
+        assert_eq!(resolved["general"]["trimWebViewWhenHidden"], true);
+        assert_eq!(resolved["general"]["webViewInProcessGpu"], false);
+        assert_eq!(resolved["general"]["tabDockFollowOs"], true);
+        assert_eq!(resolved["general"]["tabDockStrength"], 100);
+        assert_eq!(resolved["general"]["tabStripWidth"], 24);
+        assert_eq!(resolved["general"]["tabHideDelayMs"], 300);
+        assert_eq!(resolved["general"]["tabHideDurationMs"], 250);
+        assert_eq!(resolved["general"]["rewriteHistoryDir"], "history");
+
+        assert_eq!(resolved["scraps"]["scrapDir"], "~/Documents/syki-sok/scraps");
+        assert_eq!(resolved["scraps"]["maxPipeSizeMB"], 10);
+
+        assert_eq!(resolved["autocomplete"]["delayMs"], 500);
+        assert_eq!(resolved["autocomplete"]["maxTokens"], 30);
+
+        assert_eq!(resolved["voice"]["silence_timeout_sec"], 5);
+        assert_eq!(resolved["voice"]["barSilenceSec"], 1.5);
+        assert_eq!(resolved["voice"]["refine"]["timeoutSec"], 5);
+        assert_eq!(resolved["voice"]["realtime"]["apiStyle"], "auto");
+        assert_eq!(resolved["voice"]["batch"]["apiStyle"], "auto");
+        assert_eq!(resolved["whisper"]["threads"], 0);
+
+        assert_eq!(resolved["text"]["baseUrl"], "http://127.0.0.1:11434");
+        assert_eq!(resolved["text"]["model"], "qwen3:latest");
+    }
+
+    #[test]
+    fn resolve_config_with_defaults_preserves_existing_user_and_legacy_values() {
+        let legacy = r#"{
+            "scrap_dir": "E:\\custom_scraps",
+            "max_pipe_size_mb": 25,
+            "cfBridge": {"enabled": true},
+            "general": {"tabStripWidth": 36, "trimWebViewWhenHidden": false},
+            "autocomplete": {"delayMs": 900},
+            "whisper": {"threads": 4},
+            "text": {"baseUrl": "https://api.example.com", "model": "custom-model"}
+        }"#;
+        let hints = AutoDetectHints {
+            default_scrap_dir: Some("~/Documents/syki-sok/scraps".to_string()),
+            llm_base_url: Some("http://127.0.0.1:11434".to_string()),
+            llm_model: Some("qwen3:latest".to_string()),
+        };
+        let resolved = resolve_config_with_defaults(legacy, &hints);
+
+        assert_eq!(resolved["cfBridge"]["enabled"], true);
+        assert_eq!(resolved["scraps"]["scrapDir"], "E:\\custom_scraps");
+        assert_eq!(resolved["scraps"]["maxPipeSizeMB"], 25);
+        assert_eq!(resolved["general"]["tabStripWidth"], 36);
+        assert_eq!(resolved["general"]["trimWebViewWhenHidden"], false);
+        assert_eq!(resolved["general"]["rewriteHistoryDir"], "history");
+        assert_eq!(resolved["autocomplete"]["delayMs"], 900);
+        assert_eq!(resolved["autocomplete"]["maxTokens"], 30);
+        assert_eq!(resolved["whisper"]["threads"], 4);
+        assert_eq!(resolved["text"]["baseUrl"], "https://api.example.com");
+        assert_eq!(resolved["text"]["model"], "custom-model");
+    }
+
+    #[test]
+    fn load_resolved_json_fills_defaults_without_mutating_disk() {
+        let dir = tempdir().expect("tempdir");
+        let store = JsonConfigStore::new(dir.path().join("config.json"));
+        store.save_raw(r#"{"general":{"language":"ja"}}"#).expect("save");
+
+        let resolved_raw = store.load_resolved_json().expect("load resolved");
+        let resolved: serde_json::Value = serde_json::from_str(&resolved_raw).expect("parse");
+        assert_eq!(resolved["general"]["language"], "ja");
+        assert_eq!(resolved["scraps"]["maxPipeSizeMB"], 10);
+        assert_eq!(store.load_raw().expect("raw unchanged"), r#"{"general":{"language":"ja"}}"#);
     }
 }

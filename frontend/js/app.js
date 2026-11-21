@@ -14054,8 +14054,14 @@ OUTPUT FORMAT:
     config.autocomplete.baseUrl = document.getElementById('cfg-auto-base-url').value.trim() || 'http://localhost:11434';
     config.autocomplete.model = document.getElementById('cfg-auto-model').value.trim() || 'qwen2.5:latest';
     config.autocomplete.apiKey = document.getElementById('cfg-auto-api-key').value.trim();
-    config.autocomplete.delayMs = clampNumber(document.getElementById('cfg-auto-delay').value, 200, 2000, 500);
-    config.autocomplete.maxTokens = clampNumber(document.getElementById('cfg-auto-tokens').value, 10, 100, 30);
+    const saveAutoDelayEl = document.getElementById('cfg-auto-delay');
+    if (saveAutoDelayEl) {
+      config.autocomplete.delayMs = clampNumber(saveAutoDelayEl.value, 200, 2000, 500);
+    }
+    const saveAutoTokensEl = document.getElementById('cfg-auto-tokens');
+    if (saveAutoTokensEl) {
+      config.autocomplete.maxTokens = clampNumber(saveAutoTokensEl.value, 10, 100, 30);
+    }
 
     config.vision.baseUrl = document.getElementById('cfg-vision-base-url').value.trim() || 'https://generativelanguage.googleapis.com';
     config.vision.model = document.getElementById('cfg-vision-model').value.trim() || 'gemini-flash-lite-latest';
