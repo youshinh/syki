@@ -82,8 +82,12 @@ export async function launchEdge({ url, width, height, x = 40, y = 40 }) {
   const portFile = path.join(profileDir, 'DevToolsActivePort');
   for (let i = 0; i < 120; i++) {
     if (fs.existsSync(portFile)) {
-      const lines = fs.readFileSync(portFile, 'utf8').split('\n');
-      if (lines[0]) { handle.debugPort = Number(lines[0]); break; }
+      try {
+        const lines = fs.readFileSync(portFile, 'utf8').split('\n');
+        if (lines[0]) { handle.debugPort = Number(lines[0]); break; }
+      } catch (err) {
+        if (!err || !['EBUSY', 'EACCES', 'EPERM', 'ENOENT'].includes(err.code)) throw err;
+      }
     }
     await sleep(250);
   }
