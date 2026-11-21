@@ -833,10 +833,11 @@ pub fn transcribe_local_with_config(
     if use_speech {
         cmd.arg("asr").arg(&model_path);
         let vad = dir.join("silero-vad-309K-v6.2-F32.gguf");
-        if vad.is_file() {
+        let has_vad = vad.is_file();
+        if has_vad {
             cmd.arg("--vad").arg(&vad);
         }
-        if cfg.pointer("/whisper/diarize").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if has_vad && cfg.pointer("/whisper/diarize").and_then(|v| v.as_bool()).unwrap_or(false) {
             let dz = dir.join("Nemotron-3-Diarization-99M-Q8_0.gguf");
             if dz.is_file() {
                 cmd.arg("--diarize").arg(&dz);
