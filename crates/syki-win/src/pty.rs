@@ -380,8 +380,9 @@ fn resolve_work_dir(dir: &str) -> PathBuf {
 
 fn command_for_preset(preset: &str) -> &'static str {
     match preset.trim().to_ascii_lowercase().as_str() {
-        "claude" => "cmd.exe /k claude",
+        "cc" | "claude" | "claude-code" => "cmd.exe /k claude",
         "codex" => "cmd.exe /k codex",
+        "agy" | "antigravity" => "cmd.exe /k agy",
         "gemini" => "cmd.exe /k gemini",
         _ => "cmd.exe",
     }
@@ -389,10 +390,10 @@ fn command_for_preset(preset: &str) -> &'static str {
 
 pub fn available_presets() -> Value {
     json!([
-        { "id": "cmd", "label": "Command Prompt", "available": true },
-        { "id": "claude", "label": "Claude Code", "available": true },
-        { "id": "codex", "label": "Codex CLI", "available": true },
-        { "id": "gemini", "label": "Gemini CLI", "available": true }
+        { "id": "cc", "label": "Claude Code", "short": "cc", "available": true },
+        { "id": "codex", "label": "Codex", "short": "codex", "available": true },
+        { "id": "agy", "label": "Agy", "short": "agy", "available": true },
+        { "id": "shell", "label": "Shell", "short": "shell", "available": true }
     ])
 }
 
@@ -525,5 +526,15 @@ mod tests {
         }
         assert!(combined.contains("SYKI_PTY_OK"), "got output: {combined}");
         assert!(mgr.close("test-pty"));
+    }
+
+    #[test]
+    fn command_for_preset_maps_agent_presets() {
+        assert_eq!(command_for_preset("agy"), "cmd.exe /k agy");
+        assert_eq!(command_for_preset("cc"), "cmd.exe /k claude");
+        assert_eq!(command_for_preset("claude-code"), "cmd.exe /k claude");
+        assert_eq!(command_for_preset("codex"), "cmd.exe /k codex");
+        assert_eq!(command_for_preset("gemini"), "cmd.exe /k gemini");
+        assert_eq!(command_for_preset("shell"), "cmd.exe");
     }
 }
