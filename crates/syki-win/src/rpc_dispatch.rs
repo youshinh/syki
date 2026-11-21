@@ -17,7 +17,7 @@ use syki_core::storage::{
 };
 
 use crate::webview_host::HostHandle;
-use crate::{assets_store, clipboard, dialogs, host_lifecycle, ime, shell_pipe};
+use crate::{assets_store, clipboard, dialogs, host_lifecycle, ime, printing, shell_pipe};
 
 pub type EventSender = Arc<dyn Fn(RpcEvent) + Send + Sync>;
 
@@ -31,6 +31,7 @@ pub struct CoreState {
     event_sender: Mutex<Option<EventSender>>,
     host_handle: Mutex<Option<HostHandle>>,
     shell_pipe: shell_pipe::ShellPipeManager,
+    print_preview: printing::PrintPreviewStore,
 }
 
 impl CoreState {
@@ -46,7 +47,12 @@ impl CoreState {
             event_sender: Mutex::new(None),
             host_handle: Mutex::new(None),
             shell_pipe: shell_pipe::ShellPipeManager::new(),
+            print_preview: printing::PrintPreviewStore::new(),
         }
+    }
+
+    pub fn print_preview_store(&self) -> printing::PrintPreviewStore {
+        self.print_preview.clone()
     }
 
     pub fn set_event_sender(&self, sender: EventSender) {
@@ -540,6 +546,83 @@ impl CoreState {
 
             "isSendToShortcutInstalled" => RpcResponse::ok(&req.id, json!(false)),
             "fileTypesStatus" => RpcResponse::ok(&req.id, json!({ "registered": false })),
+
+            "printPreview" => {
+                let opts_val = param_value(&req.params, 0, "options").unwrap_or_else(|| json!({}));
+                let settings: printing::PrintSettings = match opts_val {
+                    Value::String(s) => serde_json::from_str(&s).unwrap_or_default(),
+                    other => serde_json::from_value(other).unwrap_or_default(),
+                };
+                let cdp_params = match settings.cdp_params() {
+                    Ok(p) => p,
+                    Err(e) => return RpcResponse::err(&req.id, e),
+                };
+                let handle = self.host_handle.lock().expect("host_handle mutex").clone();
+                let Some(h) = handle else {
+                    return RpcResponse::err(&req.id, "printPreview requires active WebView2 host");
+                };
+                match h
+                    .call_devtools_protocol("Page.printToPDF", &cdp_params.to_string())
+                    .and_then(|raw| printing::decode_pdf_result(&raw))
+                {
+                    Ok(pdf) => {
+                        let (url, pages) = self.print_preview.set_pdf(pdf);
+                        RpcResponse::ok(&req.id, json!({ "url": url, "pages": pages }))
+                    }
+                    Err(e) => RpcResponse::err(&req.id, e),
+                }
+            }
+
+            "printPickPdfPath" => {
+                let suggested = param_str(&req.params, 0, "suggestedName");
+                match printing::pick_pdf_save_path(suggested.as_deref()) {
+                    Ok(Some(p)) => RpcResponse::ok(&req.id, json!(p.to_string_lossy())),
+                    Ok(None) => RpcResponse::ok(&req.id, Value::Null),
+                    Err(e) => RpcResponse::err(&req.id, e),
+                }
+            }
+
+            "printSavePdf" => {
+                let opts_val = param_value(&req.params, 0, "options").unwrap_or_else(|| json!({}));
+                let out_path = param_str(&req.params, 1, "outPath").unwrap_or_default();
+                if out_path.trim().is_empty() {
+                    return RpcResponse::err(&req.id, "printSavePdf: missing output path");
+                }
+                let settings: printing::PrintSettings = match opts_val {
+                    Value::String(s) => serde_json::from_str(&s).unwrap_or_default(),
+                    other => serde_json::from_value(other).unwrap_or_default(),
+                };
+                let cdp_params = match settings.cdp_params() {
+                    Ok(p) => p,
+                    Err(e) => return RpcResponse::err(&req.id, e),
+                };
+                let handle = self.host_handle.lock().expect("host_handle mutex").clone();
+                let Some(h) = handle else {
+                    return RpcResponse::err(&req.id, "printSavePdf requires active WebView2 host");
+                };
+                match h
+                    .call_devtools_protocol("Page.printToPDF", &cdp_params.to_string())
+                    .and_then(|raw| printing::decode_pdf_result(&raw))
+                {
+                    Ok(pdf) => {
+                        match syki_core::storage::atomic::write_atomic_bytes(
+                            Path::new(out_path.trim()),
+                            &pdf,
+                        ) {
+                            Ok(()) => RpcResponse::ok(&req.id, json!(out_path.trim())),
+                            Err(e) => RpcResponse::err(&req.id, format!("write PDF failed: {e}")),
+                        }
+                    }
+                    Err(e) => RpcResponse::err(&req.id, e),
+                }
+            }
+
+            "printPreviewClose" => {
+                self.print_preview.clear();
+                RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "printSystem" => RpcResponse::ok(&req.id, json!(true)),
 
             other => RpcResponse::err(&req.id, format!("not_implemented_yet: {other}")),
         }

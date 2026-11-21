@@ -17,7 +17,8 @@ use syki_core::storage::{ConfigStore, JsonConfigStore, NoteFileStore, ScrapStore
 use syki_core::APP_VERSION;
 use syki_win::rpc_dispatch::CoreState;
 use syki_win::webview_host::{
-    run_webview_host_with_handle, HostHandle, WebViewHostConfig, VIRTUAL_ORIGIN,
+    run_webview_host_with_handle, DynamicRouteHandler, HostHandle, WebViewHostConfig,
+    VIRTUAL_ORIGIN,
 };
 
 fn try_forward_to_running_instance(env: &RuntimeEnv, startup_file: Option<&Path>) -> bool {
@@ -167,6 +168,9 @@ fn main() {
     let core = Arc::new(CoreState::new(env.clone(), startup_file));
     let core_for_rpc = Arc::clone(&core);
     let core_for_events = Arc::clone(&core);
+    let preview_store = core.print_preview_store();
+    let dyn_handler: Arc<DynamicRouteHandler> =
+        Arc::new(Box::new(move |rel| preview_store.route_response(rel)));
     let ipc_server_slot: Arc<Mutex<Option<IpcPipeServer>>> = Arc::new(Mutex::new(None));
     let ipc_slot_ready = Arc::clone(&ipc_server_slot);
     let env_for_ipc = env.clone();
@@ -181,7 +185,7 @@ fn main() {
     if let Err(err) = run_webview_host_with_handle(
         config,
         Arc::new(move |req| core_for_rpc.dispatch(req)),
-        None,
+        Some(dyn_handler),
         Some(Box::new(move |handle| {
             core_for_events.set_host_handle(handle.clone());
             let env_cb = env_for_ipc.clone();

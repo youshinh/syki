@@ -7,6 +7,7 @@ pub mod dialogs;
 pub mod host_lifecycle;
 pub mod ime;
 pub mod imgcap;
+pub mod printing;
 pub mod quick_capture;
 pub mod rpc_dispatch;
 pub mod shell_pipe;

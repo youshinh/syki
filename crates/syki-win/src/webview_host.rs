@@ -16,9 +16,9 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2EnvironmentOptions, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
 };
 use webview2_com::{
-    CoTaskMemPWSTR, CreateCoreWebView2ControllerCompletedHandler,
-    CreateCoreWebView2EnvironmentCompletedHandler, WebMessageReceivedEventHandler,
-    WebResourceRequestedEventHandler,
+    CallDevToolsProtocolMethodCompletedHandler, CoTaskMemPWSTR,
+    CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
+    WebMessageReceivedEventHandler, WebResourceRequestedEventHandler,
 };
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{E_POINTER, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -46,6 +46,13 @@ use crate::rpc_dispatch::EventSender;
 const WM_APP_PUSH_EVENT: u32 = WM_APP + 1;
 const WM_APP_ACTIVATE: u32 = WM_APP + 2;
 const WM_APP_WINDOW_CMD: u32 = WM_APP + 3;
+const WM_APP_DEVTOOLS_CALL: u32 = WM_APP + 4;
+
+struct DevToolsRequest {
+    method: String,
+    params_json: String,
+    reply_tx: mpsc::Sender<Result<String, String>>,
+}
 
 const WIN_CMD_MINIMIZE: usize = 1;
 const WIN_CMD_TOGGLE_MAX: usize = 2;
@@ -92,6 +99,36 @@ impl HostHandle {
 
     pub fn open_quick_capture(&self) {
         self.post_win_cmd(WIN_CMD_QUICK_CAPTURE);
+    }
+
+    pub fn call_devtools_protocol(
+        &self,
+        method: &str,
+        params_json: &str,
+    ) -> Result<String, String> {
+        let (tx, rx) = mpsc::channel();
+        let req = Box::new(DevToolsRequest {
+            method: method.to_string(),
+            params_json: params_json.to_string(),
+            reply_tx: tx,
+        });
+        let raw = Box::into_raw(req);
+        let posted = unsafe {
+            PostMessageW(
+                Some(HWND(self.hwnd_raw as *mut _)),
+                WM_APP_DEVTOOLS_CALL,
+                WPARAM(0),
+                LPARAM(raw as isize),
+            )
+        };
+        if posted.is_err() {
+            unsafe {
+                let _ = Box::from_raw(raw);
+            }
+            return Err("failed to post CDP request to UI thread".to_string());
+        }
+        rx.recv_timeout(std::time::Duration::from_secs(90))
+            .map_err(|e| format!("CDP call timed out: {e}"))?
     }
 
     pub fn update_main_hotkey(&self, spec: &str) -> Result<bool, String> {
@@ -320,6 +357,44 @@ extern "system" fn host_wnd_proc(
                     }
                 }
                 _ => {}
+            }
+            LRESULT(0)
+        }
+        WM_APP_DEVTOOLS_CALL => {
+            let req = unsafe { Box::from_raw(l_param.0 as *mut DevToolsRequest) };
+            let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const WindowState;
+            let wv_opt = if !ptr.is_null() {
+                unsafe { &*ptr }.webview.borrow().clone()
+            } else {
+                None
+            };
+            let Some(wv) = wv_opt else {
+                let _ = req.reply_tx.send(Err("webview not initialized".to_string()));
+                return LRESULT(0);
+            };
+            let method_w = CoTaskMemPWSTR::from(req.method.as_str());
+            let params_w = CoTaskMemPWSTR::from(req.params_json.as_str());
+            let tx = req.reply_tx;
+            let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(
+                move |hr, json_pwstr| {
+                    if hr.is_err() {
+                        let _ = tx.send(Err(format!("CDP error: {hr:?}")));
+                    } else {
+                        let out = json_pwstr.to_string();
+                        let _ = tx.send(Ok(out));
+                    }
+                    Ok(())
+                },
+            ));
+            if let Err(e) = unsafe {
+                wv.CallDevToolsProtocolMethod(
+                    *method_w.as_ref().as_pcwstr(),
+                    *params_w.as_ref().as_pcwstr(),
+                    &handler,
+                )
+            } {
+                // Note: if CallDevToolsProtocolMethod fails synchronously, handler isn't called.
+                eprintln!("CallDevToolsProtocolMethod error: {e}");
             }
             LRESULT(0)
         }
@@ -629,8 +704,9 @@ pub fn run_webview_host_with_handle(
         )?;
     }
 
-    let webview_for_msg = webview.clone();
     let rpc_for_msg = rpc_handler.clone();
+    let q_for_msg = Arc::clone(&event_queue);
+    let hwnd_for_msg = hwnd.0 as isize;
     let mut msg_token: i64 = 0;
     unsafe {
         webview.add_WebMessageReceived(
@@ -641,9 +717,18 @@ pub fn run_webview_host_with_handle(
                 let mut raw_pwstr = PWSTR::null();
                 if args.WebMessageAsJson(&mut raw_pwstr).is_ok() {
                     let raw_json = CoTaskMemPWSTR::from(raw_pwstr).to_string();
-                    let reply_json = dispatch_rpc_message(&raw_json, rpc_for_msg.as_ref());
-                    let reply_w = CoTaskMemPWSTR::from(reply_json.as_str());
-                    let _ = webview_for_msg.PostWebMessageAsJson(*reply_w.as_ref().as_pcwstr());
+                    let rpc = Arc::clone(&rpc_for_msg);
+                    let q = Arc::clone(&q_for_msg);
+                    std::thread::spawn(move || {
+                        let reply_json = dispatch_rpc_message(&raw_json, rpc.as_ref());
+                        q.lock().expect("event_queue mutex").push_back(reply_json);
+                        let _ = PostMessageW(
+                            Some(HWND(hwnd_for_msg as *mut _)),
+                            WM_APP_PUSH_EVENT,
+                            WPARAM(0),
+                            LPARAM(0),
+                        );
+                    });
                 }
                 Ok(())
             })),
