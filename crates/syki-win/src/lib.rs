@@ -9,6 +9,7 @@ pub mod ime;
 pub mod imgcap;
 pub mod llm;
 pub mod printing;
+pub mod pty;
 pub mod quick_capture;
 pub mod rpc_dispatch;
 pub mod shell_pipe;

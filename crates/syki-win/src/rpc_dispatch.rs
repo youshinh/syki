@@ -17,7 +17,7 @@ use syki_core::storage::{
 };
 
 use crate::webview_host::HostHandle;
-use crate::{assets_store, clipboard, dialogs, host_lifecycle, ime, llm, printing, shell_pipe};
+use crate::{assets_store, clipboard, dialogs, host_lifecycle, ime, llm, printing, pty, shell_pipe};
 
 pub type EventSender = Arc<dyn Fn(RpcEvent) + Send + Sync>;
 
@@ -32,6 +32,7 @@ pub struct CoreState {
     host_handle: Mutex<Option<HostHandle>>,
     shell_pipe: shell_pipe::ShellPipeManager,
     print_preview: printing::PrintPreviewStore,
+    pty_mgr: pty::PtyManager,
 }
 
 impl CoreState {
@@ -48,6 +49,7 @@ impl CoreState {
             host_handle: Mutex::new(None),
             shell_pipe: shell_pipe::ShellPipeManager::new(),
             print_preview: printing::PrintPreviewStore::new(),
+            pty_mgr: pty::PtyManager::new(),
         }
     }
 
@@ -689,6 +691,81 @@ impl CoreState {
             "getAvailableSkillsJSON" => RpcResponse::ok(&req.id, json!("[]")),
             "getSkillInstruction" => RpcResponse::ok(&req.id, json!("")),
 
+            "ptyAvailablePresets" => {
+                RpcResponse::ok(&req.id, json!(pty::available_presets().to_string()))
+            }
+            "ptyStart" => {
+                let preset = param_str(&req.params, 0, "preset").unwrap_or_else(|| "cmd".into());
+                let dir = param_str(&req.params, 1, "dir").unwrap_or_default();
+                let sender = self.event_sender.lock().expect("event_sender mutex").clone();
+                match self.pty_mgr.start_session("", &preset, &dir, "", sender) {
+                    Ok(info) => RpcResponse::ok(&req.id, json!(info.to_string())),
+                    Err(e) => RpcResponse::err(&req.id, e),
+                }
+            }
+            "ptyStartWithOptions" => {
+                let explicit_id = param_str(&req.params, 0, "explicitId").unwrap_or_default();
+                let preset = param_str(&req.params, 1, "preset").unwrap_or_else(|| "cmd".into());
+                let dir = param_str(&req.params, 2, "dir").unwrap_or_default();
+                let label = param_str(&req.params, 3, "label").unwrap_or_default();
+                let sender = self.event_sender.lock().expect("event_sender mutex").clone();
+                match self
+                    .pty_mgr
+                    .start_session(&explicit_id, &preset, &dir, &label, sender)
+                {
+                    Ok(info) => RpcResponse::ok(&req.id, json!(info.to_string())),
+                    Err(e) => RpcResponse::err(&req.id, e),
+                }
+            }
+            "ptyWrite" => {
+                let id = param_str(&req.params, 0, "id").unwrap_or_default();
+                let data = param_str(&req.params, 1, "data").unwrap_or_default();
+                match self.pty_mgr.write(&id, &data) {
+                    Ok(()) => RpcResponse::ok(&req.id, json!(true)),
+                    Err(e) => RpcResponse::err(&req.id, e),
+                }
+            }
+            "ptyResize" => {
+                let id = param_str(&req.params, 0, "id").unwrap_or_default();
+                let cols = param_u64(&req.params, 1, "cols").unwrap_or(80) as u16;
+                let rows = param_u64(&req.params, 2, "rows").unwrap_or(24) as u16;
+                match self.pty_mgr.resize(&id, cols, rows) {
+                    Ok(()) => RpcResponse::ok(&req.id, json!(true)),
+                    Err(e) => RpcResponse::err(&req.id, e),
+                }
+            }
+            "ptyRename" => {
+                let id = param_str(&req.params, 0, "id").unwrap_or_default();
+                let label = param_str(&req.params, 1, "label").unwrap_or_default();
+                match self.pty_mgr.rename(&id, &label) {
+                    Ok(lbl) => RpcResponse::ok(&req.id, json!(lbl)),
+                    Err(e) => RpcResponse::err(&req.id, e),
+                }
+            }
+            "ptyClose" => {
+                let id = param_str(&req.params, 0, "id").unwrap_or_default();
+                RpcResponse::ok(&req.id, json!(self.pty_mgr.close(&id)))
+            }
+            "ptyHistory" => {
+                let id = param_str(&req.params, 0, "id").unwrap_or_default();
+                RpcResponse::ok(&req.id, json!(self.pty_mgr.history(&id)))
+            }
+            "ptyDetectGate" => {
+                let dir = param_str(&req.params, 0, "dir").unwrap_or_default();
+                RpcResponse::ok(&req.id, json!(pty::detect_project_gate(Path::new(dir.trim()))))
+            }
+            "ptyPickFolder" => match dialogs::pick_folder(None, None) {
+                Ok(Some(p)) => RpcResponse::ok(&req.id, json!(p.to_string_lossy())),
+                Ok(None) => RpcResponse::ok(&req.id, Value::Null),
+                Err(e) => RpcResponse::err(&req.id, e),
+            },
+            "ptyPrepareWorktree" => {
+                let dir = param_str(&req.params, 0, "dir").unwrap_or_default();
+                let id = param_str(&req.params, 1, "id").unwrap_or_default();
+                RpcResponse::ok(&req.id, json!(pty::prepare_worktree(&dir, &id).to_string()))
+            }
+            "ptySuggestDirs" => RpcResponse::ok(&req.id, json!(pty::suggest_dirs())),
+
             other => RpcResponse::err(&req.id, format!("not_implemented_yet: {other}")),
         }
     }
@@ -1083,7 +1160,7 @@ mod tests {
         let (root, state) = temp_env("ext");
         let bad = state.dispatch(&req("openExternal", json!(["file:///C:/Windows/win.ini"])));
         assert!(!bad.ok);
-        let unimpl = state.dispatch(&req("ptyStart", json!([])));
+        let unimpl = state.dispatch(&req("someUnknownMethodForTest", json!([])));
         assert!(!unimpl.ok);
         assert!(unimpl.error.unwrap().starts_with("not_implemented_yet:"));
         let _ = std::fs::remove_dir_all(root);
