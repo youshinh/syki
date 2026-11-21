@@ -500,6 +500,13 @@ impl CoreState {
                 RpcResponse::ok(&req.id, json!(true))
             }
 
+            "openQuickCapture" => {
+                if let Some(h) = self.host_handle.lock().expect("host_handle mutex").as_ref() {
+                    h.open_quick_capture();
+                }
+                RpcResponse::ok(&req.id, json!(true))
+            }
+
             "updateGlobalShortcut" => {
                 let spec = param_str(&req.params, 0, "shortcut").unwrap_or_default();
                 let guard = self.host_handle.lock().expect("host_handle mutex");

@@ -51,6 +51,7 @@ const WIN_CMD_MINIMIZE: usize = 1;
 const WIN_CMD_TOGGLE_MAX: usize = 2;
 const WIN_CMD_HIDE: usize = 3;
 const WIN_CMD_FORCE_QUIT: usize = 4;
+const WIN_CMD_QUICK_CAPTURE: usize = 5;
 
 /// Thread-safe handle to push `RpcEvent`s or control the Win32 host window.
 #[derive(Clone)]
@@ -87,6 +88,10 @@ impl HostHandle {
 
     pub fn force_quit(&self) {
         self.post_win_cmd(WIN_CMD_FORCE_QUIT);
+    }
+
+    pub fn open_quick_capture(&self) {
+        self.post_win_cmd(WIN_CMD_QUICK_CAPTURE);
     }
 
     pub fn update_main_hotkey(&self, spec: &str) -> Result<bool, String> {
@@ -191,6 +196,8 @@ struct WindowState {
     canvas: RefCell<CanvasHostState>,
     hotkey_main: Arc<Mutex<String>>,
     hotkey_qc: Arc<Mutex<String>>,
+    data_dir: PathBuf,
+    event_sender: Rc<RefCell<Option<EventSender>>>,
 }
 
 fn client_rect_of(hwnd: HWND) -> RECT {
@@ -288,6 +295,16 @@ extern "system" fn host_wnd_proc(
                 WIN_CMD_FORCE_QUIT => {
                     let _ = unsafe { DestroyWindow(hwnd) };
                 }
+                WIN_CMD_QUICK_CAPTURE => {
+                    if !ptr.is_null() {
+                        let state = unsafe { &*ptr };
+                        let sender = state.event_sender.borrow().clone();
+                        crate::quick_capture::open_quick_capture_popup(
+                            state.data_dir.clone(),
+                            sender,
+                        );
+                    }
+                }
                 10 => {
                     if !ptr.is_null() {
                         let state = unsafe { &*ptr };
@@ -307,8 +324,18 @@ extern "system" fn host_wnd_proc(
             LRESULT(0)
         }
         WM_HOTKEY => {
-            if w_param.0 as i32 == HOTKEY_ID_MAIN {
+            let id = w_param.0 as i32;
+            if id == HOTKEY_ID_MAIN {
                 let _ = unsafe { PostMessageW(Some(hwnd), WM_APP_ACTIVATE, WPARAM(0), LPARAM(0)) };
+            } else if id == HOTKEY_ID_QUICKCAPTURE {
+                let _ = unsafe {
+                    PostMessageW(
+                        Some(hwnd),
+                        WM_APP_WINDOW_CMD,
+                        WPARAM(WIN_CMD_QUICK_CAPTURE),
+                        LPARAM(0),
+                    )
+                };
             }
             LRESULT(0)
         }
@@ -323,7 +350,16 @@ extern "system" fn host_wnd_proc(
                             PostMessageW(Some(hwnd), WM_APP_ACTIVATE, WPARAM(0), LPARAM(0))
                         };
                     }
-                    Some(TRAY_CMD_QUICK_CAPTURE) => {}
+                    Some(TRAY_CMD_QUICK_CAPTURE) => {
+                        let _ = unsafe {
+                            PostMessageW(
+                                Some(hwnd),
+                                WM_APP_WINDOW_CMD,
+                                WPARAM(WIN_CMD_QUICK_CAPTURE),
+                                LPARAM(0),
+                            )
+                        };
+                    }
                     Some(TRAY_CMD_EXIT) => {
                         let _ = unsafe { DestroyWindow(hwnd) };
                     }
@@ -438,6 +474,12 @@ pub fn run_webview_host_with_handle(
     let event_queue: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
     let hotkey_main = Arc::new(Mutex::new(String::new()));
     let hotkey_qc = Arc::new(Mutex::new(String::new()));
+    let event_sender_slot: Rc<RefCell<Option<EventSender>>> = Rc::new(RefCell::new(None));
+    let data_dir = config
+        .user_data_dir
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| syki_core::rpc::RuntimeEnv::from_env().data_dir);
     let boxed_state = Box::new(WindowState {
         controller: Rc::clone(&controller_slot),
         webview: Rc::clone(&webview_slot),
@@ -445,6 +487,8 @@ pub fn run_webview_host_with_handle(
         canvas: RefCell::new(CanvasHostState::new()),
         hotkey_main: Arc::clone(&hotkey_main),
         hotkey_qc: Arc::clone(&hotkey_qc),
+        data_dir,
+        event_sender: Rc::clone(&event_sender_slot),
     });
     unsafe {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(boxed_state) as isize);
@@ -519,6 +563,7 @@ pub fn run_webview_host_with_handle(
                 }
             }
         });
+        *event_sender_slot.borrow_mut() = Some(sender.clone());
         cb(HostHandle {
             event_sender: sender,
             hwnd_raw,
