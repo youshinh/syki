@@ -614,12 +614,14 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror",
+ "windows",
 ]
 
 [[package]]
 name = "syki-gui"
 version = "2.0.0-alpha.1"
 dependencies = [
+ "serde_json",
  "syki-core",
  "syki-win",
 ]

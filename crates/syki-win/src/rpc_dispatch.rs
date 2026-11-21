@@ -11,7 +11,7 @@ use syki_core::storage::{
     ActiveFileWatcher, ConfigStore, JsonConfigStore, LoadedNote, NoteFileStore, SessionStore,
 };
 
-use crate::{assets_store, clipboard, dialogs, ime};
+use crate::{assets_store, clipboard, dialogs, ime, shell_pipe};
 
 pub type EventSender = Arc<dyn Fn(RpcEvent) + Send + Sync>;
 
@@ -23,6 +23,7 @@ pub struct CoreState {
     watcher: Mutex<Option<ActiveFileWatcher>>,
     startup_file: Mutex<Option<PathBuf>>,
     event_sender: Mutex<Option<EventSender>>,
+    shell_pipe: shell_pipe::ShellPipeManager,
 }
 
 impl CoreState {
@@ -36,6 +37,7 @@ impl CoreState {
             watcher: Mutex::new(None),
             startup_file: Mutex::new(startup_file),
             event_sender: Mutex::new(None),
+            shell_pipe: shell_pipe::ShellPipeManager::new(),
         }
     }
 
@@ -351,6 +353,28 @@ impl CoreState {
                 let sender = self.event_sender.lock().expect("event_sender mutex").clone();
                 ime::retype_with_ime_async(req_id, romaji, sender);
                 RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "runCommandFilter" => {
+                let cmd_str = param_str(&req.params, 0, "cmdStr").unwrap_or_default();
+                let input = param_str(&req.params, 1, "input").unwrap_or_default();
+                let res = shell_pipe::run_command_filter(&cmd_str, &input, None);
+                RpcResponse::ok(&req.id, serde_json::to_value(res).unwrap_or(Value::Null))
+            }
+
+            "runCommandFilterAsync" => {
+                let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
+                let cmd_str = param_str(&req.params, 1, "cmdStr").unwrap_or_default();
+                let input = param_str(&req.params, 2, "input").unwrap_or_default();
+                let sender = self.event_sender.lock().expect("event_sender mutex").clone();
+                self.shell_pipe.run_async(req_id, cmd_str, input, sender);
+                RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "cancelCommandFilter" => {
+                let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
+                let cancelled = self.shell_pipe.cancel(&req_id);
+                RpcResponse::ok(&req.id, json!(cancelled))
             }
 
             other => RpcResponse::err(&req.id, format!("not_implemented_yet: {other}")),

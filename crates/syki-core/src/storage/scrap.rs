@@ -79,6 +79,16 @@ impl ScrapStore {
         file.sync_all()?;
         Ok(target)
     }
+
+    pub fn append_formatted(
+        scrap_dir: &Path,
+        content: &str,
+        command: &str,
+    ) -> Result<PathBuf, StorageError> {
+        let now = Local::now();
+        let entry = Self::format_scrap_entry(content, command, now);
+        Self::append_entry(scrap_dir, &entry, now)
+    }
 }
 
 fn home_dir_from_env() -> PathBuf {

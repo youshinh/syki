@@ -5,6 +5,7 @@
 //! resolution (instance-scoped data directory, mutex name and WebView2
 //! user-data folder). It intentionally has no UI or OS-binding code.
 
+pub mod ipc;
 pub mod rpc;
 pub mod storage;
 

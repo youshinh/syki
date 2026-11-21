@@ -29,14 +29,36 @@ use windows::Win32::UI::HiDpi::{SetProcessDpiAwareness, PROCESS_PER_MONITOR_DPI_
 use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW,
-    GetWindowLongPtrW, PostMessageW, PostQuitMessage, RegisterClassW, SetWindowLongPtrW,
-    ShowWindow, TranslateMessage, CW_USEDEFAULT, GWLP_USERDATA, MSG, SW_SHOW, WINDOW_EX_STYLE,
-    WM_APP, WM_CLOSE, WM_DESTROY, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    GetWindowLongPtrW, PostMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow,
+    SetWindowLongPtrW, ShowWindow, TranslateMessage, CW_USEDEFAULT, GWLP_USERDATA, MSG,
+    SW_RESTORE, SW_SHOW, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_DESTROY, WM_SIZE, WNDCLASSW,
+    WS_OVERLAPPEDWINDOW,
 };
 
 use crate::rpc_dispatch::EventSender;
 
 const WM_APP_PUSH_EVENT: u32 = WM_APP + 1;
+const WM_APP_ACTIVATE: u32 = WM_APP + 2;
+
+/// Thread-safe handle to push `RpcEvent`s or bring the main window to the foreground.
+#[derive(Clone)]
+pub struct HostHandle {
+    pub event_sender: EventSender,
+    hwnd_raw: isize,
+}
+
+impl HostHandle {
+    pub fn activate_window(&self) {
+        unsafe {
+            let _ = PostMessageW(
+                Some(HWND(self.hwnd_raw as *mut _)),
+                WM_APP_ACTIVATE,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        }
+    }
+}
 
 pub const VIRTUAL_ORIGIN: &str = "https://app.syki.local/";
 
@@ -162,6 +184,13 @@ extern "system" fn host_wnd_proc(
             }
             LRESULT(0)
         }
+        WM_APP_ACTIVATE => {
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+                let _ = SetForegroundWindow(hwnd);
+            }
+            LRESULT(0)
+        }
         WM_CLOSE => {
             let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const WindowState;
             if !ptr.is_null() {
@@ -207,6 +236,21 @@ pub fn run_webview_host_with_events(
     rpc_handler: Arc<dyn Fn(&RpcRequest) -> RpcResponse + Send + Sync>,
     dynamic_handler: Option<Arc<DynamicRouteHandler>>,
     on_ready: Option<Box<dyn FnOnce(EventSender)>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_webview_host_with_handle(
+        config,
+        rpc_handler,
+        dynamic_handler,
+        on_ready.map(|cb| -> Box<dyn FnOnce(HostHandle)> { Box::new(move |h| cb(h.event_sender)) }),
+    )
+}
+
+/// Launches the single Win32 frame + WebView2 controller loop with a [`HostHandle`] callback.
+pub fn run_webview_host_with_handle(
+    config: WebViewHostConfig,
+    rpc_handler: Arc<dyn Fn(&RpcRequest) -> RpcResponse + Send + Sync>,
+    dynamic_handler: Option<Arc<DynamicRouteHandler>>,
+    on_ready: Option<Box<dyn FnOnce(HostHandle)>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
         CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
@@ -327,7 +371,10 @@ pub fn run_webview_host_with_events(
                 }
             }
         });
-        cb(sender);
+        cb(HostHandle {
+            event_sender: sender,
+            hwnd_raw,
+        });
     }
     if !config.debug {
         unsafe {
