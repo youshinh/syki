@@ -246,12 +246,17 @@ pub fn show_tray_menu(hwnd: HWND) -> Option<u32> {
     }
 }
 
-/// Releases unused working-set pages on a background thread.
-pub fn trim_working_set_async() {
-    std::thread::spawn(|| unsafe {
+/// Releases unused working-set pages synchronously.
+pub fn trim_working_set_sync() {
+    unsafe {
         let proc_h = GetCurrentProcess();
         let _ = EmptyWorkingSet(proc_h);
-    });
+    }
+}
+
+/// Releases unused working-set pages on a background thread.
+pub fn trim_working_set_async() {
+    std::thread::spawn(trim_working_set_sync);
 }
 
 /// Returns current process working set in bytes.

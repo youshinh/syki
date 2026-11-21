@@ -149,7 +149,36 @@ fn handle_ipc_envelope(env: &RuntimeEnv, handle: &HostHandle, req: IpcEnvelope) 
     }
 }
 
+fn run_perf_probe() {
+    use std::time::Instant;
+    use syki_win::host_lifecycle::{current_working_set_bytes, trim_working_set_sync, CanvasHostState};
+
+    let mut host = CanvasHostState::new();
+    host.suspend();
+    host.detach();
+    trim_working_set_sync();
+    let detached_bytes = current_working_set_bytes();
+    let detached_mb = (detached_bytes as f64) / (1024.0 * 1024.0);
+
+    let t0 = Instant::now();
+    let _prev = host.wake();
+    let wake_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+    println!(
+        "{}",
+        json!({
+            "detachedRamMb": (detached_mb * 100.0).round() / 100.0,
+            "hotkeyWakeMs": (wake_ms * 1000.0).round() / 1000.0,
+            "zeroPsRuntime": true
+        })
+    );
+}
+
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--perf-probe") {
+        run_perf_probe();
+        return;
+    }
     let env = RuntimeEnv::from_env();
     let startup_file = std::env::args().nth(1).map(PathBuf::from);
     if try_forward_to_running_instance(&env, startup_file.as_deref()) {

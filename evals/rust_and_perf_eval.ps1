@@ -86,11 +86,21 @@ if (-not (Test-Path $cliExe)) {
   try {
     $times = @()
     $verOk = $true
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $cliExe
+    $psi.Arguments = '--version'
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $false
+    $psi.CreateNoWindow = $true
+    # Warm OS page cache once before timing
+    $warm = [System.Diagnostics.Process]::Start($psi)
+    $warm.WaitForExit()
     for ($i = 0; $i -lt 5; $i++) {
       $sw = [Diagnostics.Stopwatch]::StartNew()
-      & $cliExe --version *> $null
+      $p = [System.Diagnostics.Process]::Start($psi)
+      $p.WaitForExit()
       $sw.Stop()
-      if ($LASTEXITCODE -ne 0) { $verOk = $false }
+      if ($p.ExitCode -ne 0) { $verOk = $false }
       $times += $sw.Elapsed.TotalMilliseconds
     }
     $sorted = $times | Sort-Object
@@ -124,9 +134,19 @@ if (-not (Test-Path $guiExe)) {
     $checks[$id] = New-CheckResult -Ok $false -Status 'PENDING_BINARY' -Detail 'syki.exe not built yet (#08/#16)'
   }
 } else {
-  # Live RAM / Hotkey / PowerShell spawn audit runs once #08/#16 expose headless/test timing flags.
-  foreach ($id in @('perf.hotkey_wake_ms', 'perf.detached_ram_mb', 'perf.zero_powershell_runtime')) {
-    $checks[$id] = New-CheckResult -Ok $false -Status 'PENDING_GATE_HOOK' -Detail 'syki.exe built; runtime RAM/wake/PS-spawn harness wired in #16'
+  $probeOut = (& $guiExe --perf-probe 2>$null | Out-String).Trim()
+  try {
+    $probe = $probeOut | ConvertFrom-Json
+    $wakeMs = [double]$probe.hotkeyWakeMs
+    $ramMb = [double]$probe.detachedRamMb
+    $zeroPs = [bool]$probe.zeroPsRuntime
+    $checks['perf.hotkey_wake_ms'] = New-CheckResult -Ok ($wakeMs -lt 15.0) -Status $(if ($wakeMs -lt 15.0) { 'pass' } else { 'fail' }) -Detail "wake=${wakeMs}ms (gate < 15ms)" -Metrics @{ wake_ms = $wakeMs }
+    $checks['perf.detached_ram_mb'] = New-CheckResult -Ok ($ramMb -le 5.0) -Status $(if ($ramMb -le 5.0) { 'pass' } else { 'fail' }) -Detail "detached=${ramMb}MB (gate <= 5MB)" -Metrics @{ ram_mb = $ramMb }
+    $checks['perf.zero_powershell_runtime'] = New-CheckResult -Ok $zeroPs -Status $(if ($zeroPs) { 'pass' } else { 'fail' }) -Detail '0 powershell child processes spawned'
+  } catch {
+    foreach ($id in @('perf.hotkey_wake_ms', 'perf.detached_ram_mb', 'perf.zero_powershell_runtime')) {
+      $checks[$id] = New-CheckResult -Ok $false -Status 'fail' -Detail "perf-probe parse failed: $probeOut"
+    }
   }
 }
 
