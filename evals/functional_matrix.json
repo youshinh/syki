@@ -3,9 +3,9 @@
   "title": "syki-lite Functional Evaluation & Acceptance Matrix",
   "total_weight": 100,
   "quantitative_gates": {
-    "cli_cold_start_ms_max": 5.0,
-    "hotkey_wake_ms_max": 15.0,
-    "detached_ram_mb_max": 5.0,
+    "cli_cold_start_ms_max": 5,
+    "hotkey_wake_ms_max": 15,
+    "detached_ram_mb_max": 5,
     "detached_webview_procs_max": 0,
     "powershell_spawns_max": 0
   },
@@ -14,235 +14,464 @@
       "id": "F01",
       "name": "Editor I/O, Tabs, Split Panes & Layout",
       "weight": 8,
-      "owner_tasks": ["#01", "#02", "#03", "#04"],
+      "owner_tasks": [
+        "#01",
+        "#02",
+        "#03",
+        "#04"
+      ],
       "checks": {
-        "static": ["frontend.js_syntax", "frontend.html_assets_resolve", "frontend.html_div_balance", "seam.backend_proxy_present", "fixtures.v1_valid"],
+        "static": [
+          "frontend.js_syntax",
+          "frontend.html_assets_resolve",
+          "frontend.html_div_balance",
+          "seam.backend_proxy_present",
+          "fixtures.v1_valid"
+        ],
         "js_unit": [
-          "about_dialog_test.js", "appearance_test.js", "chrome_layout_test.js", "chrome_overlay_test.js",
-          "comment_toggle_test.js", "disk_sync_test.js", "editor_zoom_test.js", "find_replace_engine_test.js",
-          "first_run_test.js", "goto_line_test.js", "line_gutter_test.js", "note_hash_test.js",
-          "note_title_test.js", "settings_modal_test.js", "tab_overflow_test.js", "tab_strip_test.js", "view_layout_test.js"
+          "about_dialog_test.js",
+          "appearance_test.js",
+          "chrome_layout_test.js",
+          "chrome_overlay_test.js",
+          "comment_toggle_test.js",
+          "disk_sync_test.js",
+          "editor_zoom_test.js",
+          "find_replace_engine_test.js",
+          "first_run_test.js",
+          "goto_line_test.js",
+          "line_gutter_test.js",
+          "note_hash_test.js",
+          "note_title_test.js",
+          "settings_modal_test.js",
+          "tab_overflow_test.js",
+          "tab_strip_test.js",
+          "view_layout_test.js"
         ],
         "smoke": [
-          "07_settings", "08_tab_overflow", "09_about", "10_welcome_once", "31_settings_tab_order",
-          "32_language_switch_live", "62_find_bar_keeps_the_note", "64_edits_stay_undoable",
-          "66_file_changed_on_disk", "74_zen_chrome_takes_no_focus", "81_keyboard_exits",
-          "83_find_gutter_and_panes", "86_failed_save_stays_visible", "108_appearance",
-          "109_tab_index_reorder", "110_chrome_overlay", "111_chrome_zen", "112_tab_index_expand",
-          "113_tab_index_modes", "114_tab_index_overflow_pages", "115_pane_resizer",
-          "116_sheets_and_pages", "117_split_boundary"
+          "07_settings",
+          "08_tab_overflow",
+          "09_about",
+          "10_welcome_once",
+          "31_settings_tab_order",
+          "32_language_switch_live",
+          "62_find_bar_keeps_the_note",
+          "64_edits_stay_undoable",
+          "66_file_changed_on_disk",
+          "74_zen_chrome_takes_no_focus",
+          "81_keyboard_exits",
+          "83_find_gutter_and_panes",
+          "86_failed_save_stays_visible",
+          "108_appearance",
+          "109_tab_index_reorder",
+          "110_chrome_overlay",
+          "111_chrome_zen",
+          "112_tab_index_expand",
+          "113_tab_index_modes",
+          "114_tab_index_overflow_pages",
+          "115_pane_resizer",
+          "116_sheets_and_pages",
+          "117_split_boundary"
         ],
-        "rust_perf": ["rust.workspace_present", "cargo_test_workspace"]
+        "rust_perf": [
+          "rust.workspace_present",
+          "cargo_test_workspace"
+        ]
       }
     },
     {
       "id": "F02",
       "name": "Scrap Daily Notes & Parallel Search",
       "weight": 7,
-      "owner_tasks": ["#02", "#07"],
+      "owner_tasks": [
+        "#02",
+        "#07"
+      ],
       "checks": {
-        "static": ["fixtures.v1_valid"],
-        "js_unit": ["scrap_quote_test.js", "scraps_filter_test.js", "search_workbench_test.js"],
-        "smoke": ["06_search", "88_search_ranked_note", "92_search_without_semantic", "103_search_filter"],
-        "rust_perf": ["cargo_test_workspace", "cli.kept_subcommands"]
+        "static": [
+          "fixtures.v1_valid"
+        ],
+        "js_unit": [
+          "scrap_quote_test.js",
+          "scraps_filter_test.js",
+          "search_workbench_test.js"
+        ],
+        "smoke": [
+          "06_search",
+          "88_search_ranked_note",
+          "92_search_without_semantic",
+          "103_search_filter"
+        ],
+        "rust_perf": [
+          "cargo_test_workspace",
+          "cli.kept_subcommands"
+        ]
       }
     },
     {
       "id": "F04",
       "name": "syki-cli, Stdin Pipe, Single-Instance IPC & JSON-RPC",
       "weight": 8,
-      "owner_tasks": ["#04", "#06"],
+      "owner_tasks": [
+        "#04",
+        "#06"
+      ],
       "checks": {
-        "static": ["fixtures.v1_valid", "seam.backend_proxy_present"],
-        "js_unit": ["rpc_bridge_test.js", "secret_strip_test.js"],
-        "smoke": ["89_rpc_cursor", "90_rpc_ui_state_and_panels", "91_rpc_tab_info_and_tasks"],
-        "rust_perf": ["cargo_test_workspace", "cli.kept_subcommands"]
+        "static": [
+          "fixtures.v1_valid",
+          "seam.backend_proxy_present"
+        ],
+        "js_unit": [
+          "rpc_bridge_test.js",
+          "secret_strip_test.js"
+        ],
+        "smoke": [
+          "89_rpc_cursor",
+          "90_rpc_ui_state_and_panels",
+          "91_rpc_tab_info_and_tasks"
+        ],
+        "rust_perf": [
+          "cargo_test_workspace",
+          "cli.kept_subcommands"
+        ]
       }
     },
     {
       "id": "F05",
       "name": "Shell Pipe (Ctrl+E)",
       "weight": 4,
-      "owner_tasks": ["#06"],
+      "owner_tasks": [
+        "#06"
+      ],
       "checks": {
         "static": [],
         "js_unit": [],
-        "smoke": ["04_command_bar", "61_result_stays_in_its_note"],
-        "rust_perf": ["cargo_test_workspace"]
+        "smoke": [
+          "04_command_bar",
+          "61_result_stays_in_its_note"
+        ],
+        "rust_perf": [
+          "cargo_test_workspace"
+        ]
       }
     },
     {
       "id": "F06",
       "name": "Live Markdown Preview (markdown-it / KaTeX / Mermaid)",
       "weight": 5,
-      "owner_tasks": ["#03", "#05"],
+      "owner_tasks": [
+        "#03",
+        "#05"
+      ],
       "checks": {
-        "static": ["frontend.html_assets_resolve"],
-        "js_unit": ["html_to_md_test.js", "html_comments_test.js", "mermaid_tone_test.js", "preview_images_test.js"],
-        "smoke": ["05_palette", "63_palette_acts_on_focused_pane", "87_preview_to_side_shortcut"],
-        "rust_perf": ["rust.workspace_present"]
+        "static": [
+          "frontend.html_assets_resolve"
+        ],
+        "js_unit": [
+          "html_to_md_test.js",
+          "html_comments_test.js",
+          "mermaid_tone_test.js",
+          "preview_images_test.js"
+        ],
+        "smoke": [
+          "05_palette",
+          "63_palette_acts_on_focused_pane",
+          "87_preview_to_side_shortcut"
+        ],
+        "rust_perf": [
+          "rust.workspace_present"
+        ]
       }
     },
     {
       "id": "F07",
       "name": "Japanese IME Guardian & imm32",
       "weight": 5,
-      "owner_tasks": ["#05", "#08"],
+      "owner_tasks": [
+        "#05",
+        "#08"
+      ],
       "checks": {
         "static": [],
-        "js_unit": ["go_text_test.js"],
-        "smoke": ["118_panel_places"],
-        "rust_perf": ["cargo_test_workspace"]
+        "js_unit": [
+          "go_text_test.js"
+        ],
+        "smoke": [
+          "118_panel_places"
+        ],
+        "rust_perf": [
+          "cargo_test_workspace"
+        ]
       }
     },
     {
       "id": "F08",
       "name": "Print Preview & CDP PDF Export",
       "weight": 6,
-      "owner_tasks": ["#11"],
+      "owner_tasks": [
+        "#11"
+      ],
       "checks": {
         "static": [],
-        "js_unit": ["print_panel_test.js", "print_preview_test.js"],
-        "smoke": ["97_print_preview", "98_print_panel", "100_rpc_print_pdf_and_search_panel", "101_print_side_preview"],
-        "rust_perf": ["cargo_test_workspace", "cli.kept_subcommands"]
+        "js_unit": [
+          "print_panel_test.js",
+          "print_preview_test.js"
+        ],
+        "smoke": [
+          "97_print_preview",
+          "98_print_panel",
+          "100_rpc_print_pdf_and_search_panel",
+          "101_print_side_preview"
+        ],
+        "rust_perf": [
+          "cargo_test_workspace",
+          "cli.kept_subcommands"
+        ]
       }
     },
     {
       "id": "F10a",
       "name": "Win32 Native Quick Capture Popup",
       "weight": 6,
-      "owner_tasks": ["#09"],
+      "owner_tasks": [
+        "#09"
+      ],
       "checks": {
         "static": [],
         "js_unit": [],
         "smoke": [],
-        "rust_perf": ["rust.workspace_present", "cargo_test_workspace"]
+        "rust_perf": [
+          "rust.workspace_present",
+          "cargo_test_workspace"
+        ]
       }
     },
     {
       "id": "F10b",
       "name": "Win32 Screen Region Capture (imgcap)",
       "weight": 4,
-      "owner_tasks": ["#10"],
+      "owner_tasks": [
+        "#10"
+      ],
       "checks": {
         "static": [],
         "js_unit": [],
         "smoke": [],
-        "rust_perf": ["rust.workspace_present", "cargo_test_workspace"]
+        "rust_perf": [
+          "rust.workspace_present",
+          "cargo_test_workspace"
+        ]
       }
     },
     {
       "id": "F11",
       "name": "Cursor AI (Ctrl+L / Ctrl+K / Alt+C / Tab)",
       "weight": 7,
-      "owner_tasks": ["#04", "#12"],
+      "owner_tasks": [
+        "#04",
+        "#12"
+      ],
       "checks": {
         "static": [],
-        "js_unit": ["builtin_ai_test.js", "bulk_insert_test.js", "result_blocks_test.js", "task_manager_test.js", "file_anchor_test.js"],
-        "smoke": [
-          "01_main_path", "02_ask_failure", "03_ask_unset", "11_status_ai", "12_ask_undo",
-          "41_large_insert", "67_ask_bar_and_panels", "82_unset_setup_focus", "121_ctrl_k_and_infographic_and_ai_ocr"
+        "js_unit": [
+          "builtin_ai_test.js",
+          "bulk_insert_test.js",
+          "result_blocks_test.js",
+          "task_manager_test.js",
+          "file_anchor_test.js"
         ],
-        "rust_perf": ["cargo_test_workspace"]
+        "smoke": [
+          "01_main_path",
+          "02_ask_failure",
+          "03_ask_unset",
+          "11_status_ai",
+          "12_ask_undo",
+          "41_large_insert",
+          "67_ask_bar_and_panels",
+          "82_unset_setup_focus",
+          "121_ctrl_k_and_infographic_and_ai_ocr"
+        ],
+        "rust_perf": [
+          "cargo_test_workspace"
+        ]
       }
     },
     {
       "id": "F12",
       "name": "Image Generation & Infographic Prompt",
       "weight": 4,
-      "owner_tasks": ["#05", "#12"],
+      "owner_tasks": [
+        "#05",
+        "#12"
+      ],
       "checks": {
         "static": [],
-        "js_unit": ["infographic_prompt_test.js"],
-        "smoke": ["121_ctrl_k_and_infographic_and_ai_ocr"],
-        "rust_perf": ["cargo_test_workspace"]
+        "js_unit": [
+          "infographic_prompt_test.js"
+        ],
+        "smoke": [
+          "121_ctrl_k_and_infographic_and_ai_ocr"
+        ],
+        "rust_perf": [
+          "cargo_test_workspace"
+        ]
       }
     },
     {
       "id": "F13",
       "name": "Semantic Search (semindex mmap + SIMD)",
       "weight": 6,
-      "owner_tasks": ["#07"],
+      "owner_tasks": [
+        "#07"
+      ],
       "checks": {
-        "static": ["fixtures.v1_valid"],
-        "js_unit": ["semantic_settings_test.js"],
-        "smoke": ["93_meaning_search", "94_meaning_search_failures", "102_settings_semantic"],
-        "rust_perf": ["cargo_test_workspace"]
+        "static": [
+          "fixtures.v1_valid"
+        ],
+        "js_unit": [
+          "semantic_settings_test.js"
+        ],
+        "smoke": [
+          "93_meaning_search",
+          "94_meaning_search_failures",
+          "102_settings_semantic"
+        ],
+        "rust_perf": [
+          "cargo_test_workspace"
+        ]
       }
     },
     {
       "id": "F18",
       "name": "Embedded PTY Terminal (ConPTY + xterm.js)",
       "weight": 5,
-      "owner_tasks": ["#13"],
+      "owner_tasks": [
+        "#13"
+      ],
       "checks": {
-        "static": ["frontend.html_assets_resolve"],
-        "js_unit": ["terminal_pane_test.js"],
+        "static": [
+          "frontend.html_assets_resolve"
+        ],
+        "js_unit": [
+          "terminal_pane_test.js"
+        ],
         "smoke": [],
-        "rust_perf": ["cargo_test_workspace", "cli.kept_subcommands"]
+        "rust_perf": [
+          "cargo_test_workspace",
+          "cli.kept_subcommands"
+        ]
       }
     },
     {
       "id": "F21",
       "name": "Local STT (speech.cpp + Haas-ja + Pure-Rust WAV)",
       "weight": 6,
-      "owner_tasks": ["#14"],
+      "owner_tasks": [
+        "#14"
+      ],
       "checks": {
-        "static": ["fixtures.v1_valid", "rust.zero_powershell_static"],
-        "js_unit": ["speech_settings_test.js", "voice_input_test.js"],
+        "static": [
+          "fixtures.v1_valid",
+          "rust.zero_powershell_static"
+        ],
+        "js_unit": [
+          "speech_settings_test.js",
+          "voice_input_test.js"
+        ],
         "smoke": [],
-        "rust_perf": ["cargo_test_workspace", "cli.kept_subcommands"]
+        "rust_perf": [
+          "cargo_test_workspace",
+          "cli.kept_subcommands"
+        ]
       }
     },
     {
       "id": "F22",
       "name": "Meeting Recording (WASAPI Loopback + Mic)",
       "weight": 5,
-      "owner_tasks": ["#15"],
+      "owner_tasks": [
+        "#15"
+      ],
       "checks": {
         "static": [],
-        "js_unit": ["speech_settings_test.js"],
+        "js_unit": [
+          "speech_settings_test.js"
+        ],
         "smoke": [],
-        "rust_perf": ["rust.workspace_present", "cargo_test_workspace"]
+        "rust_perf": [
+          "rust.workspace_present",
+          "cargo_test_workspace"
+        ]
       }
     },
     {
       "id": "F23",
       "name": "Image Paste & AI OCR Only (No WinRT)",
       "weight": 4,
-      "owner_tasks": ["#03", "#12"],
+      "owner_tasks": [
+        "#03",
+        "#12"
+      ],
       "checks": {
-        "static": ["prune.html_pruned_ids", "fixtures.v1_valid"],
+        "static": [
+          "prune.html_pruned_ids",
+          "fixtures.v1_valid"
+        ],
         "js_unit": [],
-        "smoke": ["121_ctrl_k_and_infographic_and_ai_ocr"],
-        "rust_perf": ["cargo_test_workspace", "cli.kept_subcommands"]
+        "smoke": [
+          "121_ctrl_k_and_infographic_and_ai_ocr"
+        ],
+        "rust_perf": [
+          "cargo_test_workspace",
+          "cli.kept_subcommands"
+        ]
       }
     },
     {
       "id": "PRUNE",
       "name": "Pruned 13 Features, Zero macOS & Zero Multi-Window",
       "weight": 4,
-      "owner_tasks": ["#03", "#01", "#16"],
+      "owner_tasks": [
+        "#03",
+        "#01",
+        "#16"
+      ],
       "checks": {
         "static": [
-          "prune.deleted_js_files", "prune.html_pruned_ids", "prune.app_js_pruned_calls",
-          "rust.zero_powershell_static", "rust.zero_macos_static"
+          "prune.deleted_js_files",
+          "prune.html_pruned_ids",
+          "prune.app_js_pruned_calls",
+          "rust.zero_powershell_static",
+          "rust.zero_macos_static"
         ],
         "js_unit": [],
-        "smoke": ["120_pruned_features_absent"],
-        "rust_perf": ["cli.pruned_subcommands_rejected"]
+        "smoke": [
+          "120_pruned_features_absent"
+        ],
+        "rust_perf": [
+          "cli.pruned_subcommands_rejected"
+        ]
       }
     },
     {
       "id": "PERF",
       "name": "CLI <5ms, Hotkey <15ms, Detached RAM <=5MB, 0 PowerShell",
       "weight": 6,
-      "owner_tasks": ["#08", "#16"],
+      "owner_tasks": [
+        "#08",
+        "#16"
+      ],
       "checks": {
-        "static": ["rust.zero_powershell_static"],
+        "static": [
+          "rust.zero_powershell_static"
+        ],
         "js_unit": [],
         "smoke": [],
-        "rust_perf": ["cli.cold_start_ms", "perf.hotkey_wake_ms", "perf.detached_ram_mb", "perf.zero_powershell_runtime"]
+        "rust_perf": [
+          "cli.cold_start_ms",
+          "perf.hotkey_wake_ms",
+          "perf.detached_ram_mb",
+          "perf.zero_powershell_runtime"
+        ]
       }
     }
   ]

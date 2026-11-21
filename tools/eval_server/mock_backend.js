@@ -391,6 +391,13 @@
     ed.setSelectionRange(start, end === undefined ? start : end);
     ed.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowRight', bubbles: true }));
   };
+  window.__onExternalFileChanged = function (path) {
+    if (typeof window.__onDiskTextSeen === 'function') {
+      var content = (window.__disk && window.__disk[path]) || '';
+      window.__onDiskTextSeen(path, { path: path, content: content, encoding: 'UTF-8' });
+    }
+  };
+
   D.isReady = function () {
     var tabs = document.querySelectorAll('#tabs-list .tab-item').length;
     var msg = document.getElementById('stat-message');

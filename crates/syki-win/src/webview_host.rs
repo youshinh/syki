@@ -13,8 +13,10 @@ use std::sync::{mpsc, Arc, Mutex};
 use syki_core::rpc::{RpcEvent, RpcRequest, RpcResponse};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2, ICoreWebView2Controller,
-    ICoreWebView2Controller2, ICoreWebView2EnvironmentOptions, ICoreWebView2_3,
-    COREWEBVIEW2_COLOR, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+    ICoreWebView2Controller2, ICoreWebView2Environment, ICoreWebView2EnvironmentOptions,
+    ICoreWebView2_19, ICoreWebView2_3, COREWEBVIEW2_COLOR,
+    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
 };
 use webview2_com::{
     CallDevToolsProtocolMethodCompletedHandler, CoTaskMemPWSTR,
@@ -33,11 +35,11 @@ use windows::Win32::UI::HiDpi::{SetProcessDpiAwareness, PROCESS_PER_MONITOR_DPI_
 use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW,
-    GetWindowLongPtrW, IsZoomed, PostMessageW, PostQuitMessage, RegisterClassW,
-    SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TranslateMessage, CW_USEDEFAULT,
-    GWLP_USERDATA, MSG, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
-    WM_APP, WM_CLOSE, WM_DESTROY, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP,
-    WM_SIZE, WNDCLASSW, WS_EX_APPWINDOW, WS_OVERLAPPEDWINDOW,
+    GetWindowLongPtrW, IsZoomed, KillTimer, PostMessageW, PostQuitMessage, RegisterClassW,
+    SetForegroundWindow, SetTimer, SetWindowLongPtrW, ShowWindow, TranslateMessage, CW_USEDEFAULT,
+    GWLP_USERDATA, MSG, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, WM_APP, WM_CLOSE,
+    WM_DESTROY, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP, WM_SIZE, WM_TIMER,
+    WNDCLASSW, WS_EX_APPWINDOW, WS_OVERLAPPEDWINDOW,
 };
 
 use crate::host_lifecycle::{
@@ -51,6 +53,10 @@ const WM_APP_PUSH_EVENT: u32 = WM_APP + 1;
 const WM_APP_ACTIVATE: u32 = WM_APP + 2;
 const WM_APP_WINDOW_CMD: u32 = WM_APP + 3;
 const WM_APP_DEVTOOLS_CALL: u32 = WM_APP + 4;
+const WM_APP_ENSURE_ATTACHED: u32 = WM_APP + 5;
+
+const TIMER_IDLE_DETACH: usize = 1;
+const TIMER_DETACH_COMMIT: usize = 2;
 
 struct DevToolsRequest {
     method: String,
@@ -103,6 +109,42 @@ impl HostHandle {
 
     pub fn open_quick_capture(&self) {
         self.post_win_cmd(WIN_CMD_QUICK_CAPTURE);
+    }
+
+    pub fn ensure_attached(&self) {
+        unsafe {
+            let _ = PostMessageW(
+                Some(HWND(self.hwnd_raw as *mut _)),
+                WM_APP_ENSURE_ATTACHED,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        }
+    }
+
+    pub fn eval_js_rpc(&self, expr: &str) -> Result<serde_json::Value, String> {
+        self.ensure_attached();
+        let params = serde_json::json!({
+            "expression": expr,
+            "awaitPromise": true,
+            "returnByValue": true
+        });
+        let raw = self.call_devtools_protocol("Runtime.evaluate", &params.to_string())?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&raw).map_err(|e| format!("invalid CDP Runtime.evaluate JSON: {e}"))?;
+        if let Some(ex) = parsed.get("exceptionDetails") {
+            let desc = ex
+                .pointer("/exception/description")
+                .or_else(|| ex.pointer("/exception/value"))
+                .or_else(|| ex.get("text"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("JS evaluation exception");
+            return Err(desc.to_string());
+        }
+        Ok(parsed
+            .pointer("/result/value")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null))
     }
 
     pub fn call_devtools_protocol(
@@ -231,14 +273,23 @@ pub fn resolve_virtual_request(
         .map(|a| (200, a.mime, crate::assets::decode_asset_bytes(a)))
 }
 
+pub type DetachGuard = Arc<dyn Fn() -> bool + Send + Sync>;
+
 struct WindowState {
     controller: Rc<RefCell<Option<ICoreWebView2Controller>>>,
     webview: Rc<RefCell<Option<ICoreWebView2>>>,
+    environment: Rc<RefCell<Option<ICoreWebView2Environment>>>,
+    rpc_handler: Arc<dyn Fn(&RpcRequest) -> RpcResponse + Send + Sync>,
+    dynamic_handler: Option<Arc<DynamicRouteHandler>>,
+    virtual_origin: &'static str,
+    debug: bool,
     event_queue: Arc<Mutex<VecDeque<String>>>,
     canvas: RefCell<CanvasHostState>,
     hotkey_main: Arc<Mutex<String>>,
     hotkey_qc: Arc<Mutex<String>>,
     data_dir: PathBuf,
+    idle_detach_ms: u32,
+    detach_guard: Option<DetachGuard>,
     event_sender: Rc<RefCell<Option<EventSender>>>,
 }
 
@@ -301,6 +352,46 @@ pub(crate) fn is_tray_resident_enabled(data_dir: &std::path::Path) -> bool {
         .unwrap_or(true)
 }
 
+fn read_startup_hotkeys_and_detach(data_dir: &std::path::Path) -> (String, String, u32) {
+    let val = std::fs::read_to_string(data_dir.join("config.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
+    let main_hk = val
+        .as_ref()
+        .and_then(|v| v.pointer("/shortcuts/globalSummon"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| "Ctrl+Alt+M".to_string());
+    let qc_hk = val
+        .as_ref()
+        .and_then(|v| v.pointer("/shortcuts/quickCapture"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| "Ctrl+Shift+Q".to_string());
+    let idle_detach_ms = std::env::var("SYKI_IDLE_DETACH_MS")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .or_else(|| {
+            val.as_ref()
+                .and_then(|v| v.pointer("/webView/idleDetachMs"))
+                .and_then(|v| v.as_u64())
+                .map(|ms| ms.min(u32::MAX as u64) as u32)
+        })
+        .unwrap_or(300_000);
+    (main_hk, qc_hk, idle_detach_ms)
+}
+
+fn set_webview_memory_low(wv: &ICoreWebView2, low: bool) {
+    if let Ok(wv19) = windows::core::Interface::cast::<ICoreWebView2_19>(wv) {
+        let level = if low {
+            COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
+        } else {
+            COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
+        };
+        let _ = unsafe { wv19.SetMemoryUsageTargetLevel(level) };
+    }
+}
+
 fn hide_and_suspend_window(hwnd: HWND, state: Option<&WindowState>) {
     if let Some(state) = state {
         state.canvas.borrow_mut().suspend();
@@ -308,6 +399,7 @@ fn hide_and_suspend_window(hwnd: HWND, state: Option<&WindowState>) {
             let _ = unsafe { ctrl.SetIsVisible(false) };
         }
         if let Some(wv) = state.webview.borrow().as_ref() {
+            set_webview_memory_low(wv, true);
             if let Ok(wv3) = windows::core::Interface::cast::<ICoreWebView2_3>(wv) {
                 let handler = TrySuspendCompletedHandler::create(Box::new(|_hr, _is_suspended| {
                     trim_working_set_async();
@@ -322,8 +414,153 @@ fn hide_and_suspend_window(hwnd: HWND, state: Option<&WindowState>) {
         } else {
             trim_working_set_async();
         }
+        if state.idle_detach_ms > 0 {
+            unsafe {
+                let _ = SetTimer(Some(hwnd), TIMER_IDLE_DETACH, state.idle_detach_ms, None);
+            }
+        }
     }
     let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+}
+
+fn attach_webview_controller(
+    hwnd: HWND,
+    environment: &ICoreWebView2Environment,
+    state: &WindowState,
+    visible: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let controller = {
+        let (tx, rx) = mpsc::channel();
+        let env_ref = environment.clone();
+        CreateCoreWebView2ControllerCompletedHandler::wait_for_async_operation(
+            Box::new(move |handler| unsafe {
+                env_ref
+                    .CreateCoreWebView2Controller(hwnd, &handler)
+                    .map_err(webview2_com::Error::WindowsError)
+            }),
+            Box::new(move |error_code, ctrl| {
+                error_code?;
+                let _ = tx.send(ctrl.ok_or_else(|| windows::core::Error::from(E_POINTER)));
+                Ok(())
+            }),
+        )?;
+        rx.recv()
+            .map_err(|_| webview2_com::Error::SendError)??
+    };
+
+    unsafe {
+        if let Ok(ctrl2) = windows::core::Interface::cast::<ICoreWebView2Controller2>(&controller) {
+            let _ = ctrl2.SetDefaultBackgroundColor(COREWEBVIEW2_COLOR {
+                A: 255,
+                R: 30,
+                G: 30,
+                B: 30,
+            });
+        }
+        controller.SetBounds(client_rect_of(hwnd))?;
+        controller.SetIsVisible(visible)?;
+    }
+    *state.controller.borrow_mut() = Some(controller.clone());
+
+    let webview = unsafe { controller.CoreWebView2()? };
+    *state.webview.borrow_mut() = Some(webview.clone());
+
+    if !state.debug {
+        unsafe {
+            let settings = webview.Settings()?;
+            settings.SetAreDefaultContextMenusEnabled(false)?;
+            settings.SetAreDevToolsEnabled(false)?;
+        }
+    }
+
+    let filter_pattern = CoTaskMemPWSTR::from(format!("{}*", state.virtual_origin).as_str());
+    unsafe {
+        webview.AddWebResourceRequestedFilter(
+            *filter_pattern.as_ref().as_pcwstr(),
+            COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+        )?;
+    }
+
+    let env_for_res = environment.clone();
+    let dyn_for_res = state.dynamic_handler.clone();
+    let mut res_token: i64 = 0;
+    unsafe {
+        webview.add_WebResourceRequested(
+            &WebResourceRequestedEventHandler::create(Box::new(move |_sender, args| {
+                let Some(args) = args else {
+                    return Ok(());
+                };
+                let req = args.Request()?;
+                let mut uri_raw = PWSTR::null();
+                req.Uri(&mut uri_raw)?;
+                let uri = CoTaskMemPWSTR::from(uri_raw).to_string();
+
+                let (status, mime, body) =
+                    match resolve_virtual_request(&uri, dyn_for_res.as_deref()) {
+                        Some(hit) => hit,
+                        None if !uri.starts_with(VIRTUAL_ORIGIN) => {
+                            (403, "text/plain; charset=utf-8", b"Forbidden".to_vec())
+                        }
+                        None => (404, "text/plain; charset=utf-8", b"Not Found".to_vec()),
+                    };
+
+                let stream: Option<IStream> = SHCreateMemStream(Some(&body));
+                let headers = format!("Content-Type: {mime}\r\nCache-Control: no-store");
+                let reason_w = CoTaskMemPWSTR::from(reason_phrase_for(status));
+                let headers_w = CoTaskMemPWSTR::from(headers.as_str());
+                let response = env_for_res.CreateWebResourceResponse(
+                    stream.as_ref(),
+                    status as i32,
+                    *reason_w.as_ref().as_pcwstr(),
+                    *headers_w.as_ref().as_pcwstr(),
+                )?;
+                args.SetResponse(&response)?;
+                Ok(())
+            })),
+            &mut res_token,
+        )?;
+    }
+
+    let rpc_for_msg = Arc::clone(&state.rpc_handler);
+    let q_for_msg = Arc::clone(&state.event_queue);
+    let hwnd_for_msg = hwnd.0 as isize;
+    let mut msg_token: i64 = 0;
+    unsafe {
+        webview.add_WebMessageReceived(
+            &WebMessageReceivedEventHandler::create(Box::new(move |_sender, args| {
+                let Some(args) = args else {
+                    return Ok(());
+                };
+                let mut raw_pwstr = PWSTR::null();
+                if args.WebMessageAsJson(&mut raw_pwstr).is_ok() {
+                    let raw_json = CoTaskMemPWSTR::from(raw_pwstr).to_string();
+                    let rpc = Arc::clone(&rpc_for_msg);
+                    let q = Arc::clone(&q_for_msg);
+                    std::thread::spawn(move || {
+                        let reply_json = dispatch_rpc_message(&raw_json, rpc.as_ref());
+                        q.lock().expect("event_queue mutex").push_back(reply_json);
+                        let _ = PostMessageW(
+                            Some(HWND(hwnd_for_msg as *mut _)),
+                            WM_APP_PUSH_EVENT,
+                            WPARAM(0),
+                            LPARAM(0),
+                        );
+                    });
+                }
+                Ok(())
+            })),
+            &mut msg_token,
+        )?;
+    }
+
+    let preload_script = build_preload_script(&state.data_dir);
+    let preload_w = CoTaskMemPWSTR::from(preload_script.as_str());
+    let origin_w = CoTaskMemPWSTR::from(state.virtual_origin);
+    unsafe {
+        let _ = webview.AddScriptToExecuteOnDocumentCreated(*preload_w.as_ref().as_pcwstr(), None);
+        webview.Navigate(*origin_w.as_ref().as_pcwstr())?;
+    }
+    Ok(())
 }
 
 extern "system" fn host_wnd_proc(
@@ -365,19 +602,105 @@ extern "system" fn host_wnd_proc(
             let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const WindowState;
             if !ptr.is_null() {
                 let state = unsafe { &*ptr };
-                state.canvas.borrow_mut().wake();
-                if let Some(wv) = state.webview.borrow().as_ref() {
-                    if let Ok(wv3) = windows::core::Interface::cast::<ICoreWebView2_3>(wv) {
-                        let _ = unsafe { wv3.Resume() };
-                    }
+                unsafe {
+                    let _ = KillTimer(Some(hwnd), TIMER_IDLE_DETACH);
+                    let _ = KillTimer(Some(hwnd), TIMER_DETACH_COMMIT);
                 }
-                if let Some(ctrl) = state.controller.borrow().as_ref() {
-                    let _ = unsafe { ctrl.SetIsVisible(true) };
+                state.canvas.borrow_mut().wake();
+                if state.webview.borrow().is_none() {
+                    if let Some(env) = state.environment.borrow().as_ref() {
+                        let _ = attach_webview_controller(hwnd, env, state, true);
+                    }
+                } else {
+                    if let Some(wv) = state.webview.borrow().as_ref() {
+                        set_webview_memory_low(wv, false);
+                        if let Ok(wv3) = windows::core::Interface::cast::<ICoreWebView2_3>(wv) {
+                            let _ = unsafe { wv3.Resume() };
+                        }
+                    }
+                    if let Some(ctrl) = state.controller.borrow().as_ref() {
+                        let _ = unsafe { ctrl.SetIsVisible(true) };
+                    }
                 }
             }
             unsafe {
                 let _ = ShowWindow(hwnd, SW_RESTORE);
                 let _ = SetForegroundWindow(hwnd);
+            }
+            LRESULT(0)
+        }
+        WM_APP_ENSURE_ATTACHED => {
+            let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const WindowState;
+            if !ptr.is_null() {
+                let state = unsafe { &*ptr };
+                unsafe {
+                    let _ = KillTimer(Some(hwnd), TIMER_IDLE_DETACH);
+                    let _ = KillTimer(Some(hwnd), TIMER_DETACH_COMMIT);
+                }
+                if state.webview.borrow().is_none() {
+                    state.canvas.borrow_mut().wake();
+                    if let Some(env) = state.environment.borrow().as_ref() {
+                        let _ = attach_webview_controller(hwnd, env, state, false);
+                    }
+                } else if let Some(wv) = state.webview.borrow().as_ref() {
+                    set_webview_memory_low(wv, false);
+                    if let Ok(wv3) = windows::core::Interface::cast::<ICoreWebView2_3>(wv) {
+                        let _ = unsafe { wv3.Resume() };
+                    }
+                }
+            }
+            LRESULT(0)
+        }
+        WM_TIMER => {
+            let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const WindowState;
+            if !ptr.is_null() {
+                let state = unsafe { &*ptr };
+                if w_param.0 == TIMER_IDLE_DETACH {
+                    unsafe {
+                        let _ = KillTimer(Some(hwnd), TIMER_IDLE_DETACH);
+                    }
+                    let busy = state
+                        .detach_guard
+                        .as_ref()
+                        .map(|g| g())
+                        .unwrap_or(false);
+                    if busy {
+                        if state.idle_detach_ms > 0 {
+                            unsafe {
+                                let _ = SetTimer(
+                                    Some(hwnd),
+                                    TIMER_IDLE_DETACH,
+                                    state.idle_detach_ms,
+                                    None,
+                                );
+                            }
+                        }
+                    } else if let Some(wv) = state.webview.borrow().as_ref() {
+                        let flush_w =
+                            CoTaskMemPWSTR::from(r#"{"topic":"host:flushSession","payload":{}}"#);
+                        let _ = unsafe { wv.PostWebMessageAsJson(*flush_w.as_ref().as_pcwstr()) };
+                        unsafe {
+                            let _ = SetTimer(Some(hwnd), TIMER_DETACH_COMMIT, 200, None);
+                        }
+                    }
+                } else if w_param.0 == TIMER_DETACH_COMMIT {
+                    unsafe {
+                        let _ = KillTimer(Some(hwnd), TIMER_DETACH_COMMIT);
+                    }
+                    let busy = state
+                        .detach_guard
+                        .as_ref()
+                        .map(|g| g())
+                        .unwrap_or(false);
+                    if !busy {
+                        *state.webview.borrow_mut() = None;
+                        if let Some(ctrl) = state.controller.borrow_mut().take() {
+                            let _ = unsafe { ctrl.Close() };
+                        }
+                        state.canvas.borrow_mut().detach();
+                        crate::host_lifecycle::trim_working_set_sync();
+                    }
+                }
             }
             LRESULT(0)
         }
@@ -630,29 +953,40 @@ pub fn run_webview_host_with_handle(
 
     let controller_slot: Rc<RefCell<Option<ICoreWebView2Controller>>> = Rc::new(RefCell::new(None));
     let webview_slot: Rc<RefCell<Option<ICoreWebView2>>> = Rc::new(RefCell::new(None));
+    let env_slot: Rc<RefCell<Option<ICoreWebView2Environment>>> = Rc::new(RefCell::new(None));
     let event_queue: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
-    let hotkey_main = Arc::new(Mutex::new(String::new()));
-    let hotkey_qc = Arc::new(Mutex::new(String::new()));
-    let event_sender_slot: Rc<RefCell<Option<EventSender>>> = Rc::new(RefCell::new(None));
     let data_dir = config
         .user_data_dir
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| syki_core::rpc::RuntimeEnv::from_env().data_dir);
-    let data_dir_for_preload = data_dir.clone();
+    let (init_main_hk, init_qc_hk, idle_detach_ms) = read_startup_hotkeys_and_detach(&data_dir);
+    let hotkey_main = Arc::new(Mutex::new(init_main_hk.clone()));
+    let hotkey_qc = Arc::new(Mutex::new(init_qc_hk.clone()));
+    let event_sender_slot: Rc<RefCell<Option<EventSender>>> = Rc::new(RefCell::new(None));
     let boxed_state = Box::new(WindowState {
         controller: Rc::clone(&controller_slot),
         webview: Rc::clone(&webview_slot),
+        environment: Rc::clone(&env_slot),
+        rpc_handler,
+        dynamic_handler,
+        virtual_origin: config.virtual_origin,
+        debug: config.debug,
         event_queue: Arc::clone(&event_queue),
         canvas: RefCell::new(CanvasHostState::new()),
         hotkey_main: Arc::clone(&hotkey_main),
         hotkey_qc: Arc::clone(&hotkey_qc),
         data_dir,
+        idle_detach_ms,
+        detach_guard: None,
         event_sender: Rc::clone(&event_sender_slot),
     });
+    let state_ptr = Box::into_raw(boxed_state);
     unsafe {
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(boxed_state) as isize);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr as isize);
     }
+    let _ = apply_hotkey(hwnd, HOTKEY_ID_MAIN, &init_main_hk);
+    let _ = apply_hotkey(hwnd, HOTKEY_ID_QUICKCAPTURE, &init_qc_hk);
     let _ = add_tray_icon(hwnd, &config.title);
     unsafe {
         let dark_mode: i32 = 1;
@@ -697,41 +1031,10 @@ pub fn run_webview_host_with_handle(
             .map_err(|_| webview2_com::Error::SendError)??
     };
 
-    let controller = {
-        let (tx, rx) = mpsc::channel();
-        let env_ref = environment.clone();
-        CreateCoreWebView2ControllerCompletedHandler::wait_for_async_operation(
-            Box::new(move |handler| unsafe {
-                env_ref
-                    .CreateCoreWebView2Controller(hwnd, &handler)
-                    .map_err(webview2_com::Error::WindowsError)
-            }),
-            Box::new(move |error_code, ctrl| {
-                error_code?;
-                let _ = tx.send(ctrl.ok_or_else(|| windows::core::Error::from(E_POINTER)));
-                Ok(())
-            }),
-        )?;
-        rx.recv()
-            .map_err(|_| webview2_com::Error::SendError)??
-    };
+    *env_slot.borrow_mut() = Some(environment.clone());
+    let state_ref = unsafe { &*state_ptr };
+    attach_webview_controller(hwnd, &environment, state_ref, true)?;
 
-    unsafe {
-        if let Ok(ctrl2) = windows::core::Interface::cast::<ICoreWebView2Controller2>(&controller) {
-            let _ = ctrl2.SetDefaultBackgroundColor(COREWEBVIEW2_COLOR {
-                A: 255,
-                R: 30,
-                G: 30,
-                B: 30,
-            });
-        }
-        controller.SetBounds(client_rect_of(hwnd))?;
-        controller.SetIsVisible(true)?;
-    }
-    *controller_slot.borrow_mut() = Some(controller.clone());
-
-    let webview = unsafe { controller.CoreWebView2()? };
-    *webview_slot.borrow_mut() = Some(webview.clone());
     if let Some(cb) = on_ready {
         let hwnd_raw = hwnd.0 as isize;
         let q_for_sender = Arc::clone(&event_queue);
@@ -755,103 +1058,6 @@ pub fn run_webview_host_with_handle(
             hotkey_main,
             hotkey_qc,
         });
-    }
-    if !config.debug {
-        unsafe {
-            let settings = webview.Settings()?;
-            settings.SetAreDefaultContextMenusEnabled(false)?;
-            settings.SetAreDevToolsEnabled(false)?;
-        }
-    }
-
-    let filter_pattern = CoTaskMemPWSTR::from(format!("{}*", config.virtual_origin).as_str());
-    unsafe {
-        webview.AddWebResourceRequestedFilter(
-            *filter_pattern.as_ref().as_pcwstr(),
-            COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
-        )?;
-    }
-
-    let env_for_res = environment.clone();
-    let dyn_for_res = dynamic_handler.clone();
-    let mut res_token: i64 = 0;
-    unsafe {
-        webview.add_WebResourceRequested(
-            &WebResourceRequestedEventHandler::create(Box::new(move |_sender, args| {
-                let Some(args) = args else {
-                    return Ok(());
-                };
-                let req = args.Request()?;
-                let mut uri_raw = PWSTR::null();
-                req.Uri(&mut uri_raw)?;
-                let uri = CoTaskMemPWSTR::from(uri_raw).to_string();
-
-                let (status, mime, body) = match resolve_virtual_request(
-                    &uri,
-                    dyn_for_res.as_deref(),
-                ) {
-                    Some(hit) => hit,
-                    None if !uri.starts_with(VIRTUAL_ORIGIN) => {
-                        (403, "text/plain; charset=utf-8", b"Forbidden".to_vec())
-                    }
-                    None => (404, "text/plain; charset=utf-8", b"Not Found".to_vec()),
-                };
-
-                let stream: Option<IStream> = SHCreateMemStream(Some(&body));
-                let headers = format!("Content-Type: {mime}\r\nCache-Control: no-store");
-                let reason_w = CoTaskMemPWSTR::from(reason_phrase_for(status));
-                let headers_w = CoTaskMemPWSTR::from(headers.as_str());
-                let response = env_for_res.CreateWebResourceResponse(
-                    stream.as_ref(),
-                    status as i32,
-                    *reason_w.as_ref().as_pcwstr(),
-                    *headers_w.as_ref().as_pcwstr(),
-                )?;
-                args.SetResponse(&response)?;
-                Ok(())
-            })),
-            &mut res_token,
-        )?;
-    }
-
-    let rpc_for_msg = rpc_handler.clone();
-    let q_for_msg = Arc::clone(&event_queue);
-    let hwnd_for_msg = hwnd.0 as isize;
-    let mut msg_token: i64 = 0;
-    unsafe {
-        webview.add_WebMessageReceived(
-            &WebMessageReceivedEventHandler::create(Box::new(move |_sender, args| {
-                let Some(args) = args else {
-                    return Ok(());
-                };
-                let mut raw_pwstr = PWSTR::null();
-                if args.WebMessageAsJson(&mut raw_pwstr).is_ok() {
-                    let raw_json = CoTaskMemPWSTR::from(raw_pwstr).to_string();
-                    let rpc = Arc::clone(&rpc_for_msg);
-                    let q = Arc::clone(&q_for_msg);
-                    std::thread::spawn(move || {
-                        let reply_json = dispatch_rpc_message(&raw_json, rpc.as_ref());
-                        q.lock().expect("event_queue mutex").push_back(reply_json);
-                        let _ = PostMessageW(
-                            Some(HWND(hwnd_for_msg as *mut _)),
-                            WM_APP_PUSH_EVENT,
-                            WPARAM(0),
-                            LPARAM(0),
-                        );
-                    });
-                }
-                Ok(())
-            })),
-            &mut msg_token,
-        )?;
-    }
-
-    let preload_script = build_preload_script(&data_dir_for_preload);
-    let preload_w = CoTaskMemPWSTR::from(preload_script.as_str());
-    let origin_w = CoTaskMemPWSTR::from(config.virtual_origin);
-    unsafe {
-        let _ = webview.AddScriptToExecuteOnDocumentCreated(*preload_w.as_ref().as_pcwstr(), None);
-        webview.Navigate(*origin_w.as_ref().as_pcwstr())?;
     }
 
     let mut msg = MSG::default();

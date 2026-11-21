@@ -10,8 +10,9 @@ use crate::search::{SearchMatch, SearchResult};
 use crate::storage::atomic::write_atomic_bytes;
 use crate::storage::NoteFileStore;
 
-const MAGIC: &[u8; 8] = b"SYKISEM1";
-const HEADER_LEN: usize = 16; // 8-byte magic + u32 dim + u32 count
+const MAGIC_MDSV: &[u8; 4] = b"MDSV";
+const MAGIC_LEGACY: &[u8; 8] = b"SYKISEM1";
+const HEADER_LEN: usize = 16; // 16-byte header for both MDSV and SYKISEM1
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -132,10 +133,16 @@ pub struct MmapVectorIndex {
 
 impl MmapVectorIndex {
     pub fn index_paths(index_dir: &Path) -> (PathBuf, PathBuf) {
-        (index_dir.join("vectors.bin"), index_dir.join("chunks.json"))
+        let jsonl = index_dir.join("chunks.jsonl");
+        let meta = if jsonl.exists() {
+            jsonl
+        } else {
+            index_dir.join("chunks.json")
+        };
+        (index_dir.join("vectors.bin"), meta)
     }
 
-    /// Writes `chunks` and `vectors` (`count * dim` f32s) atomically to `index_dir`.
+    /// Writes `chunks` and `vectors` (`count * dim` f32s) atomically in Go v1 (`MDSV` + `chunks.jsonl`) format.
     pub fn write_atomic(
         index_dir: &Path,
         dim: usize,
@@ -146,43 +153,91 @@ impl MmapVectorIndex {
             return Err("vector matrix dimension mismatch".to_string());
         }
         std::fs::create_dir_all(index_dir).map_err(|e| e.to_string())?;
-        let (vec_path, meta_path) = Self::index_paths(index_dir);
+        let vec_path = index_dir.join("vectors.bin");
+        let meta_path = index_dir.join("chunks.jsonl");
 
         let mut bin = Vec::with_capacity(HEADER_LEN + vectors.len() * 4);
-        bin.extend_from_slice(MAGIC);
+        bin.extend_from_slice(MAGIC_MDSV);
+        bin.extend_from_slice(&1u32.to_le_bytes()); // storeVersion = 1
         bin.extend_from_slice(&(dim as u32).to_le_bytes());
-        bin.extend_from_slice(&(chunks.len() as u32).to_le_bytes());
+        bin.extend_from_slice(&0u32.to_le_bytes()); // reserved
         for v in vectors {
             bin.extend_from_slice(&v.to_le_bytes());
         }
         write_atomic_bytes(&vec_path, &bin).map_err(|e| e.to_string())?;
 
-        let meta_bytes = serde_json::to_vec(chunks).map_err(|e| e.to_string())?;
-        write_atomic_bytes(&meta_path, &meta_bytes).map_err(|e| e.to_string())?;
+        let mut jsonl = String::new();
+        for (i, c) in chunks.iter().enumerate() {
+            let row = serde_json::json!({
+                "rel": c.file_name,
+                "path": c.file_path,
+                "line": c.line,
+                "text": c.text,
+                "v": i,
+            });
+            jsonl.push_str(&row.to_string());
+            jsonl.push('\n');
+        }
+        write_atomic_bytes(&meta_path, jsonl.as_bytes()).map_err(|e| e.to_string())?;
         Ok(())
     }
 
-    /// Opens an existing index using OS `mmap`.
+    /// Opens an existing index (`MDSV` + `chunks.jsonl` or legacy `SYKISEM1` + `chunks.json`) using OS `mmap`.
     pub fn open_mmap(index_dir: &Path) -> Result<Self, String> {
         let (vec_path, meta_path) = Self::index_paths(index_dir);
         let file = File::open(&vec_path).map_err(|e| format!("open vectors.bin: {e}"))?;
         let mmap = unsafe { Mmap::map(&file).map_err(|e| format!("mmap vectors.bin: {e}"))? };
-        if mmap.len() < HEADER_LEN || &mmap[..8] != MAGIC {
-            return Err("invalid vectors.bin header".to_string());
-        }
-        let dim = u32::from_le_bytes(mmap[8..12].try_into().unwrap()) as usize;
-        let count = u32::from_le_bytes(mmap[12..16].try_into().unwrap()) as usize;
-        let expected_len = HEADER_LEN + dim.saturating_mul(count).saturating_mul(4);
-        if mmap.len() < expected_len {
-            return Err("truncated vectors.bin".to_string());
+        if mmap.len() < HEADER_LEN {
+            return Err("truncated vectors.bin header".to_string());
         }
 
-        let meta_raw = std::fs::read(&meta_path).map_err(|e| format!("read chunks.json: {e}"))?;
-        let chunks: Vec<SemanticChunkMeta> =
-            serde_json::from_slice(&meta_raw).map_err(|e| format!("parse chunks.json: {e}"))?;
-        if chunks.len() != count {
-            return Err("chunks.json count mismatch".to_string());
-        }
+        let (dim, count_hint) = if &mmap[..4] == MAGIC_MDSV {
+            let dim = u32::from_le_bytes(mmap[8..12].try_into().unwrap()) as usize;
+            if dim == 0 {
+                return Err("invalid MDSV dim=0".to_string());
+            }
+            let payload_bytes = mmap.len() - HEADER_LEN;
+            let count = payload_bytes / (dim * 4);
+            (dim, Some(count))
+        } else if &mmap[..8] == MAGIC_LEGACY {
+            let dim = u32::from_le_bytes(mmap[8..12].try_into().unwrap()) as usize;
+            let count = u32::from_le_bytes(mmap[12..16].try_into().unwrap()) as usize;
+            let expected_len = HEADER_LEN + dim.saturating_mul(count).saturating_mul(4);
+            if mmap.len() < expected_len {
+                return Err("truncated vectors.bin".to_string());
+            }
+            (dim, Some(count))
+        } else {
+            return Err("invalid vectors.bin header".to_string());
+        };
+
+        let chunks: Vec<SemanticChunkMeta> = if meta_path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+            let raw = std::fs::read_to_string(&meta_path).map_err(|e| format!("read chunks.jsonl: {e}"))?;
+            let mut out = Vec::new();
+            for line in raw.lines() {
+                let t = line.trim();
+                if t.is_empty() {
+                    continue;
+                }
+                let val: serde_json::Value = serde_json::from_str(t).map_err(|e| format!("parse chunks.jsonl: {e}"))?;
+                let rel = val.get("rel").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let file_path = val.get("path").and_then(|v| v.as_str()).unwrap_or(&rel).to_string();
+                let line_num = val.get("line").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+                let text = val.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                out.push(SemanticChunkMeta {
+                    file_path,
+                    file_name: rel,
+                    line: line_num,
+                    text,
+                });
+            }
+            out
+        } else {
+            let meta_raw = std::fs::read(&meta_path).map_err(|e| format!("read chunks.json: {e}"))?;
+            serde_json::from_slice(&meta_raw).map_err(|e| format!("parse chunks.json: {e}"))?
+        };
+
+        let count = count_hint.unwrap_or(chunks.len()).min(chunks.len());
         Ok(Self {
             mmap,
             dim,
@@ -395,5 +450,22 @@ mod tests {
         assert!(hits[0].matches[0].text.contains("vector search"));
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn opens_and_searches_go_v1_semindex_fixture() {
+        let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("evals")
+            .join("fixtures")
+            .join("semindex");
+        let idx = MmapVectorIndex::open_mmap(&fixture_dir).expect("open Go v1 MDSV fixture");
+        assert_eq!(idx.dim(), 4);
+        assert_eq!(idx.len(), 3);
+        let hits = idx.search(&[1.0, 0.0, 0.0, 0.0], 1);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].file_name, "2026-09-17.md");
+        assert!(hits[0].matches[0].text.contains("Batch upload"));
     }
 }

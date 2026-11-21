@@ -273,7 +273,24 @@ fn dispatch_subcommand(cmd: &str, args: &[String]) -> Result<(), String> {
                 println!("{res}");
                 Ok(())
             }
-            _ => Err("usage: syki-cli ui <activate | new-tab | open <path>>".to_string()),
+            Some("state") => {
+                let res = try_send_ipc(&env, "", "ui.state", json!({ "args": [] }), String::new(), String::new())?;
+                println!("{res}");
+                Ok(())
+            }
+            Some("set") => {
+                let rest: Vec<String> = args.iter().skip(1).cloned().collect();
+                let res = try_send_ipc(&env, "", "ui.set", json!({ "args": rest }), String::new(), String::new())?;
+                println!("{res}");
+                Ok(())
+            }
+            Some("panel") => {
+                let rest: Vec<String> = args.iter().skip(1).cloned().collect();
+                let res = try_send_ipc(&env, "", "ui.panel", json!({ "args": rest }), String::new(), String::new())?;
+                println!("{res}");
+                Ok(())
+            }
+            _ => Err("usage: syki-cli ui <activate | new-tab | open <path> | state | set <json> | panel <name>>".to_string()),
         },
         other => {
             let sub = args.first().map(String::as_str).unwrap_or("");

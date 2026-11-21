@@ -1,0 +1,1 @@
+{"timestamp":"2026-11-21T15:19:51.260Z","commit":"3ddea40","ref":"main","runner":"win32-x64","sykiExeMb":5.16,"sykiCliExeMb":0.39,"coldAppReadyMs":535.9,"warmAppReadyMedianMs":373.7,"attachedPwsMb":105.3,"attachedWsMb":360.34,"suspendedPwsMb":105.63,"detachedPwsMb":105.7,"appOnlyPwsMb":4.22,"reattachWakeMs":6.8}

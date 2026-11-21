@@ -41,7 +41,19 @@ fn try_forward_to_running_instance(env: &RuntimeEnv, startup_file: Option<&Path>
     send_ipc_request(&session.pipe_name, &req).is_ok()
 }
 
-fn handle_ipc_envelope(env: &RuntimeEnv, handle: &HostHandle, req: IpcEnvelope) -> IpcReply {
+fn eval_syki_rpc(handle: &HostHandle, call_js: &str) -> Result<serde_json::Value, String> {
+    let expr = format!(
+        "(async function(){{ if (!window.__sykiRPC) throw new Error('__sykiRPC not ready'); return await ({call_js}); }})()"
+    );
+    handle.eval_js_rpc(&expr)
+}
+
+fn handle_ipc_envelope(
+    env: &RuntimeEnv,
+    handle: &HostHandle,
+    core: &Arc<CoreState>,
+    req: IpcEnvelope,
+) -> IpcReply {
     let action = req.action.as_str();
     let method = req.method.as_str();
 
@@ -144,6 +156,82 @@ fn handle_ipc_envelope(env: &RuntimeEnv, handle: &HostHandle, req: IpcEnvelope) 
             Ok(()) => IpcReply::ok(req.id, json!(true)),
             Err(e) => IpcReply::err(req.id, e.to_string()),
         }
+    } else if method.starts_with("buffer.") || method.starts_with("tab.") || matches!(method, "ui.state" | "ui.set" | "ui.panel") {
+        let args = req
+            .params
+            .get("args")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let arg0 = args.first().and_then(|v| v.as_str()).unwrap_or("");
+        let arg1 = args.get(1).and_then(|v| v.as_str()).unwrap_or("");
+        let js_call = match method {
+            "buffer.get" => format!("window.__sykiRPC.getBuffer({})", json!(if arg0.is_empty() { None } else { Some(arg0) })),
+            "buffer.set" => format!("window.__sykiRPC.setBuffer({}, {})", json!(arg0), json!(if arg1.is_empty() { None } else { Some(arg1) })),
+            "buffer.append" => format!("window.__sykiRPC.appendBuffer({}, {})", json!(arg0), json!(if arg1.is_empty() { None } else { Some(arg1) })),
+            "tab.list" => "window.__sykiRPC.getTabs()".to_string(),
+            "tab.switch" => format!("window.__sykiRPC.switchTab({})", json!(arg0)),
+            "tab.new" => format!("window.__sykiRPC.newTab({}, {})", json!(arg0), json!(arg1)),
+            "tab.open" => format!("window.__sykiRPC.openTab({{ path: {} }})", json!(arg0)),
+            "tab.close" => format!("window.__sykiRPC.closeTab({})", json!(if arg0.is_empty() { None } else { Some(arg0) })),
+            "tab.pdf" => format!("window.__sykiRPC.printPdf(null, {{}}, {})", json!(arg0)),
+            "ui.state" => "window.__sykiRPC.getUiState()".to_string(),
+            "ui.set" => {
+                let parsed: serde_json::Value = serde_json::from_str(arg0).unwrap_or_else(|_| json!({}));
+                format!("window.__sykiRPC.setUiState({parsed})")
+            }
+            "ui.panel" => format!("window.__sykiRPC.openPanel({})", json!(arg0)),
+            _ => return IpcReply::err(req.id, format!("unsupported ipc method: {method}")),
+        };
+        match eval_syki_rpc(handle, &js_call) {
+            Ok(v) => IpcReply::ok(req.id, v),
+            Err(e) => IpcReply::err(req.id, e),
+        }
+    } else if method == "scrap.search" {
+        let query = req
+            .params
+            .get("args")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let rpc_req = syki_core::rpc::RpcRequest {
+            id: req.id.clone(),
+            method: "searchScraps".to_string(),
+            params: json!([query, 50, ""]),
+        };
+        let resp = core.dispatch(&rpc_req);
+        if resp.ok {
+            IpcReply::ok(req.id, resp.result.unwrap_or(json!([])))
+        } else {
+            IpcReply::err(req.id, resp.error.unwrap_or_else(|| "searchScraps failed".into()))
+        }
+    } else if method == "pty.presets" || method == "pty.list" {
+        let resp = core.dispatch(&syki_core::rpc::RpcRequest {
+            id: req.id.clone(),
+            method: "ptyAvailablePresets".to_string(),
+            params: json!([]),
+        });
+        IpcReply::ok(req.id, resp.result.unwrap_or(json!([])))
+    } else if method == "speech.status" {
+        let resp = core.dispatch(&syki_core::rpc::RpcRequest {
+            id: req.id.clone(),
+            method: "getSpeechStatus".to_string(),
+            params: json!(["{}"]),
+        });
+        IpcReply::ok(req.id, resp.result.unwrap_or(json!({})))
+    } else if method == "ocr" || method == "ocr.run" {
+        let img_path = req
+            .params
+            .get("args")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if img_path.trim().is_empty() {
+            return IpcReply::err(req.id, "usage: syki-cli ocr <image-path>");
+        }
+        IpcReply::ok(req.id, json!({ "queued": true, "path": img_path }))
     } else {
         IpcReply::err(req.id, format!("unsupported ipc method: {method}"))
     }
@@ -197,6 +285,7 @@ fn main() {
     let core = Arc::new(CoreState::new(env.clone(), startup_file));
     let core_for_rpc = Arc::clone(&core);
     let core_for_events = Arc::clone(&core);
+    let core_for_ipc = Arc::clone(&core);
     let preview_store = core.print_preview_store();
     let dyn_handler: Arc<DynamicRouteHandler> = Arc::new(Box::new(move |rel| {
         preview_store
@@ -222,8 +311,9 @@ fn main() {
             core_for_events.set_host_handle(handle.clone());
             let env_cb = env_for_ipc.clone();
             let handle_cb = handle.clone();
+            let core_cb = Arc::clone(&core_for_ipc);
             if let Ok(srv) = IpcPipeServer::start(&env_for_ipc, move |req| {
-                handle_ipc_envelope(&env_cb, &handle_cb, req)
+                handle_ipc_envelope(&env_cb, &handle_cb, &core_cb, req)
             }) {
                 *ipc_slot_ready.lock().expect("ipc slot mutex") = Some(srv);
             }

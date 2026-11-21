@@ -542,7 +542,37 @@ impl CoreState {
                 }
             }
 
-            "isSendToShortcutInstalled" => RpcResponse::ok(&req.id, json!(false)),
+            "isSendToShortcutInstalled" => {
+                let installed = sendto_cmd_path().map(|p| p.is_file()).unwrap_or(false);
+                RpcResponse::ok(&req.id, json!(installed))
+            }
+            "installSendToShortcut" => match sendto_cmd_path() {
+                Some(p) => {
+                    let exe = std::env::current_exe()
+                        .map(|e| e.to_string_lossy().into_owned())
+                        .unwrap_or_else(|_| "syki.exe".to_string());
+                    let body = format!("@echo off\r\nstart \"\" \"{exe}\" \"%~1\"\r\n");
+                    if let Some(parent) = p.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    match std::fs::write(&p, body) {
+                        Ok(()) => RpcResponse::ok(&req.id, json!(true)),
+                        Err(e) => RpcResponse::err(&req.id, format!("installSendToShortcut failed: {e}")),
+                    }
+                }
+                None => RpcResponse::err(&req.id, "APPDATA not set"),
+            },
+            "uninstallSendToShortcut" => match sendto_cmd_path() {
+                Some(p) => {
+                    if p.exists() {
+                        if let Err(e) = std::fs::remove_file(&p) {
+                            return RpcResponse::err(&req.id, format!("uninstallSendToShortcut failed: {e}"));
+                        }
+                    }
+                    RpcResponse::ok(&req.id, json!(true))
+                }
+                None => RpcResponse::err(&req.id, "APPDATA not set"),
+            },
             "fileTypesStatus" => RpcResponse::ok(&req.id, json!({ "registered": false })),
 
             "printPreview" => {
@@ -620,7 +650,17 @@ impl CoreState {
                 RpcResponse::ok(&req.id, json!(true))
             }
 
-            "printSystem" => RpcResponse::ok(&req.id, json!(true)),
+            "printSystem" => {
+                let handle = self.host_handle.lock().expect("host_handle mutex").clone();
+                if let Some(h) = handle {
+                    match h.eval_js_rpc("window.print(); true") {
+                        Ok(_) => RpcResponse::ok(&req.id, json!(true)),
+                        Err(e) => RpcResponse::err(&req.id, e),
+                    }
+                } else {
+                    RpcResponse::err(&req.id, "printSystem requires active WebView2 host")
+                }
+            }
 
             "detectLLMProvider" => RpcResponse::ok(&req.id, llm::detect_llm_provider()),
 
@@ -996,6 +1036,17 @@ fn param_bool(params: &Value, idx: usize, key: &str) -> Option<bool> {
         Value::Object(map) => map.get(key).and_then(|v| v.as_bool()),
         _ => None,
     }
+}
+
+fn sendto_cmd_path() -> Option<PathBuf> {
+    let appdata = std::env::var_os("APPDATA")?;
+    Some(
+        PathBuf::from(appdata)
+            .join("Microsoft")
+            .join("Windows")
+            .join("SendTo")
+            .join("syki.cmd"),
+    )
 }
 
 fn file_title(path: &Path) -> String {
