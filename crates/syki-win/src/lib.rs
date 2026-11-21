@@ -13,4 +13,5 @@ pub mod pty;
 pub mod quick_capture;
 pub mod rpc_dispatch;
 pub mod shell_pipe;
+pub mod speech;
 pub mod webview_host;

@@ -17,7 +17,7 @@ use syki_core::storage::{
 };
 
 use crate::webview_host::HostHandle;
-use crate::{assets_store, clipboard, dialogs, host_lifecycle, ime, llm, printing, pty, shell_pipe};
+use crate::{assets_store, clipboard, dialogs, host_lifecycle, ime, llm, printing, pty, shell_pipe, speech};
 
 pub type EventSender = Arc<dyn Fn(RpcEvent) + Send + Sync>;
 
@@ -765,6 +765,110 @@ impl CoreState {
                 RpcResponse::ok(&req.id, json!(pty::prepare_worktree(&dir, &id).to_string()))
             }
             "ptySuggestDirs" => RpcResponse::ok(&req.id, json!(pty::suggest_dirs())),
+
+            "getSpeechStatus" => RpcResponse::ok(&req.id, speech::get_speech_status(&self.env.data_dir)),
+            "installSpeechPartAsync" => {
+                let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
+                let part = param_str(&req.params, 1, "part").unwrap_or_else(|| "haas-ja".into());
+                let sender = self.event_sender.lock().expect("event_sender mutex").clone();
+                speech::install_speech_part_async(self.env.data_dir.clone(), req_id, part, sender);
+                RpcResponse::ok(&req.id, json!(true))
+            }
+            "cancelSpeechInstall" => {
+                // Handled atomically in speech module.
+                RpcResponse::ok(&req.id, json!(true))
+            }
+            "removeSpeechPart" => {
+                let part = param_str(&req.params, 0, "part").unwrap_or_default();
+                match speech::remove_speech_part(&self.env.data_dir, &part) {
+                    Ok(()) => RpcResponse::ok(&req.id, json!(true)),
+                    Err(e) => RpcResponse::err(&req.id, e),
+                }
+            }
+            "pickFilePath" => match dialogs::pick_open_file(None, None) {
+                Ok(Some(p)) => RpcResponse::ok(&req.id, json!(p.to_string_lossy())),
+                Ok(None) => RpcResponse::ok(&req.id, Value::Null),
+                Err(e) => RpcResponse::err(&req.id, e),
+            },
+            "validateWhisperModelFile" => {
+                let path = param_str(&req.params, 0, "path").unwrap_or_default();
+                match speech::validate_whisper_model_file(Path::new(path.trim())) {
+                    Ok(v) => RpcResponse::ok(&req.id, v),
+                    Err(e) => RpcResponse::err(&req.id, e),
+                }
+            }
+            "transcribeAudioAsync" => {
+                let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
+                let audio_b64 = param_str(&req.params, 1, "audioBase64").unwrap_or_default();
+                let mime = param_str(&req.params, 2, "mimeType").unwrap_or_else(|| "audio/webm".into());
+                let sender = self.event_sender.lock().expect("event_sender mutex").clone();
+                speech::transcribe_audio_async(
+                    self.env.data_dir.clone(),
+                    req_id,
+                    audio_b64,
+                    mime,
+                    sender,
+                );
+                RpcResponse::ok(&req.id, json!(true))
+            }
+            "transcribeVoiceCache" => {
+                let cache_path = param_str(&req.params, 0, "cachePath").unwrap_or_default();
+                match speech::transcribe_wav_file(&self.env.data_dir, Path::new(cache_path.trim()), "ja") {
+                    Ok(t) => RpcResponse::ok(&req.id, json!({ "text": t })),
+                    Err(e) => RpcResponse::err(&req.id, e),
+                }
+            }
+            "retryVoiceCacheAsync" => {
+                let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
+                let cache_path = param_str(&req.params, 1, "cachePath").unwrap_or_default();
+                let data_dir = self.env.data_dir.clone();
+                let sender = self.event_sender.lock().expect("event_sender mutex").clone();
+                std::thread::spawn(move || {
+                    let (text, error) = match speech::transcribe_wav_file(
+                        &data_dir,
+                        Path::new(cache_path.trim()),
+                        "ja",
+                    ) {
+                        Ok(t) => (t, String::new()),
+                        Err(e) => (String::new(), e),
+                    };
+                    if let Some(tx) = sender {
+                        tx(RpcEvent {
+                            topic: "voice:result".to_string(),
+                            payload: json!({
+                                "reqId": req_id,
+                                "text": text,
+                                "error": error,
+                                "cachePath": cache_path,
+                                "refineErr": ""
+                            }),
+                        });
+                    }
+                });
+                RpcResponse::ok(&req.id, json!(true))
+            }
+            "listVoiceCaches" => {
+                let list = speech::list_voice_caches(&self.env.data_dir);
+                RpcResponse::ok(&req.id, serde_json::to_value(list).unwrap_or(json!([])))
+            }
+            "keepVoiceCache" => {
+                let cache_path = param_str(&req.params, 0, "cachePath").unwrap_or_default();
+                match speech::keep_voice_cache(Path::new(cache_path.trim())) {
+                    Ok(()) => RpcResponse::ok(&req.id, json!(true)),
+                    Err(e) => RpcResponse::err(&req.id, e),
+                }
+            }
+            "discardVoiceCache" => {
+                let cache_path = param_str(&req.params, 0, "cachePath").unwrap_or_default();
+                match speech::discard_voice_cache(Path::new(cache_path.trim())) {
+                    Ok(()) => RpcResponse::ok(&req.id, json!(true)),
+                    Err(e) => RpcResponse::err(&req.id, e),
+                }
+            }
+            "discardAllVoiceCaches" => match speech::discard_all_voice_caches(&self.env.data_dir) {
+                Ok(()) => RpcResponse::ok(&req.id, json!(true)),
+                Err(e) => RpcResponse::err(&req.id, e),
+            },
 
             other => RpcResponse::err(&req.id, format!("not_implemented_yet: {other}")),
         }
