@@ -23,8 +23,11 @@ static INSTALL_CANCELLED: AtomicBool = AtomicBool::new(false);
 #[serde(rename_all = "camelCase")]
 pub struct VoiceCacheEntry {
     pub path: String,
-    pub name: String,
-    pub bytes: u64,
+    pub filename: String,
+    pub timestamp: String,
+    pub size_str: String,
+    pub size_bytes: u64,
+    pub kind: String,
     pub kept: bool,
 }
 
@@ -198,32 +201,97 @@ pub fn remove_speech_part(data_dir: &Path, part: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn format_byte_size(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", (bytes as f64) / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{} KB", bytes / 1024)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn format_cache_timestamp(name: &str, meta: Option<&std::fs::Metadata>) -> String {
+    // Parse "voice-YYYYMMDD-HHMMSS..." or "YYYY-MM-DD-HHMMSS..."
+    if let Some(rest) = name.strip_prefix("voice-") {
+        if rest.len() >= 15 && rest.as_bytes()[8] == b'-' {
+            let d = &rest[0..8];
+            let t = &rest[9..15];
+            if d.bytes().all(|b| b.is_ascii_digit()) && t.bytes().all(|b| b.is_ascii_digit()) {
+                return format!(
+                    "{}/{}/{} {}:{}:{}",
+                    &d[0..4], &d[4..6], &d[6..8], &t[0..2], &t[2..4], &t[4..6]
+                );
+            }
+        }
+    }
+    if name.len() >= 17 && name.as_bytes()[4] == b'-' && name.as_bytes()[7] == b'-' && name.as_bytes()[10] == b'-' {
+        let y = &name[0..4];
+        let m = &name[5..7];
+        let d = &name[8..10];
+        let t = &name[11..17];
+        if [y, m, d, t].iter().all(|s| s.bytes().all(|b| b.is_ascii_digit())) {
+            return format!("{y}/{m}/{d} {}:{}:{}", &t[0..2], &t[2..4], &t[4..6]);
+        }
+    }
+    if let Some(m) = meta {
+        if let Ok(modified) = m.modified() {
+            let dt: chrono::DateTime<Local> = modified.into();
+            return dt.format("%Y/%m/%d %H:%M:%S").to_string();
+        }
+    }
+    Local::now().format("%Y/%m/%d %H:%M:%S").to_string()
+}
+
 pub fn list_voice_caches(data_dir: &Path) -> Vec<VoiceCacheEntry> {
     let dir = voice_cache_dir(data_dir);
-    let Ok(rd) = std::fs::read_dir(&dir) else {
-        return Vec::new();
-    };
     let mut out = Vec::new();
-    for entry in rd.flatten() {
-        let p = entry.path();
-        if !p.is_file() {
-            continue;
+    let scan = |target_dir: &Path, kind: &str, out: &mut Vec<VoiceCacheEntry>| {
+        let Ok(rd) = std::fs::read_dir(target_dir) else {
+            return;
+        };
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if !p.is_file() {
+                continue;
+            }
+            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if !matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "wav" | "webm" | "ogg" | "m4a" | "mp4"
+            ) {
+                continue;
+            }
+            let meta = entry.metadata().ok();
+            let size_bytes = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+            if size_bytes == 0 {
+                continue;
+            }
+            let filename = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            let timestamp = format_cache_timestamp(&filename, meta.as_ref());
+            let size_str = format_byte_size(size_bytes);
+            let kept = p.with_extension("kept").exists();
+            out.push(VoiceCacheEntry {
+                path: p.to_string_lossy().into_owned(),
+                filename,
+                timestamp,
+                size_str,
+                size_bytes,
+                kind: kind.to_string(),
+                kept,
+            });
         }
-        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if !matches!(ext.to_ascii_lowercase().as_str(), "wav" | "webm" | "ogg" | "m4a") {
-            continue;
-        }
-        let bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
-        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-        let kept = p.with_extension("kept").exists();
-        out.push(VoiceCacheEntry {
-            path: p.to_string_lossy().into_owned(),
-            name,
-            bytes,
-            kept,
-        });
+    };
+    scan(&dir, "voice", &mut out);
+    let meeting_dir = dir.join("meetings");
+    if meeting_dir.is_dir() {
+        scan(&meeting_dir, "meeting", &mut out);
     }
-    out.sort_by(|a, b| b.name.cmp(&a.name));
+    out.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     out
 }
 
@@ -303,21 +371,341 @@ pub fn transcribe_wav_file(data_dir: &Path, audio_path: &Path, language: &str) -
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+fn sniff_audio_mime(bytes: &[u8], path: Option<&Path>) -> &'static str {
+    if bytes.len() >= 8 && &bytes[4..8] == b"ftyp" {
+        return "audio/mp4";
+    }
+    if bytes.len() >= 4 && &bytes[0..4] == b"OggS" {
+        return "audio/ogg";
+    }
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WAVE" {
+        return "audio/wav";
+    }
+    if let Some(ext) = path.and_then(|p| p.extension()).and_then(|e| e.to_str()) {
+        match ext.to_ascii_lowercase().as_str() {
+            "wav" => return "audio/wav",
+            "ogg" => return "audio/ogg",
+            "m4a" | "mp4" => return "audio/mp4",
+            _ => {}
+        }
+    }
+    "audio/webm"
+}
+
+fn strip_v1beta_suffix(base: &str) -> String {
+    let s = base.trim().trim_end_matches('/');
+    s.strip_suffix("/v1beta").unwrap_or(s).to_string()
+}
+
+fn read_fallback_gemini_key(data_dir: &Path) -> String {
+    let Ok(raw) = std::fs::read_to_string(data_dir.join("config.json")) else {
+        return String::new();
+    };
+    let Ok(val) = serde_json::from_str::<Value>(&raw) else {
+        return String::new();
+    };
+    for ptr in ["/voice/apiKey", "/vision/apiKey", "/text/apiKey"] {
+        if let Some(k) = val.pointer(ptr).and_then(|v| v.as_str()) {
+            let trimmed = k.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+fn post_gemini_json(
+    agent: &ureq::Agent,
+    url: &str,
+    api_key_header: Option<&str>,
+    body: &Value,
+) -> Result<Value, String> {
+    let mut req = agent
+        .post(url)
+        .set("Content-Type", "application/json");
+    if let Some(k) = api_key_header {
+        req = req.set("x-goog-api-key", k);
+    }
+    let payload = serde_json::to_string(body).map_err(|e| format!("JSON encode error: {e}"))?;
+    let resp = req.send_string(&payload).map_err(|e| match e {
+        ureq::Error::Status(code, r) => {
+            let msg = r.into_string().unwrap_or_default();
+            format!("Gemini APIエラー ({code}): {msg}")
+        }
+        ureq::Error::Transport(t) => format!("Gemini接続エラー: {t}"),
+    })?;
+    let text = resp
+        .into_string()
+        .map_err(|e| format!("Gemini応答読込エラー: {e}"))?;
+    serde_json::from_str(&text).map_err(|e| format!("Gemini応答解析エラー: {e}"))
+}
+
+fn transcribe_cloud(
+    data_dir: &Path,
+    audio_b64: &str,
+    mime_type: &str,
+    cfg: &Value,
+) -> Result<String, String> {
+    let clean_b64 = audio_b64
+        .split(";base64,")
+        .last()
+        .unwrap_or(audio_b64)
+        .trim();
+    if clean_b64.is_empty() {
+        return Err("empty audio data".to_string());
+    }
+    let raw_base = cfg
+        .get("baseUrl")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let base = if raw_base.is_empty() {
+        "https://generativelanguage.googleapis.com".to_string()
+    } else {
+        strip_v1beta_suffix(raw_base)
+    };
+    let model = cfg
+        .get("model")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("gemini-3.5-transcribe");
+    let mut api_key = cfg
+        .get("apiKey")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if api_key.is_empty() {
+        api_key = read_fallback_gemini_key(data_dir);
+    }
+    if api_key.is_empty() && base.contains("googleapis.com") {
+        return Err("Gemini APIキーが設定されていません".to_string());
+    }
+
+    let api_style = cfg
+        .get("apiStyle")
+        .and_then(|v| v.as_str())
+        .unwrap_or("auto")
+        .trim();
+    let use_interactions = api_style.eq_ignore_ascii_case("interactions")
+        || (api_style.eq_ignore_ascii_case("auto") && model.contains("transcribe"));
+
+    let timeout_secs = cfg
+        .get("timeout")
+        .and_then(|v| v.as_u64())
+        .filter(|&n| n > 0)
+        .unwrap_or(60);
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .build();
+
+    if use_interactions {
+        let mode_str = cfg.get("mode").and_then(|v| v.as_str()).unwrap_or("smart");
+        let mode_val = if mode_str.eq_ignore_ascii_case("verbatim") {
+            json!({ "type": "verbatim" })
+        } else {
+            json!("smart")
+        };
+        let mut tc = serde_json::Map::new();
+        tc.insert("mode".to_string(), mode_val);
+        if let Some(codes) = cfg.get("languageCodes").and_then(|v| v.as_array()) {
+            let list: Vec<String> = codes
+                .iter()
+                .filter_map(|v| v.as_str().map(str::trim))
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
+            if !list.is_empty() {
+                tc.insert("language_codes".to_string(), json!(list));
+            }
+        }
+        let mime_clean = mime_type.split(';').next().unwrap_or("audio/webm").trim();
+        let body = json!({
+            "model": model.trim_start_matches("models/"),
+            "store": false,
+            "input": [{
+                "type": "audio",
+                "data": clean_b64,
+                "mime_type": mime_clean
+            }],
+            "generation_config": {
+                "transcription_config": Value::Object(tc)
+            }
+        });
+        let url = format!("{base}/v1beta/interactions");
+        let val = post_gemini_json(&agent, &url, Some(&api_key), &body)?;
+        if let Some(status) = val.get("status").and_then(|v| v.as_str()) {
+            if !status.is_empty() && status != "completed" {
+                return Err(format!("Gemini APIエラー (status: {status})"));
+            }
+        }
+        if let Some(out) = val.get("output_text").and_then(|v| v.as_str()) {
+            let trimmed = out.trim();
+            if !trimmed.is_empty() {
+                return Ok(trimmed.to_string());
+            }
+        }
+        let mut combined = String::new();
+        if let Some(steps) = val.get("steps").and_then(|v| v.as_array()) {
+            for step in steps {
+                if step.get("type").and_then(|v| v.as_str()) != Some("model_output") {
+                    continue;
+                }
+                if let Some(contents) = step.get("content").and_then(|v| v.as_array()) {
+                    for c in contents {
+                        if c.get("type").and_then(|v| v.as_str()) == Some("text") {
+                            if let Some(t) = c.get("text").and_then(|v| v.as_str()) {
+                                combined.push_str(t);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let trimmed = combined.trim();
+        if trimmed.is_empty() {
+            return Err("話し声が検出されませんでした".to_string());
+        }
+        return Ok(trimmed.to_string());
+    }
+
+    // generateContent fallback (gemini-2.x / general models)
+    let prompt = cfg
+        .get("prompt")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("この音声を正確に文字起こししてください。前置きや解説は不要です。句読点を含む自然な日本語テキストのみを出力してください。");
+    let mime_clean = mime_type.split(';').next().unwrap_or("audio/webm").trim();
+    let url = format!(
+        "{base}/v1beta/models/{}:generateContent?key={api_key}",
+        model.trim_start_matches("models/")
+    );
+    let body = json!({
+        "contents": [{
+            "parts": [
+                { "text": prompt },
+                { "inline_data": { "mime_type": mime_clean, "data": clean_b64 } }
+            ]
+        }]
+    });
+    let val = post_gemini_json(&agent, &url, None, &body)?;
+    let text = val
+        .pointer("/candidates/0/content/parts/0/text")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or("");
+    if text.is_empty() {
+        return Err("文字起こし結果が空でした".to_string());
+    }
+    Ok(text.to_string())
+}
+
+pub fn transcribe_cached_file_with_config(
+    data_dir: &Path,
+    cache_path: &Path,
+    voice_config_json: &str,
+    delete_on_success: bool,
+) -> Result<String, String> {
+    if !cache_path.is_file() {
+        return Err("キャッシュファイルが見つかりません".to_string());
+    }
+    let cfg: Value = serde_json::from_str(voice_config_json).unwrap_or_else(|_| json!({}));
+    let engine = cfg
+        .get("engine")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+
+    let res = if engine == "whisper-local" {
+        let lang = cfg
+            .pointer("/whisper/language")
+            .and_then(|v| v.as_str())
+            .unwrap_or("ja");
+        let local_res = transcribe_wav_file(data_dir, cache_path, lang);
+        if local_res.is_err()
+            && cfg
+                .pointer("/whisper/cloudFallback")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        {
+            let bytes = std::fs::read(cache_path).map_err(|e| e.to_string())?;
+            let mime = sniff_audio_mime(&bytes, Some(cache_path));
+            let b64 = STANDARD.encode(&bytes);
+            transcribe_cloud(data_dir, &b64, mime, &cfg)
+        } else {
+            local_res
+        }
+    } else {
+        let bytes = std::fs::read(cache_path).map_err(|e| e.to_string())?;
+        let mime = sniff_audio_mime(&bytes, Some(cache_path));
+        let b64 = STANDARD.encode(&bytes);
+        transcribe_cloud(data_dir, &b64, mime, &cfg)
+    };
+
+    if res.is_ok() && delete_on_success {
+        let _ = std::fs::remove_file(cache_path);
+        let kept = cache_path.with_extension("kept");
+        if kept.exists() {
+            let _ = std::fs::remove_file(kept);
+        }
+    }
+    res
+}
+
 pub fn transcribe_audio_async(
     data_dir: PathBuf,
     req_id: String,
     audio_b64: String,
     mime_type: String,
+    voice_config_json: String,
     sender: Option<EventSender>,
 ) {
     std::thread::spawn(move || {
-        let cache_res = save_audio_to_cache(&data_dir, &audio_b64, &mime_type);
-        let (text, error, cache_path) = match cache_res {
-            Ok(p) => match transcribe_wav_file(&data_dir, &p, "ja") {
-                Ok(t) => (t, String::new(), p.to_string_lossy().into_owned()),
-                Err(e) => (String::new(), e, p.to_string_lossy().into_owned()),
-            },
-            Err(e) => (String::new(), e, String::new()),
+        let cfg: Value = serde_json::from_str(&voice_config_json).unwrap_or_else(|_| json!({}));
+        let engine = cfg
+            .get("engine")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let no_cache = cfg
+            .get("noCache")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let res = if engine == "whisper-local" {
+            let lang = cfg
+                .pointer("/whisper/language")
+                .and_then(|v| v.as_str())
+                .unwrap_or("ja");
+            match save_audio_to_cache(&data_dir, &audio_b64, &mime_type) {
+                Ok(p) => {
+                    let r = transcribe_wav_file(&data_dir, &p, lang);
+                    if r.is_ok() {
+                        let _ = std::fs::remove_file(&p);
+                    }
+                    r.map_err(|e| (e, p.to_string_lossy().into_owned()))
+                }
+                Err(e) => Err((e, String::new())),
+            }
+        } else {
+            transcribe_cloud(&data_dir, &audio_b64, &mime_type, &cfg).map_err(|e| {
+                let cp = if no_cache {
+                    String::new()
+                } else {
+                    save_audio_to_cache(&data_dir, &audio_b64, &mime_type)
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                };
+                (e, cp)
+            })
+        };
+
+        let (text, error, cache_path) = match res {
+            Ok(t) => (t, String::new(), String::new()),
+            Err((e, cp)) => (String::new(), e, cp),
         };
         if let Some(tx) = sender {
             tx(RpcEvent {

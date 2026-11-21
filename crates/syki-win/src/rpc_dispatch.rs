@@ -815,33 +815,43 @@ impl CoreState {
                 let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
                 let audio_b64 = param_str(&req.params, 1, "audioBase64").unwrap_or_default();
                 let mime = param_str(&req.params, 2, "mimeType").unwrap_or_else(|| "audio/webm".into());
+                let voice_cfg = param_str(&req.params, 3, "voiceConfigJson").unwrap_or_else(|| "{}".into());
                 let sender = self.event_sender.lock().expect("event_sender mutex").clone();
                 speech::transcribe_audio_async(
                     self.env.data_dir.clone(),
                     req_id,
                     audio_b64,
                     mime,
+                    voice_cfg,
                     sender,
                 );
                 RpcResponse::ok(&req.id, json!(true))
             }
             "transcribeVoiceCache" => {
                 let cache_path = param_str(&req.params, 0, "cachePath").unwrap_or_default();
-                match speech::transcribe_wav_file(&self.env.data_dir, Path::new(cache_path.trim()), "ja") {
-                    Ok(t) => RpcResponse::ok(&req.id, json!({ "text": t })),
+                let voice_cfg = param_str(&req.params, 1, "voiceConfigJson").unwrap_or_else(|| "{}".into());
+                match speech::transcribe_cached_file_with_config(
+                    &self.env.data_dir,
+                    Path::new(cache_path.trim()),
+                    &voice_cfg,
+                    true,
+                ) {
+                    Ok(t) => RpcResponse::ok(&req.id, json!(t)),
                     Err(e) => RpcResponse::err(&req.id, e),
                 }
             }
             "retryVoiceCacheAsync" => {
                 let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
                 let cache_path = param_str(&req.params, 1, "cachePath").unwrap_or_default();
+                let voice_cfg = param_str(&req.params, 2, "voiceConfigJson").unwrap_or_else(|| "{}".into());
                 let data_dir = self.env.data_dir.clone();
                 let sender = self.event_sender.lock().expect("event_sender mutex").clone();
                 std::thread::spawn(move || {
-                    let (text, error) = match speech::transcribe_wav_file(
+                    let (text, error) = match speech::transcribe_cached_file_with_config(
                         &data_dir,
                         Path::new(cache_path.trim()),
-                        "ja",
+                        &voice_cfg,
+                        true,
                     ) {
                         Ok(t) => (t, String::new()),
                         Err(e) => (String::new(), e),
