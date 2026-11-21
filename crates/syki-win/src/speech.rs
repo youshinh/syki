@@ -111,13 +111,28 @@ pub fn get_speech_status(data_dir: &Path) -> Value {
     let model_ready = model.is_file();
     let haas_ready = haas.is_dir();
     json!({
+        "supported": true,
         "available": engine_ready && model_ready,
         "engineReady": engine_ready,
         "modelReady": model_ready,
         "haasJaReady": haas_ready,
+        "storageDir": dir.to_string_lossy(),
         "speechDir": dir.to_string_lossy(),
         "enginePath": engine.to_string_lossy(),
-        "modelPath": model.to_string_lossy()
+        "modelPath": model.to_string_lossy(),
+        "runtime": {
+            "installed": engine_ready,
+            "part": { "id": "whisper-cli", "label": "whisper-cli" }
+        },
+        "models": [
+            {
+                "installed": model_ready,
+                "part": { "id": "ggml-model", "label": "ggml-model.bin" }
+            }
+        ],
+        "local": {
+            "ready": engine_ready && model_ready
+        }
     })
 }
 

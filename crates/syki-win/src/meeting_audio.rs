@@ -49,14 +49,22 @@ pub fn probe_wasapi_endpoints() -> Value {
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL);
         let Ok(enum_iface) = enumerator else {
             return json!({
+                "microphone": { "ok": false, "error": "MMDeviceEnumerator unavailable" },
+                "system": { "ok": false, "error": "MMDeviceEnumerator unavailable" },
                 "loopbackReady": false,
                 "micReady": false,
                 "error": "MMDeviceEnumerator unavailable"
             });
         };
-        let loopback_ready = enum_iface.GetDefaultAudioEndpoint(eRender, eConsole).is_ok();
-        let mic_ready = enum_iface.GetDefaultAudioEndpoint(eCapture, eConsole).is_ok();
+        let loopback_res = enum_iface.GetDefaultAudioEndpoint(eRender, eConsole);
+        let mic_res = enum_iface.GetDefaultAudioEndpoint(eCapture, eConsole);
+        let loopback_ready = loopback_res.is_ok();
+        let mic_ready = mic_res.is_ok();
+        let mic_err = mic_res.err().map(|e| e.to_string()).unwrap_or_default();
+        let sys_err = loopback_res.err().map(|e| e.to_string()).unwrap_or_default();
         json!({
+            "microphone": { "ok": mic_ready, "error": mic_err },
+            "system": { "ok": loopback_ready, "error": sys_err },
             "loopbackReady": loopback_ready,
             "micReady": mic_ready,
             "error": ""

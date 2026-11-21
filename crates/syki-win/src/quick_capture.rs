@@ -61,15 +61,15 @@ const BN_CLICKED: u32 = 0;
 const ODS_SELECTED: u32 = 0x0001;
 const HTCAPTION: isize = 2;
 
-const COL_BG: u32 = 0x0026_2525;
-const COL_FIELD: u32 = 0x003c_3c3c;
-const COL_BORDER: u32 = 0x004a_4646;
-const COL_BTN: u32 = 0x0033_3333;
-const COL_BTN_SAVE: u32 = 0x00eb_6325;
-const COL_BTN_REC: u32 = 0x003c_3ce7;
-const COL_TEXT: u32 = 0x00d4_d4d4;
-const COL_TEXT_WHITE: u32 = 0x00ff_ffff;
-const COL_HINT: u32 = 0x0088_8888;
+const COL_BG: u32 = 0x00F5_F9FA;
+const COL_FIELD: u32 = 0x00FF_FFFF;
+const COL_BORDER: u32 = 0x00D7_DFE2;
+const COL_BTN: u32 = 0x00E6_EEF0;
+const COL_BTN_SAVE: u32 = 0x0026_2A2B;
+const COL_BTN_REC: u32 = 0x003C_3CE7;
+const COL_TEXT: u32 = 0x0026_2A2B;
+const COL_TEXT_WHITE: u32 = 0x00FF_FFFF;
+const COL_HINT: u32 = 0x006E_7578;
 
 static POPUP_OPEN: AtomicBool = AtomicBool::new(false);
 static CLASS_REGISTERED: AtomicBool = AtomicBool::new(false);
@@ -151,7 +151,9 @@ pub fn submit_quick_capture_with_snapshots(
                 topic: "host:openFile".to_string(),
                 payload: json!({
                     "path": loaded.path.to_string_lossy(),
+                    "filePath": loaded.path.to_string_lossy(),
                     "title": loaded.path.file_name().and_then(|n| n.to_str()).unwrap_or("scrap.md"),
+                    "fileName": loaded.path.file_name().and_then(|n| n.to_str()).unwrap_or("scrap.md"),
                     "content": loaded.content,
                     "encoding": loaded.encoding_name,
                     "sig": cyrb53_utf16_sig(&loaded.content)

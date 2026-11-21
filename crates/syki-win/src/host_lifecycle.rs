@@ -228,7 +228,7 @@ pub fn show_tray_menu(hwnd: HWND) -> Option<u32> {
         let Ok(menu) = CreatePopupMenu() else {
             return None;
         };
-        let _ = AppendMenuW(menu, MF_STRING, TRAY_CMD_SHOW as usize, w!("Show syki-lite"));
+        let _ = AppendMenuW(menu, MF_STRING, TRAY_CMD_SHOW as usize, w!("Show syki"));
         let _ = AppendMenuW(
             menu,
             MF_STRING,

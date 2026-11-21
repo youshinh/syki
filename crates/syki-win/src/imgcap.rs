@@ -6,15 +6,17 @@ use std::sync::Mutex;
 use windows::core::w;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
-    ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, SRCCOPY,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreatePen, DeleteDC,
+    DeleteObject, EndPaint, FillRect, GetDC, GetDIBits, GetStockObject, InvalidateRect, Rectangle,
+    ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBRUSH,
+    NULL_BRUSH, PAINTSTRUCT, PS_SOLID, SRCCOPY,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
     GetSystemMetrics, PostQuitMessage, RegisterClassW, SetLayeredWindowAttributes, ShowWindow,
     TranslateMessage, LWA_ALPHA, MSG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-    SM_YVIRTUALSCREEN, SW_SHOW, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    SM_YVIRTUALSCREEN, SW_SHOW, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
     WM_RBUTTONUP, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
@@ -170,14 +172,45 @@ unsafe extern "system" fn overlay_wnd_proc(
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
+            let mut redraw = false;
             if let Ok(mut guard) = OVERLAY_STATE.lock() {
                 if let Some(st) = guard.as_mut() {
                     if st.dragging {
                         st.end_x = lx;
                         st.end_y = ly;
+                        redraw = true;
                     }
                 }
             }
+            if redraw {
+                let _ = InvalidateRect(Some(hwnd), None, false);
+            }
+            LRESULT(0)
+        }
+        WM_PAINT => {
+            let mut ps = PAINTSTRUCT::default();
+            let hdc = BeginPaint(hwnd, &mut ps);
+            let mut rc = RECT::default();
+            let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut rc);
+            let bg_brush = HBRUSH(GetStockObject(windows::Win32::Graphics::Gdi::BLACK_BRUSH).0);
+            let _ = FillRect(hdc, &rc, bg_brush);
+
+            let sel = OVERLAY_STATE.lock().ok().and_then(|g| {
+                g.as_ref()
+                    .filter(|st| st.dragging)
+                    .and_then(|st| normalize_selection_rect(st.start_x, st.start_y, st.end_x, st.end_y))
+            });
+            if let Some((rx, ry, rw, rh)) = sel {
+                let pen = CreatePen(PS_SOLID, 3, COLORREF(0x00FF_FFFF));
+                let old_pen = SelectObject(hdc, pen.into());
+                let null_brush = GetStockObject(NULL_BRUSH);
+                let old_brush = SelectObject(hdc, null_brush);
+                let _ = Rectangle(hdc, rx, ry, rx + rw, ry + rh);
+                SelectObject(hdc, old_brush);
+                SelectObject(hdc, old_pen);
+                let _ = DeleteObject(pen.into());
+            }
+            let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
         }
         WM_LBUTTONUP => {

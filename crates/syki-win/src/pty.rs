@@ -23,7 +23,7 @@ use windows::Win32::System::Threading::{
     CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess,
     InitializeProcThreadAttributeList, TerminateProcess, UpdateProcThreadAttribute,
     WaitForSingleObject, EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
-    PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, STARTF_USESTDHANDLES,
+    PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
     STARTUPINFOEXW,
 };
 
@@ -111,7 +111,7 @@ impl PtyManager {
         unsafe {
             let _ = InitializeProcThreadAttributeList(None, 1, Some(0), &mut attr_size);
         }
-        let mut attr_buf = vec![0u8; attr_size.max(64)];
+        let mut attr_buf = vec![0u64; (attr_size.max(64) + 7) / 8];
         let attr_list = LPPROC_THREAD_ATTRIBUTE_LIST(attr_buf.as_mut_ptr() as *mut _);
         unsafe {
             InitializeProcThreadAttributeList(Some(attr_list), 1, Some(0), &mut attr_size)
@@ -130,7 +130,6 @@ impl PtyManager {
 
         let mut si = STARTUPINFOEXW::default();
         si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
-        si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
         si.lpAttributeList = attr_list;
 
         let mut cmd_utf16: Vec<u16> = cmd_line.encode_utf16().chain(std::iter::once(0)).collect();
@@ -483,7 +482,7 @@ mod tests {
             .expect("start ConPTY");
         assert_eq!(started["id"], "test-pty");
 
-        std::thread::sleep(Duration::from_millis(250));
+        std::thread::sleep(Duration::from_millis(500));
         mgr.write("test-pty", "echo SYKI_PTY_OK\r\n").expect("ptyWrite");
         mgr.resize("test-pty", 80, 24).expect("ptyResize");
 

@@ -210,7 +210,7 @@ fn main() {
     let config = WebViewHostConfig {
         virtual_origin: VIRTUAL_ORIGIN,
         user_data_dir,
-        title: "syki-lite".to_string(),
+        title: "syki".to_string(),
         debug: cfg!(debug_assertions),
     };
 

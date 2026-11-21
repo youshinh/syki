@@ -147,7 +147,13 @@
         break;
       case 'host:openFile':
         if (typeof win.__onHostOpenFile === 'function') win.__onHostOpenFile(p);
-        else if (typeof win.onScrapAppended === 'function') win.onScrapAppended(p);
+        else if (typeof win.onScrapAppended === 'function') {
+          win.onScrapAppended({
+            filePath: p.filePath || p.path || '',
+            fileName: p.fileName || p.title || '',
+            ...p,
+          });
+        }
         break;
       case 'host:flushSession':
       case 'host:flush':
