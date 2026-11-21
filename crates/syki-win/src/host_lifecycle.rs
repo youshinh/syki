@@ -1,8 +1,9 @@
 //! Win32 Tray (`Shell_NotifyIconW`), Global Hotkey (`RegisterHotKey`), Working-Set Trim,
 //! and 3-State Hybrid Memory `CanvasHost` state machine (#08).
 
-use windows::core::w;
+use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HWND;
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::ProcessStatus::{EmptyWorkingSet, GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
 use windows::Win32::System::Threading::GetCurrentProcess;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -178,6 +179,18 @@ pub fn apply_hotkey(hwnd: HWND, id: i32, spec: &str) -> Result<bool, String> {
     Ok(true)
 }
 
+/// Loads the embedded executable icon (resource ID 1) or falls back to `IDI_APPLICATION`.
+pub fn load_app_icon() -> windows::Win32::UI::WindowsAndMessaging::HICON {
+    unsafe {
+        if let Ok(hmod) = GetModuleHandleW(None) {
+            if let Ok(icon) = LoadIconW(Some(hmod.into()), PCWSTR(1 as *const u16)) {
+                return icon;
+            }
+        }
+        LoadIconW(None, IDI_APPLICATION).unwrap_or_default()
+    }
+}
+
 /// Registers the Win32 system tray icon for `hwnd`.
 pub fn add_tray_icon(hwnd: HWND, tooltip: &str) -> bool {
     let mut nid = NOTIFYICONDATAW {
@@ -186,7 +199,7 @@ pub fn add_tray_icon(hwnd: HWND, tooltip: &str) -> bool {
         uID: 1,
         uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
         uCallbackMessage: WM_TRAY_ICON,
-        hIcon: unsafe { LoadIconW(None, IDI_APPLICATION).unwrap_or_default() },
+        hIcon: load_app_icon(),
         ..Default::default()
     };
     let wide: Vec<u16> = tooltip.encode_utf16().take(127).collect();

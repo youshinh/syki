@@ -516,9 +516,11 @@ pub fn run_webview_host_with_handle(
         .ok()
         .map(|h| HINSTANCE(h.0));
 
+    let app_icon = crate::host_lifecycle::load_app_icon();
     let wnd_class = WNDCLASSW {
         lpfnWndProc: Some(host_wnd_proc),
         hInstance: hinstance.unwrap_or_default(),
+        hIcon: app_icon,
         lpszClassName: *class_name.as_ref().as_pcwstr(),
         ..Default::default()
     };

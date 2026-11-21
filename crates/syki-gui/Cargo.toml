@@ -3,6 +3,7 @@ name = "syki-gui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+build = "build.rs"
 
 [[bin]]
 name = "syki"
@@ -12,3 +13,6 @@ path = "src/main.rs"
 syki-core.workspace = true
 syki-win.workspace = true
 serde_json.workspace = true
+
+[build-dependencies]
+winresource.workspace = true

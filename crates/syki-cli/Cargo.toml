@@ -3,6 +3,7 @@ name = "syki-cli"
 version.workspace = true
 edition.workspace = true
 description = "Lean command-line front-end for Syki Lite (kept subcommands only)."
+build = "build.rs"
 
 [[bin]]
 name = "syki-cli"
@@ -11,3 +12,6 @@ path = "src/main.rs"
 [dependencies]
 syki-core.workspace = true
 serde_json.workspace = true
+
+[build-dependencies]
+winresource.workspace = true

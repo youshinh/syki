@@ -96,10 +96,7 @@ impl CoreState {
             "uiReady" => RpcResponse::ok(&req.id, json!(true)),
 
             "getConfig" => match self.config_store.load_raw() {
-                Ok(raw) => {
-                    let val: Value = serde_json::from_str(&raw).unwrap_or_else(|_| json!({}));
-                    RpcResponse::ok(&req.id, val)
-                }
+                Ok(raw) => RpcResponse::ok(&req.id, Value::String(raw)),
                 Err(e) => RpcResponse::err(&req.id, format!("getConfig failed: {e}")),
             },
             "saveConfig" => {
@@ -117,10 +114,7 @@ impl CoreState {
             }
 
             "getSession" => match self.session_store.load_raw() {
-                Ok(raw) => {
-                    let val: Value = serde_json::from_str(&raw).unwrap_or_else(|_| json!({}));
-                    RpcResponse::ok(&req.id, val)
-                }
+                Ok(raw) => RpcResponse::ok(&req.id, Value::String(raw)),
                 Err(e) => RpcResponse::err(&req.id, format!("getSession failed: {e}")),
             },
             "saveSession" | "saveSessionSync" => {
@@ -1168,12 +1162,16 @@ mod tests {
         let save_cfg = state.dispatch(&req("saveConfig", json!([{ "general": { "language": "ja" } }])));
         assert!(save_cfg.ok);
         let got_cfg = state.dispatch(&req("getConfig", json!({})));
-        assert_eq!(got_cfg.result.unwrap()["general"]["language"], "ja");
+        let cfg_str = got_cfg.result.unwrap();
+        let cfg_parsed: Value = serde_json::from_str(cfg_str.as_str().expect("getConfig returns JSON string")).unwrap();
+        assert_eq!(cfg_parsed["general"]["language"], "ja");
 
         let save_sess = state.dispatch(&req("saveSessionSync", json!([{ "activeTab": 2 }])));
         assert!(save_sess.ok);
         let got_sess = state.dispatch(&req("getSession", json!({})));
-        assert_eq!(got_sess.result.unwrap()["activeTab"], 2);
+        let sess_str = got_sess.result.unwrap();
+        let sess_parsed: Value = serde_json::from_str(sess_str.as_str().expect("getSession returns JSON string")).unwrap();
+        assert_eq!(sess_parsed["activeTab"], 2);
 
         let _ = std::fs::remove_dir_all(root);
     }

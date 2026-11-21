@@ -30,6 +30,7 @@ ureq = "2"
 webview2-com = "0.39.1"
 windows = "0.62"
 windows-core = "0.62"
+winresource = "0.1"
 
 [profile.release]
 lto = "thin"
