@@ -257,6 +257,45 @@ fn reason_phrase_for(status: u16) -> &'static str {
     }
 }
 
+/// Returns `true` when closing the window should hide to the tray rather than exit (`general.trayResident`, default `true`).
+pub(crate) fn is_tray_resident_enabled(data_dir: &std::path::Path) -> bool {
+    let Ok(raw) = std::fs::read_to_string(data_dir.join("config.json")) else {
+        return true;
+    };
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return true;
+    };
+    val.get("general")
+        .and_then(|g| g.get("trayResident"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+}
+
+fn hide_and_suspend_window(hwnd: HWND, state: Option<&WindowState>) {
+    if let Some(state) = state {
+        state.canvas.borrow_mut().suspend();
+        if let Some(ctrl) = state.controller.borrow().as_ref() {
+            let _ = unsafe { ctrl.SetIsVisible(false) };
+        }
+        if let Some(wv) = state.webview.borrow().as_ref() {
+            if let Ok(wv3) = windows::core::Interface::cast::<ICoreWebView2_3>(wv) {
+                let handler = TrySuspendCompletedHandler::create(Box::new(|_hr, _is_suspended| {
+                    trim_working_set_async();
+                    Ok(())
+                }));
+                if unsafe { wv3.TrySuspend(&handler) }.is_err() {
+                    trim_working_set_async();
+                }
+            } else {
+                trim_working_set_async();
+            }
+        } else {
+            trim_working_set_async();
+        }
+    }
+    let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+}
+
 extern "system" fn host_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -326,31 +365,12 @@ extern "system" fn host_wnd_proc(
                     }
                 },
                 WIN_CMD_HIDE => {
-                    if !ptr.is_null() {
-                        let state = unsafe { &*ptr };
-                        state.canvas.borrow_mut().suspend();
-                        if let Some(ctrl) = state.controller.borrow().as_ref() {
-                            let _ = unsafe { ctrl.SetIsVisible(false) };
-                        }
-                        if let Some(wv) = state.webview.borrow().as_ref() {
-                            if let Ok(wv3) = windows::core::Interface::cast::<ICoreWebView2_3>(wv) {
-                                let handler = TrySuspendCompletedHandler::create(Box::new(
-                                    |_hr, _is_suspended| {
-                                        trim_working_set_async();
-                                        Ok(())
-                                    },
-                                ));
-                                if unsafe { wv3.TrySuspend(&handler) }.is_err() {
-                                    trim_working_set_async();
-                                }
-                            } else {
-                                trim_working_set_async();
-                            }
-                        } else {
-                            trim_working_set_async();
-                        }
-                    }
-                    let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+                    let state = if !ptr.is_null() {
+                        Some(unsafe { &*ptr })
+                    } else {
+                        None
+                    };
+                    hide_and_suspend_window(hwnd, state);
                 }
                 WIN_CMD_FORCE_QUIT => {
                     let _ = unsafe { DestroyWindow(hwnd) };
@@ -468,11 +488,19 @@ extern "system" fn host_wnd_proc(
         }
         WM_CLOSE => {
             let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const WindowState;
-            if !ptr.is_null() {
-                let state = unsafe { &*ptr };
+            let state_opt = if !ptr.is_null() {
+                Some(unsafe { &*ptr })
+            } else {
+                None
+            };
+            if let Some(state) = state_opt {
                 if let Some(wv) = state.webview.borrow().as_ref() {
                     let flush_w = CoTaskMemPWSTR::from(r#"{"topic":"host:flushSession","payload":{}}"#);
                     let _ = unsafe { wv.PostWebMessageAsJson(*flush_w.as_ref().as_pcwstr()) };
+                }
+                if is_tray_resident_enabled(&state.data_dir) {
+                    hide_and_suspend_window(hwnd, Some(state));
+                    return LRESULT(0);
                 }
             }
             unsafe {
@@ -872,5 +900,25 @@ mod tests {
             resolve_virtual_request("http://app.syki.local/index.html", Some(&dynamic)).is_none(),
             "non-https origin must be rejected"
         );
+    }
+
+    #[test]
+    fn tray_resident_defaults_true_and_respects_false() {
+        let dir = std::env::temp_dir().join(format!("syki_tray_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+
+        assert!(is_tray_resident_enabled(&dir));
+
+        std::fs::write(dir.join("config.json"), r#"{"general":{"language":"ja"}}"#).unwrap();
+        assert!(is_tray_resident_enabled(&dir));
+
+        std::fs::write(dir.join("config.json"), r#"{"general":{"trayResident":false}}"#).unwrap();
+        assert!(!is_tray_resident_enabled(&dir));
+
+        std::fs::write(dir.join("config.json"), r#"{"general":{"trayResident":true}}"#).unwrap();
+        assert!(is_tray_resident_enabled(&dir));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
