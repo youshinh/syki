@@ -464,6 +464,7 @@
     parent.insertBefore(el, editor);
     const layer = { el: el, inner: inner, links: [], spans: [], text: null, hot: null };
     layers.set(editor, layer);
+    if (!hoverListenersBound) bindHoverListeners();
     // The textarea's scrollbar comes and goes (a note growing past the window, a resize, a split pane
     // being dragged), and the layer has to give up exactly that much width to keep wrapping like it.
     if (typeof global.ResizeObserver === 'function') {

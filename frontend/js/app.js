@@ -16666,5 +16666,8 @@ OUTPUT FORMAT:
   }
 
   initApp();
+  if (window.FileAnchor && typeof window.FileAnchor.init === 'function') {
+    window.FileAnchor.init();
+  }
   scheduleDeferredBootScripts();
 })();
