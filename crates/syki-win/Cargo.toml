@@ -13,6 +13,7 @@ thiserror.workspace = true
 base64.workspace = true
 chrono.workspace = true
 png.workspace = true
+ureq.workspace = true
 webview2-com.workspace = true
 windows-core.workspace = true
 

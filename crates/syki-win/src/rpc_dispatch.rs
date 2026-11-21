@@ -17,7 +17,7 @@ use syki_core::storage::{
 };
 
 use crate::webview_host::HostHandle;
-use crate::{assets_store, clipboard, dialogs, host_lifecycle, ime, printing, shell_pipe};
+use crate::{assets_store, clipboard, dialogs, host_lifecycle, ime, llm, printing, shell_pipe};
 
 pub type EventSender = Arc<dyn Fn(RpcEvent) + Send + Sync>;
 
@@ -623,6 +623,71 @@ impl CoreState {
             }
 
             "printSystem" => RpcResponse::ok(&req.id, json!(true)),
+
+            "detectLLMProvider" => RpcResponse::ok(&req.id, llm::detect_llm_provider()),
+
+            "queryLLMAsync" => {
+                let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
+                let prompt = param_str(&req.params, 1, "prompt").unwrap_or_default();
+                let config_json = param_str(&req.params, 2, "config").unwrap_or_default();
+                let sender = self.event_sender.lock().expect("event_sender mutex").clone();
+                llm::query_llm_async(req_id, prompt, config_json, sender);
+                RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "autocompleteAsync" => {
+                let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
+                let prefix = param_str(&req.params, 1, "prefix").unwrap_or_default();
+                let suffix = param_str(&req.params, 2, "suffix").unwrap_or_default();
+                let config_json = param_str(&req.params, 3, "config").unwrap_or_default();
+                let sender = self.event_sender.lock().expect("event_sender mutex").clone();
+                llm::autocomplete_async(req_id, prefix, suffix, config_json, sender);
+                RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "queryVisionAsync" => {
+                let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
+                let prompt = param_str(&req.params, 1, "prompt").unwrap_or_default();
+                let b64 = param_str(&req.params, 2, "base64").unwrap_or_default();
+                let mime = param_str(&req.params, 3, "mimeType").unwrap_or_else(|| "image/png".into());
+                let config_json = param_str(&req.params, 4, "config").unwrap_or_default();
+                let sender = self.event_sender.lock().expect("event_sender mutex").clone();
+                llm::query_vision_async(req_id, prompt, b64, mime, config_json, sender);
+                RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "generateImageAsync" => {
+                let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
+                let prompt = param_str(&req.params, 1, "prompt").unwrap_or_default();
+                let config_json = param_str(&req.params, 2, "config").unwrap_or_default();
+                let sender = self.event_sender.lock().expect("event_sender mutex").clone();
+                llm::generate_image_async(req_id, prompt, config_json, sender);
+                RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "processDroppedMedia" => {
+                let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
+                let file_name = param_str(&req.params, 1, "fileName").unwrap_or_default();
+                let mime = param_str(&req.params, 2, "mimeType").unwrap_or_default();
+                let b64 = param_str(&req.params, 3, "data").unwrap_or_default();
+                let vision_cfg = param_str(&req.params, 4, "visionConfig").unwrap_or_default();
+                let sender = self.event_sender.lock().expect("event_sender mutex").clone();
+                llm::process_dropped_media_async(req_id, file_name, mime, b64, vision_cfg, sender);
+                RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "generateCliCommandAsync" => {
+                let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
+                let prompt_text = param_str(&req.params, 1, "promptText").unwrap_or_default();
+                let config_json = param_str(&req.params, 2, "config").unwrap_or_default();
+                let ctx_json = param_str(&req.params, 3, "contextMeta").unwrap_or_default();
+                let sender = self.event_sender.lock().expect("event_sender mutex").clone();
+                llm::generate_cli_command_async(req_id, prompt_text, config_json, ctx_json, sender);
+                RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "getAvailableSkillsJSON" => RpcResponse::ok(&req.id, json!("[]")),
+            "getSkillInstruction" => RpcResponse::ok(&req.id, json!("")),
 
             other => RpcResponse::err(&req.id, format!("not_implemented_yet: {other}")),
         }
