@@ -112,6 +112,82 @@ struct DrawItemStruct {
 }
 
 /// Saves text + optional PNG snapshots to today's daily scrap and emits `host:openFile`.
+fn load_vision_ocr_config(data_dir: &Path) -> Option<(crate::llm::LlmConfig, String)> {
+    let raw = std::fs::read_to_string(data_dir.join("config.json")).ok()?;
+    let val: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let vision = val.get("vision")?;
+    let base_url = vision
+        .get("baseUrl")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let model = vision
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let mut api_key = vision
+        .get("apiKey")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if api_key.is_empty() {
+        api_key = val
+            .pointer("/text/apiKey")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+    }
+    let is_local = base_url.contains("localhost") || base_url.contains("127.0.0.1");
+    if api_key.is_empty() && !is_local {
+        return None;
+    }
+    let prompt = vision
+        .get("prompt")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Transcribe the content of this image into structured Markdown.")
+        .to_string();
+    let cfg = crate::llm::LlmConfig {
+        provider: if base_url.contains("googleapis.com") || model.starts_with("gemini") {
+            "gemini".to_string()
+        } else if is_local && base_url.contains("11434") {
+            "ollama".to_string()
+        } else {
+            String::new()
+        },
+        base_url,
+        model,
+        api_key,
+        ..Default::default()
+    };
+    Some((cfg, prompt))
+}
+
+fn emit_open_scrap(scrap_path: &Path, sender: &EventSender) {
+    if let Ok(loaded) = NoteFileStore::read_note(scrap_path) {
+        sender(RpcEvent {
+            topic: "host:openFile".to_string(),
+            payload: json!({
+                "path": loaded.path.to_string_lossy(),
+                "filePath": loaded.path.to_string_lossy(),
+                "title": loaded.path.file_name().and_then(|n| n.to_str()).unwrap_or("scrap.md"),
+                "fileName": loaded.path.file_name().and_then(|n| n.to_str()).unwrap_or("scrap.md"),
+                "content": loaded.content,
+                "encoding": loaded.encoding_name,
+                "sig": cyrb53_utf16_sig(&loaded.content)
+            }),
+        });
+    }
+}
+
+/// Appends Quick Capture text and optional PNG snapshots (`./assets/...`) to today's daily scrap
+/// and triggers background Vision AI OCR for snapshots when a vision provider is configured.
 pub fn submit_quick_capture_with_snapshots(
     data_dir: &Path,
     raw_text: &str,
@@ -126,13 +202,22 @@ pub fn submit_quick_capture_with_snapshots(
     let cfg = JsonConfigStore::new(data_dir.join("config.json"));
     let scrap_dir = ScrapStore::resolve_scrap_dir(&cfg.scrap_dir());
     let scrap_dir_str = scrap_dir.to_string_lossy().into_owned();
+    let vision_cfg = if !snapshots.is_empty() {
+        load_vision_ocr_config(data_dir)
+    } else {
+        None
+    };
 
+    let now = chrono::Local::now();
+    let stamp = now.format("%Y%m%d%H%M%S%3f").to_string();
     let mut body = String::from(trimmed);
-    for png_bytes in snapshots {
+    let mut ocr_jobs: Vec<(String, String)> = Vec::new();
+
+    for (idx, png_bytes) in snapshots.iter().enumerate() {
         let b64 = STANDARD.encode(png_bytes);
         let saved = assets_store::save_asset(data_dir, &scrap_dir_str, "png", &b64)?;
         if !body.is_empty() {
-            body.push('\n');
+            body.push_str("\n\n");
         }
         let link = if saved.rel_path.is_empty() {
             saved.file_url
@@ -140,27 +225,53 @@ pub fn submit_quick_capture_with_snapshots(
             saved.rel_path
         };
         body.push_str(&format!("![capture]({link})"));
+        if vision_cfg.is_some() {
+            let marker = format!("> ⏳ 画像を文字起こし中... ({stamp}-{idx})");
+            body.push('\n');
+            body.push_str(&marker);
+            ocr_jobs.push((marker, b64));
+        }
     }
 
-    let scrap_path = ScrapStore::append_formatted(&scrap_dir, &body, "Quick Capture")
+    let entry = format!(
+        "---\n## [{}] Quick Capture\n\n{}\n",
+        now.format("%H:%M:%S"),
+        body.trim_end_matches(['\r', '\n'])
+    );
+    let scrap_path = ScrapStore::append_entry(&scrap_dir, &entry, now)
         .map_err(|e| format!("quick capture append failed: {e}"))?;
 
     if let Some(sender) = event_sender {
-        if let Ok(loaded) = NoteFileStore::read_note(&scrap_path) {
-            sender(RpcEvent {
-                topic: "host:openFile".to_string(),
-                payload: json!({
-                    "path": loaded.path.to_string_lossy(),
-                    "filePath": loaded.path.to_string_lossy(),
-                    "title": loaded.path.file_name().and_then(|n| n.to_str()).unwrap_or("scrap.md"),
-                    "fileName": loaded.path.file_name().and_then(|n| n.to_str()).unwrap_or("scrap.md"),
-                    "content": loaded.content,
-                    "encoding": loaded.encoding_name,
-                    "sig": cyrb53_utf16_sig(&loaded.content)
-                }),
-            });
-        }
+        emit_open_scrap(&scrap_path, sender);
     }
+
+    if let (Some((llm_cfg, prompt)), false) = (vision_cfg, ocr_jobs.is_empty()) {
+        let target_path = scrap_path.clone();
+        let sender_cloned = event_sender.cloned();
+        std::thread::spawn(move || {
+            for (marker, b64) in ocr_jobs {
+                let replacement = match crate::llm::query_vision_sync(&prompt, &b64, "image/png", &llm_cfg) {
+                    Ok(text) => text
+                        .lines()
+                        .map(|l| format!("> {l}"))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    Err(e) => format!("> (画像OCR失敗: {e})"),
+                };
+                if let Ok(content) = std::fs::read_to_string(&target_path) {
+                    if content.contains(&marker) {
+                        let updated = content.replacen(&marker, &replacement, 1);
+                        if syki_core::storage::atomic::write_atomic_bytes(&target_path, updated.as_bytes()).is_ok() {
+                            if let Some(ref tx) = sender_cloned {
+                                emit_open_scrap(&target_path, tx);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     Ok(Some(scrap_path))
 }
 

@@ -269,6 +269,33 @@ pub fn query_vision_sync(
             .ok_or_else(|| "Ollama vision response missing message.content".to_string());
     }
 
+    let is_gemini = base.contains("googleapis.com")
+        || base.trim_end_matches('/').ends_with("/v1beta")
+        || (provider == "gemini");
+    if is_gemini {
+        let root = base
+            .trim_end_matches('/')
+            .strip_suffix("/v1beta")
+            .unwrap_or(base.trim_end_matches('/'));
+        let clean_model = model.trim_start_matches("models/");
+        let url = format!("{root}/v1beta/models/{clean_model}:generateContent?key={api_key}");
+        let body = json!({
+            "contents": [{
+                "parts": [
+                    { "text": prompt },
+                    { "inline_data": { "mime_type": mime, "data": clean_b64 } }
+                ]
+            }]
+        });
+        let val = send_json_post(http_agent().post(&url), &body)?;
+        return val
+            .pointer("/candidates/0/content/parts/0/text")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "Gemini vision response missing candidates[0].content.parts[0].text".to_string());
+    }
+
     let data_url = format!("data:{mime};base64,{clean_b64}");
     let url = format!("{base}/chat/completions");
     let body = json!({
