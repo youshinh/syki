@@ -215,6 +215,82 @@ pub fn import_asset_file(
     })
 }
 
+/// Serves `/api/image?path=<url-encoded-local-path>` for Markdown preview & hover tooltips.
+/// Rejects UNC/network share paths (`\\server\...`) and non-image extensions with 403.
+pub fn serve_local_image_route(rel_path: &str) -> Option<(u16, &'static str, Vec<u8>)> {
+    let (route, query) = match rel_path.split_once('?') {
+        Some((r, q)) => (r, q),
+        None => (rel_path, ""),
+    };
+    if route != "/api/image" {
+        return None;
+    }
+    let raw_path = query
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(k, _)| *k == "path")
+        .map(|(_, v)| percent_decode_utf8(v))
+        .unwrap_or_default();
+    let trimmed = raw_path.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with("\\\\")
+        || trimmed.starts_with("//")
+    {
+        return Some((403, "text/plain; charset=utf-8", b"Forbidden".to_vec()));
+    }
+    let path = Path::new(trimmed);
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        _ => return Some((403, "text/plain; charset=utf-8", b"Forbidden".to_vec())),
+    };
+    match std::fs::read(path) {
+        Ok(bytes) => Some((200, mime, bytes)),
+        Err(_) => Some((404, "text/plain; charset=utf-8", b"Not Found".to_vec())),
+    }
+}
+
+fn percent_decode_utf8(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
+                out.push((hi << 4) | lo);
+                i += 3;
+                continue;
+            }
+        } else if bytes[i] == b'+' {
+            out.push(b' ');
+            i += 1;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,5 +354,30 @@ mod tests {
         assert_eq!(decode_capped_base64(&data_url, 1024).unwrap(), b"abc");
         let oversized = "A".repeat(((MAX_ASSET_BYTES + 10) / 3) * 4 + 16);
         assert!(decode_capped_base64(&oversized, MAX_ASSET_BYTES).is_err());
+    }
+
+    #[test]
+    fn serve_local_image_route_serves_png_and_blocks_unc_or_exe() {
+        let dir = temp_dir("img-route");
+        let img = dir.join("テスト.png");
+        std::fs::write(&img, b"PNGDATA").unwrap();
+
+        let query = format!("/api/image?path={}", percent_encode_for_test(img.to_str().unwrap()));
+        let (status, mime, body) = serve_local_image_route(&query).expect("route matched");
+        assert_eq!(status, 200);
+        assert_eq!(mime, "image/png");
+        assert_eq!(body, b"PNGDATA");
+
+        let unc = serve_local_image_route("/api/image?path=%5C%5Cevil%5Cshare%5Ca.png").unwrap();
+        assert_eq!(unc.0, 403);
+        let exe = serve_local_image_route("/api/image?path=C%3A%5CWindows%5Cnotepad.exe").unwrap();
+        assert_eq!(exe.0, 403);
+        assert!(serve_local_image_route("/api/other").is_none());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn percent_encode_for_test(s: &str) -> String {
+        s.bytes().map(|b| format!("%{b:02X}")).collect()
     }
 }

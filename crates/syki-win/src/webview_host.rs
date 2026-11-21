@@ -22,6 +22,7 @@ use webview2_com::{
 };
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{E_POINTER, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
 use windows::Win32::Graphics::Gdi::UpdateWindow;
 use windows::Win32::System::Com::{CoInitializeEx, IStream, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -571,6 +572,15 @@ pub fn run_webview_host_with_handle(
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(boxed_state) as isize);
     }
     let _ = add_tray_icon(hwnd, &config.title);
+    unsafe {
+        let dark_mode: i32 = 1;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            &dark_mode as *const _ as *const _,
+            std::mem::size_of::<i32>() as u32,
+        );
+    }
 
     let user_data_str = config.user_data_dir.to_string_lossy().into_owned();
     let environment = {

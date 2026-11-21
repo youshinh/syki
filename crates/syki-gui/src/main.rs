@@ -198,8 +198,11 @@ fn main() {
     let core_for_rpc = Arc::clone(&core);
     let core_for_events = Arc::clone(&core);
     let preview_store = core.print_preview_store();
-    let dyn_handler: Arc<DynamicRouteHandler> =
-        Arc::new(Box::new(move |rel| preview_store.route_response(rel)));
+    let dyn_handler: Arc<DynamicRouteHandler> = Arc::new(Box::new(move |rel| {
+        preview_store
+            .route_response(rel)
+            .or_else(|| syki_win::assets_store::serve_local_image_route(rel))
+    }));
     let ipc_server_slot: Arc<Mutex<Option<IpcPipeServer>>> = Arc::new(Mutex::new(None));
     let ipc_slot_ready = Arc::clone(&ipc_server_slot);
     let env_for_ipc = env.clone();
