@@ -40,6 +40,21 @@ pub fn resolve_static_asset(path: &str) -> Option<EmbeddedAsset> {
     })
 }
 
+/// Returns the uncompressed bytes of an [`EmbeddedAsset`] (decompressing gzip on the fly).
+pub fn decode_asset_bytes(asset: EmbeddedAsset) -> Vec<u8> {
+    if !asset.is_gzip {
+        return asset.bytes.to_vec();
+    }
+    use std::io::Read;
+    let mut dec = flate2::read::GzDecoder::new(asset.bytes);
+    let mut out = Vec::new();
+    if dec.read_to_end(&mut out).is_ok() {
+        out
+    } else {
+        asset.bytes.to_vec()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
