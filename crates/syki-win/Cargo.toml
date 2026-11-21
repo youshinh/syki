@@ -14,6 +14,7 @@ base64.workspace = true
 chrono.workspace = true
 flate2.workspace = true
 png.workspace = true
+sha2.workspace = true
 ureq.workspace = true
 webview2-com.workspace = true
 windows-core.workspace = true

@@ -105,98 +105,481 @@ pub fn validate_whisper_model_file(path: &Path) -> Result<Value, String> {
     }))
 }
 
-pub fn get_speech_status(data_dir: &Path) -> Value {
+#[derive(Debug, Clone)]
+struct CatalogPart {
+    id: &'static str,
+    kind: &'static str,
+    role: &'static str,
+    title: &'static str,
+    note: &'static str,
+    url: String,
+    sha256: String,
+    size: u64,
+    entry: String,
+    is_zip: bool,
+    extract_patterns: &'static [&'static str],
+}
+
+fn catalog_runtime_speech() -> CatalogPart {
+    CatalogPart {
+        id: "speech-runtime-v0.10.1-win-x64",
+        kind: "runtime",
+        role: "runtime",
+        title: "speech.cpp 実行ファイル (v0.10.1 / Windows x64 AVX2/Vulkan)",
+        note: "軽量・高速なローカル音声認識エンジン(約28MB)",
+        url: "https://github.com/nyosegawa/speech.cpp/releases/download/v0.10.1/speech-0.10.1-windows-x64-vulkan.zip".into(),
+        sha256: "a8fe0e4b4f463c460e7ace9d38c363bec08b254cac5a7f764b7967af35d4fa1a".into(),
+        size: 29_548_632,
+        entry: "speech.exe".into(),
+        is_zip: true,
+        extract_patterns: &["speech.exe", "speech.dll"],
+    }
+}
+
+fn catalog_runtime_whisper() -> CatalogPart {
+    CatalogPart {
+        id: "whisper-runtime-b5130-win-x64",
+        kind: "runtime",
+        role: "runtime",
+        title: "Whisper 実行ファイル (whisper.cpp b5130 / Windows x64 CPU)",
+        note: "音声認識を実行する小さなプログラム(約9MB)",
+        url: "https://github.com/ggml-org/whisper.cpp/releases/download/b5130/whisper-bin-x64.zip".into(),
+        sha256: "f9ec6c52a2e949b62ab51fa21d0d497958f9e41c3010c157c4e42932d5316f3c".into(),
+        size: 8_573_270,
+        entry: "whisper-cli.exe".into(),
+        is_zip: true,
+        extract_patterns: &["whisper-cli.exe", "whisper.dll", "ggml*.dll"],
+    }
+}
+
+fn catalog_asr_models() -> Vec<CatalogPart> {
+    let mk = |id: &'static str, title: &'static str, note: &'static str, url: String, sha: &'static str, size: u64, file: &'static str| CatalogPart {
+        id, kind: "model", role: "asr", title, note, url, sha256: sha.into(), size, entry: file.into(), is_zip: false, extract_patterns: &[]
+    };
+    vec![
+        mk("haas-ja-v1.0-q8_0", "Haas-ja v1.0 量子化版(q8_0・推奨)", "日本語特化の超高速・高精度ストリーミング対応ASRモデル。約626MB",
+           "https://huggingface.co/sakasegawa/Haas-ja-v1.0-GGUF/resolve/main/Haas-616M-ja-v1.0-Q8_0.gguf".into(),
+           "cd5f60b2f1c411404b83fca4a65e3ce30a26d9e951b6a346529e65f22758afeb", 656_381_472, "Haas-616M-ja-v1.0-Q8_0.gguf"),
+        mk("haas-ja-v1.0-q4_k", "Haas-ja v1.0 超軽量版(q4_k)", "メモリ消費約350MBの極小・高速ASRモデル",
+           "https://huggingface.co/sakasegawa/Haas-ja-v1.0-GGUF/resolve/main/Haas-616M-ja-v1.0-Q4_K.gguf".into(),
+           "d24d53f29b75214a933ff482b0de1217e0a800f4118cca39ad6cf03609a89d6f", 351_901_216, "Haas-616M-ja-v1.0-Q4_K.gguf"),
+        mk("kotoba-v2.0-q5_0", "kotoba-whisper v2.0 量子化版(日本語特化)", "日本語に特化した高精度モデル。約513MB",
+           "https://huggingface.co/kotoba-tech/kotoba-whisper-v2.0-ggml/resolve/main/ggml-kotoba-whisper-v2.0-q5_0.bin".into(),
+           "4a3b92192b5d3578ff854a5876213e2e27af0c2d357492c2d14271e82c303658", 537_819_875, "ggml-kotoba-whisper-v2.0-q5_0.bin"),
+        mk("kotoba-v2.0", "kotoba-whisper v2.0 フル精度版(日本語特化)", "日本語に特化した最高精度モデル。約1.4GB",
+           "https://huggingface.co/kotoba-tech/kotoba-whisper-v2.0-ggml/resolve/main/ggml-kotoba-whisper-v2.0.bin".into(),
+           "eff70a8a236e731abba774ba71e1f6d0fce53302137208c32207e694e0bf4546", 1_519_521_155, "ggml-kotoba-whisper-v2.0.bin"),
+        mk("large-v3-turbo-q5_0", "Whisper large-v3-turbo 量子化版(多言語)", "多言語モデル。約547MB",
+           "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin".into(),
+           "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2", 574_041_195, "ggml-large-v3-turbo-q5_0.bin"),
+        mk("small-q5_1", "Whisper small 量子化版(軽量)", "約181MB の軽量な多言語モデル",
+           "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin".into(),
+           "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb", 190_085_487, "ggml-small-q5_1.bin"),
+        mk("base", "Whisper base(最軽量・低精度)", "約141MB の最小クラスモデル",
+           "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin".into(),
+           "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe", 147_951_465, "ggml-base.bin"),
+    ]
+}
+
+fn catalog_addons() -> Vec<CatalogPart> {
+    let mk = |id: &'static str, role: &'static str, title: &'static str, note: &'static str, url: &'static str, sha: &'static str, size: u64, file: &'static str| CatalogPart {
+        id, kind: "model", role, title, note, url: url.into(), sha256: sha.into(), size, entry: file.into(), is_zip: false, extract_patterns: &[]
+    };
+    vec![
+        mk("silero-vad", "vad", "Silero VAD v6.2 (音声区間検出)", "リアルタイム無音検知モデル。約1.2MB",
+           "https://huggingface.co/sakasegawa/silero-vad-GGUF/resolve/main/silero-vad-309K-v6.2-F32.gguf",
+           "2fc312514e5fc4fa4ffd02b25c76a4853fa4130e8fb9777d01502183b01238cb", 1_238_624, "silero-vad-309K-v6.2-F32.gguf"),
+        mk("nemotron-3-diarization", "diarize", "Nemotron-3 Diarization (話者識別)", "会議録音で発言者を分離・識別するモデル。約106MB",
+           "https://huggingface.co/sakasegawa/Nemotron-3-Diarization-GGUF/resolve/main/Nemotron-3-Diarization-99M-Q8_0.gguf",
+           "336df6350dce2ea5ff06aa6e2b249d331a859ced13305fbb45c44bdb3c0abe20", 106_179_488, "Nemotron-3-Diarization-99M-Q8_0.gguf"),
+        mk("re-use", "enhance", "RE-USE (ノイズ除去・音声強調)", "環境ノイズを除去するモデル。約38MB",
+           "https://huggingface.co/sakasegawa/NVIDIA-NemotronLabs-RE-USE-GGUF/resolve/main/NVIDIA-NemotronLabs-RE-USE-10M-F32.gguf",
+           "827faf209c6988b9cfd07b08ee7f212a7b2eeb7870a25380df671d55338b3879", 38_519_136, "NVIDIA-NemotronLabs-RE-USE-10M-F32.gguf"),
+    ]
+}
+
+fn selected_whisper_model_id(cfg: &Value) -> String {
+    let raw = cfg
+        .pointer("/whisper/model")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("haas-ja-v1.0-q8_0");
+    raw.to_string()
+}
+
+fn uses_speech_cpp(model_id: &str, cfg: &Value) -> bool {
+    if model_id.starts_with("haas-") {
+        return true;
+    }
+    if model_id == "custom-path" {
+        let p = cfg.pointer("/whisper/modelPath").and_then(|v| v.as_str()).unwrap_or("");
+        return p.to_ascii_lowercase().ends_with(".gguf");
+    }
+    if model_id == "custom-url" {
+        let u = cfg.pointer("/whisper/customUrl").and_then(|v| v.as_str()).unwrap_or("");
+        return u.to_ascii_lowercase().ends_with(".gguf");
+    }
+    false
+}
+
+fn resolve_model_part(cfg: &Value) -> Option<CatalogPart> {
+    let id = selected_whisper_model_id(cfg);
+    if id == "custom-path" {
+        return None;
+    }
+    if id == "custom-url" {
+        let url = cfg.pointer("/whisper/customUrl").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        if url.is_empty() {
+            return None;
+        }
+        let sha = cfg.pointer("/whisper/customSha256").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        let file = url.split('?').next().unwrap_or(&url).rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or("custom-model.bin").to_string();
+        return Some(CatalogPart {
+            id: "custom-url",
+            kind: "model",
+            role: "asr",
+            title: "カスタムモデル (URL)",
+            note: "",
+            url,
+            sha256: sha,
+            size: 0,
+            entry: file,
+            is_zip: false,
+            extract_patterns: &[],
+        });
+    }
+    catalog_asr_models()
+        .into_iter()
+        .find(|m| m.id == id)
+        .or_else(|| catalog_asr_models().into_iter().next())
+}
+
+fn resolve_part_for(which: &str, cfg: &Value) -> Option<CatalogPart> {
+    if which == "runtime" {
+        let mid = selected_whisper_model_id(cfg);
+        return Some(if uses_speech_cpp(&mid, cfg) {
+            catalog_runtime_speech()
+        } else {
+            catalog_runtime_whisper()
+        });
+    }
+    if which == "model" {
+        return resolve_model_part(cfg);
+    }
+    if let Some(addon_id) = which.strip_prefix("addon:") {
+        return catalog_addons().into_iter().find(|a| a.id == addon_id);
+    }
+    None
+}
+
+fn part_entry_path(dir: &Path, part: &CatalogPart) -> PathBuf {
+    dir.join(&part.entry)
+}
+
+fn part_status_json(dir: &Path, part: &CatalogPart) -> Value {
+    let p = part_entry_path(dir, part);
+    let meta = std::fs::metadata(&p).ok();
+    let installed = meta.as_ref().map(|m| m.is_file() && m.len() > 0).unwrap_or(false);
+    let size = meta.map(|m| m.len()).unwrap_or(0);
+    json!({
+        "installed": installed,
+        "size": size,
+        "path": p.to_string_lossy(),
+    })
+}
+
+fn part_view_json(dir: &Path, part: &CatalogPart) -> Value {
+    json!({
+        "part": {
+            "id": part.id,
+            "kind": part.kind,
+            "title": part.title,
+            "note": part.note,
+            "size": part.size,
+            "entry": part.entry,
+        },
+        "role": part.role,
+        "status": part_status_json(dir, part),
+    })
+}
+
+pub fn get_speech_status(data_dir: &Path, voice_config_json: &str) -> Value {
     let dir = speech_dir(data_dir);
-    let engine = dir.join("whisper-cli.exe");
-    let model = dir.join("ggml-model.bin");
-    let haas = dir.join("haas-ja");
-    let engine_ready = engine.is_file();
-    let model_ready = model.is_file();
-    let haas_ready = haas.is_dir();
+    let cfg: Value = serde_json::from_str(voice_config_json).unwrap_or_else(|_| json!({}));
+    let mid = selected_whisper_model_id(&cfg);
+    let rt = if uses_speech_cpp(&mid, &cfg) {
+        catalog_runtime_speech()
+    } else {
+        catalog_runtime_whisper()
+    };
+    let rt_installed = part_entry_path(&dir, &rt).is_file();
+
+    let model_installed = if mid == "custom-path" {
+        let mp = cfg.pointer("/whisper/modelPath").and_then(|v| v.as_str()).unwrap_or("").trim();
+        !mp.is_empty() && Path::new(mp).is_file()
+    } else if let Some(mp) = resolve_model_part(&cfg) {
+        part_entry_path(&dir, &mp).is_file()
+    } else {
+        false
+    };
+
+    let reason = if rt_installed && model_installed {
+        String::new()
+    } else if !model_installed {
+        "ローカル音声認識モデルが未ダウンロードです。下のボタンからダウンロードしてください。".to_string()
+    } else {
+        "音声認識を実行するプログラム（実行ファイル）が未ダウンロードです。".to_string()
+    };
+
+    let models: Vec<Value> = catalog_asr_models().iter().map(|m| part_view_json(&dir, m)).collect();
+    let addons: Vec<Value> = catalog_addons().iter().map(|a| part_view_json(&dir, a)).collect();
+    let custom = if mid == "custom-url" {
+        resolve_model_part(&cfg).map(|c| part_view_json(&dir, &c))
+    } else {
+        None
+    };
+
     json!({
         "supported": true,
-        "available": engine_ready && model_ready,
-        "engineReady": engine_ready,
-        "modelReady": model_ready,
-        "haasJaReady": haas_ready,
+        "available": rt_installed && model_installed,
         "storageDir": dir.to_string_lossy(),
-        "speechDir": dir.to_string_lossy(),
-        "enginePath": engine.to_string_lossy(),
-        "modelPath": model.to_string_lossy(),
-        "runtime": {
-            "installed": engine_ready,
-            "part": { "id": "whisper-cli", "label": "whisper-cli" }
-        },
-        "models": [
-            {
-                "installed": model_ready,
-                "part": { "id": "ggml-model", "label": "ggml-model.bin" }
-            }
-        ],
+        "defaultModel": "haas-ja-v1.0-q8_0",
+        "runtime": part_view_json(&dir, &rt),
+        "models": models,
+        "addons": addons,
+        "custom": custom,
         "local": {
-            "ready": engine_ready && model_ready
+            "ready": rt_installed && model_installed,
+            "runtimeInstalled": rt_installed,
+            "modelInstalled": model_installed,
+            "reason": reason,
+            "modelWarning": "",
         }
     })
+}
+
+fn zip_matches_pattern(name: &str, patterns: &[&str]) -> bool {
+    let base = name.rsplit('/').next().unwrap_or(name);
+    if base.is_empty() {
+        return false;
+    }
+    patterns.iter().any(|pat| {
+        if let Some((prefix, suffix)) = pat.split_once('*') {
+            base.starts_with(prefix) && base.ends_with(suffix)
+        } else {
+            base.eq_ignore_ascii_case(pat)
+        }
+    })
+}
+
+fn extract_zip_filtered(zip_bytes: &[u8], dest_dir: &Path, patterns: &[&str]) -> Result<(), String> {
+    use std::io::Read;
+    // Locate End of Central Directory (0x06054b50)
+    let search_start = zip_bytes.len().saturating_sub(65_557);
+    let eocd_pos = (search_start..=zip_bytes.len().saturating_sub(22))
+        .rev()
+        .find(|&i| zip_bytes[i..i + 4] == [0x50, 0x4b, 0x05, 0x06])
+        .ok_or_else(|| "invalid zip archive (EOCD not found)".to_string())?;
+    let total_entries = u16::from_le_bytes([zip_bytes[eocd_pos + 10], zip_bytes[eocd_pos + 11]]) as usize;
+    let cd_offset = u32::from_le_bytes([
+        zip_bytes[eocd_pos + 16], zip_bytes[eocd_pos + 17], zip_bytes[eocd_pos + 18], zip_bytes[eocd_pos + 19],
+    ]) as usize;
+
+    let mut pos = cd_offset;
+    for _ in 0..total_entries {
+        if pos + 46 > zip_bytes.len() || zip_bytes[pos..pos + 4] != [0x50, 0x4b, 0x01, 0x02] {
+            break;
+        }
+        let method = u16::from_le_bytes([zip_bytes[pos + 10], zip_bytes[pos + 11]]);
+        let comp_size = u32::from_le_bytes([zip_bytes[pos + 20], zip_bytes[pos + 21], zip_bytes[pos + 22], zip_bytes[pos + 23]]) as usize;
+        let name_len = u16::from_le_bytes([zip_bytes[pos + 28], zip_bytes[pos + 29]]) as usize;
+        let extra_len = u16::from_le_bytes([zip_bytes[pos + 30], zip_bytes[pos + 31]]) as usize;
+        let comment_len = u16::from_le_bytes([zip_bytes[pos + 32], zip_bytes[pos + 33]]) as usize;
+        let local_off = u32::from_le_bytes([zip_bytes[pos + 42], zip_bytes[pos + 43], zip_bytes[pos + 44], zip_bytes[pos + 45]]) as usize;
+        let entry_name = String::from_utf8_lossy(&zip_bytes[pos + 46..pos + 46 + name_len]).into_owned();
+        pos += 46 + name_len + extra_len + comment_len;
+
+        if entry_name.ends_with('/') || !zip_matches_pattern(&entry_name, patterns) {
+            continue;
+        }
+        if local_off + 30 > zip_bytes.len() || zip_bytes[local_off..local_off + 4] != [0x50, 0x4b, 0x03, 0x04] {
+            continue;
+        }
+        let l_name_len = u16::from_le_bytes([zip_bytes[local_off + 26], zip_bytes[local_off + 27]]) as usize;
+        let l_extra_len = u16::from_le_bytes([zip_bytes[local_off + 28], zip_bytes[local_off + 29]]) as usize;
+        let data_start = local_off + 30 + l_name_len + l_extra_len;
+        let data_end = data_start.saturating_add(comp_size);
+        if data_end > zip_bytes.len() {
+            return Err("truncated zip entry".to_string());
+        }
+        let slice = &zip_bytes[data_start..data_end];
+        let out_bytes = match method {
+            0 => slice.to_vec(),
+            8 => {
+                let mut dec = flate2::read::DeflateDecoder::new(slice);
+                let mut buf = Vec::new();
+                dec.read_to_end(&mut buf).map_err(|e| format!("zip deflate error: {e}"))?;
+                buf
+            }
+            other => return Err(format!("unsupported zip compression method: {other}")),
+        };
+        let base = entry_name.rsplit('/').next().unwrap_or(&entry_name);
+        write_atomic_bytes(&dest_dir.join(base), &out_bytes).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+pub fn cancel_speech_install() {
+    INSTALL_CANCELLED.store(true, Ordering::Release);
 }
 
 pub fn install_speech_part_async(
     data_dir: PathBuf,
     req_id: String,
-    part: String,
+    which: String,
+    voice_config_json: String,
     sender: Option<EventSender>,
 ) {
     INSTALL_CANCELLED.store(false, Ordering::Release);
     std::thread::spawn(move || {
-        let dir = speech_dir(&data_dir);
-        let _ = std::fs::create_dir_all(&dir);
-        if part == "haas-ja" {
-            let _ = std::fs::create_dir_all(dir.join("haas-ja"));
-        }
-        let (state, msg) = if INSTALL_CANCELLED.load(Ordering::Acquire) {
-            ("cancelled", "speech installation cancelled".to_string())
-        } else {
-            (
-                "ready",
-                format!("speech directory prepared for '{part}' at {}", dir.display()),
-            )
+        let emit = |state: &str, done: u64, total: u64, msg: &str| {
+            if let Some(ref tx) = sender {
+                tx(RpcEvent {
+                    topic: "speech:install".to_string(),
+                    payload: json!({
+                        "reqId": req_id,
+                        "state": state,
+                        "done": done,
+                        "total": total,
+                        "message": msg
+                    }),
+                });
+            }
         };
-        if let Some(tx) = sender {
-            tx(RpcEvent {
-                topic: "speech:install".to_string(),
-                payload: json!({
-                    "reqId": req_id,
-                    "state": state,
-                    "done": 1,
-                    "total": 1,
-                    "message": msg
-                }),
-            });
+
+        let cfg: Value = serde_json::from_str(&voice_config_json).unwrap_or_else(|_| json!({}));
+        let Some(part) = resolve_part_for(&which, &cfg) else {
+            emit("error", 0, 0, "この項目はインストールできません");
+            return;
+        };
+        let dir = speech_dir(&data_dir);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            emit("error", 0, 0, &e.to_string());
+            return;
         }
+
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(std::time::Duration::from_secs(20))
+            .build();
+        let resp = match agent.get(&part.url).call() {
+            Ok(r) => r,
+            Err(e) => {
+                emit("error", 0, 0, &format!("ダウンロード失敗: {e}"));
+                return;
+            }
+        };
+        let total = resp
+            .header("Content-Length")
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(part.size);
+
+        use sha2::Digest;
+        use std::io::{Read, Write};
+        let tmp_path = dir.join(format!(".dl-{}.tmp", req_id.replace(['/', '\\', ':'], "_")));
+        let mut reader = resp.into_reader();
+        let mut hasher = sha2::Sha256::new();
+        let mut done = 0u64;
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut zip_buf = if part.is_zip { Vec::with_capacity(total as usize) } else { Vec::new() };
+        let mut tmp_file = if !part.is_zip {
+            match std::fs::File::create(&tmp_path) {
+                Ok(f) => Some(f),
+                Err(e) => {
+                    emit("error", 0, 0, &e.to_string());
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+
+        let mut last_emit = std::time::Instant::now();
+        loop {
+            if INSTALL_CANCELLED.load(Ordering::Acquire) {
+                drop(tmp_file);
+                let _ = std::fs::remove_file(&tmp_path);
+                emit("canceled", done, total, "");
+                return;
+            }
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    hasher.update(&buf[..n]);
+                    if part.is_zip {
+                        zip_buf.extend_from_slice(&buf[..n]);
+                    } else if let Some(ref mut f) = tmp_file {
+                        if let Err(e) = f.write_all(&buf[..n]) {
+                            drop(tmp_file);
+                            let _ = std::fs::remove_file(&tmp_path);
+                            emit("error", done, total, &e.to_string());
+                            return;
+                        }
+                    }
+                    done += n as u64;
+                    if last_emit.elapsed() >= std::time::Duration::from_millis(120) {
+                        emit("progress", done, total, "");
+                        last_emit = std::time::Instant::now();
+                    }
+                }
+                Err(e) => {
+                    drop(tmp_file);
+                    let _ = std::fs::remove_file(&tmp_path);
+                    emit("error", done, total, &format!("受信エラー: {e}"));
+                    return;
+                }
+            }
+        }
+        emit("progress", done, total, "");
+
+        if !part.sha256.is_empty() {
+            let got = format!("{:x}", hasher.finalize());
+            if !got.eq_ignore_ascii_case(&part.sha256) {
+                drop(tmp_file);
+                let _ = std::fs::remove_file(&tmp_path);
+                emit("error", done, total, "SHA-256 検証に失敗しました");
+                return;
+            }
+        }
+
+        if part.is_zip {
+            if let Err(e) = extract_zip_filtered(&zip_buf, &dir, part.extract_patterns) {
+                emit("error", done, total, &e);
+                return;
+            }
+        } else {
+            drop(tmp_file);
+            let dest = part_entry_path(&dir, &part);
+            if let Err(e) = std::fs::rename(&tmp_path, &dest) {
+                let _ = std::fs::remove_file(&tmp_path);
+                emit("error", done, total, &e.to_string());
+                return;
+            }
+        }
+
+        emit("done", done, total, "");
     });
 }
 
-pub fn remove_speech_part(data_dir: &Path, part: &str) -> Result<(), String> {
+pub fn remove_speech_part(data_dir: &Path, which: &str, voice_config_json: &str) -> Result<(), String> {
     let dir = speech_dir(data_dir);
-    match part.trim() {
-        "engine" => {
-            let p = dir.join("whisper-cli.exe");
-            if p.exists() {
-                std::fs::remove_file(p).map_err(|e| e.to_string())?;
-            }
+    let cfg: Value = serde_json::from_str(voice_config_json).unwrap_or_else(|_| json!({}));
+    if let Some(part) = resolve_part_for(which, &cfg) {
+        let p = part_entry_path(&dir, &part);
+        if p.exists() {
+            std::fs::remove_file(p).map_err(|e| e.to_string())?;
         }
-        "model" => {
-            let p = dir.join("ggml-model.bin");
-            if p.exists() {
-                std::fs::remove_file(p).map_err(|e| e.to_string())?;
-            }
-        }
-        "haas-ja" => {
-            let p = dir.join("haas-ja");
-            if p.exists() {
-                std::fs::remove_dir_all(p).map_err(|e| e.to_string())?;
-            }
-        }
-        _ => {}
+        return Ok(());
     }
     Ok(())
 }
@@ -343,32 +726,71 @@ pub fn save_audio_to_cache(data_dir: &Path, audio_b64: &str, mime_type: &str) ->
     Ok(path)
 }
 
-pub fn transcribe_wav_file(data_dir: &Path, audio_path: &Path, language: &str) -> Result<String, String> {
+pub fn transcribe_local_with_config(
+    data_dir: &Path,
+    audio_path: &Path,
+    cfg: &Value,
+) -> Result<String, String> {
     let dir = speech_dir(data_dir);
-    let engine = dir.join("whisper-cli.exe");
-    let model = dir.join("ggml-model.bin");
-    if !engine.is_file() || !model.is_file() {
+    let mid = selected_whisper_model_id(cfg);
+    let use_speech = uses_speech_cpp(&mid, cfg);
+    let engine = dir.join(if use_speech { "speech.exe" } else { "whisper-cli.exe" });
+    let model_path = if mid == "custom-path" {
+        PathBuf::from(
+            cfg.pointer("/whisper/modelPath")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim(),
+        )
+    } else if let Some(part) = resolve_model_part(cfg) {
+        part_entry_path(&dir, &part)
+    } else {
+        dir.join("ggml-model.bin")
+    };
+    if !engine.is_file() || !model_path.is_file() {
         return Err("local speech engine/model not installed".to_string());
     }
-    let lang = if language.trim().is_empty() { "ja" } else { language.trim() };
-    let out = Command::new(&engine)
-        .args([
+    let lang = cfg
+        .pointer("/whisper/language")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "auto")
+        .unwrap_or("ja");
+    let mut cmd = Command::new(&engine);
+    if use_speech {
+        cmd.args([
             "-m",
-            &model.to_string_lossy(),
+            &model_path.to_string_lossy(),
+            "-f",
+            &audio_path.to_string_lossy(),
+            "-l",
+            lang,
+        ]);
+    } else {
+        cmd.args([
+            "-m",
+            &model_path.to_string_lossy(),
             "-f",
             &audio_path.to_string_lossy(),
             "-l",
             lang,
             "--no-timestamps",
-        ])
+        ]);
+    }
+    let out = cmd
         .creation_flags(CREATE_NO_WINDOW)
         .output()
-        .map_err(|e| format!("whisper-cli spawn failed: {e}"))?;
+        .map_err(|e| format!("local speech spawn failed: {e}"))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
-        return Err(format!("whisper-cli failed: {stderr}"));
+        return Err(format!("local speech failed: {stderr}"));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+pub fn transcribe_wav_file(data_dir: &Path, audio_path: &Path, language: &str) -> Result<String, String> {
+    let cfg = json!({ "whisper": { "language": language } });
+    transcribe_local_with_config(data_dir, audio_path, &cfg)
 }
 
 fn sniff_audio_mime(bytes: &[u8], path: Option<&Path>) -> &'static str {
@@ -620,11 +1042,7 @@ pub fn transcribe_cached_file_with_config(
         .trim();
 
     let res = if engine == "whisper-local" {
-        let lang = cfg
-            .pointer("/whisper/language")
-            .and_then(|v| v.as_str())
-            .unwrap_or("ja");
-        let local_res = transcribe_wav_file(data_dir, cache_path, lang);
+        let local_res = transcribe_local_with_config(data_dir, cache_path, &cfg);
         if local_res.is_err()
             && cfg
                 .pointer("/whisper/cloudFallback")
@@ -676,13 +1094,9 @@ pub fn transcribe_audio_async(
             .unwrap_or(false);
 
         let res = if engine == "whisper-local" {
-            let lang = cfg
-                .pointer("/whisper/language")
-                .and_then(|v| v.as_str())
-                .unwrap_or("ja");
             match save_audio_to_cache(&data_dir, &audio_b64, &mime_type) {
                 Ok(p) => {
-                    let r = transcribe_wav_file(&data_dir, &p, lang);
+                    let r = transcribe_local_with_config(&data_dir, &p, &cfg);
                     if r.is_ok() {
                         let _ = std::fs::remove_file(&p);
                     }

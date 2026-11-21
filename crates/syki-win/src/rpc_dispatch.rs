@@ -780,23 +780,28 @@ impl CoreState {
             }
             "ptySuggestDirs" => RpcResponse::ok(&req.id, json!(pty::suggest_dirs())),
 
-            "getSpeechStatus" => RpcResponse::ok(&req.id, speech::get_speech_status(&self.env.data_dir)),
+            "getSpeechStatus" => {
+                let voice_cfg = param_str(&req.params, 0, "voiceConfigJson").unwrap_or_else(|| "{}".into());
+                RpcResponse::ok(&req.id, speech::get_speech_status(&self.env.data_dir, &voice_cfg))
+            }
             "installSpeechPartAsync" => {
                 let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
-                let part = param_str(&req.params, 1, "part").unwrap_or_else(|| "haas-ja".into());
+                let part = param_str(&req.params, 1, "part").unwrap_or_else(|| "model".into());
+                let voice_cfg = param_str(&req.params, 2, "voiceConfigJson").unwrap_or_else(|| "{}".into());
                 let sender = self.event_sender.lock().expect("event_sender mutex").clone();
-                speech::install_speech_part_async(self.env.data_dir.clone(), req_id, part, sender);
+                speech::install_speech_part_async(self.env.data_dir.clone(), req_id, part, voice_cfg, sender);
                 RpcResponse::ok(&req.id, json!(true))
             }
             "cancelSpeechInstall" => {
-                // Handled atomically in speech module.
+                speech::cancel_speech_install();
                 RpcResponse::ok(&req.id, json!(true))
             }
             "removeSpeechPart" => {
                 let part = param_str(&req.params, 0, "part").unwrap_or_default();
-                match speech::remove_speech_part(&self.env.data_dir, &part) {
-                    Ok(()) => RpcResponse::ok(&req.id, json!(true)),
-                    Err(e) => RpcResponse::err(&req.id, e),
+                let voice_cfg = param_str(&req.params, 1, "voiceConfigJson").unwrap_or_else(|| "{}".into());
+                match speech::remove_speech_part(&self.env.data_dir, &part, &voice_cfg) {
+                    Ok(()) => RpcResponse::ok(&req.id, json!("")),
+                    Err(e) => RpcResponse::ok(&req.id, json!(e)),
                 }
             }
             "pickFilePath" => match dialogs::pick_open_file(None, None) {
