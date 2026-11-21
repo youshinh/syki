@@ -8,6 +8,7 @@ pub mod host_lifecycle;
 pub mod ime;
 pub mod imgcap;
 pub mod llm;
+pub mod meeting_audio;
 pub mod printing;
 pub mod pty;
 pub mod quick_capture;

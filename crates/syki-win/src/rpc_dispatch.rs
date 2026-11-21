@@ -17,7 +17,7 @@ use syki_core::storage::{
 };
 
 use crate::webview_host::HostHandle;
-use crate::{assets_store, clipboard, dialogs, host_lifecycle, ime, llm, printing, pty, shell_pipe, speech};
+use crate::{assets_store, clipboard, dialogs, host_lifecycle, ime, llm, meeting_audio, printing, pty, shell_pipe, speech};
 
 pub type EventSender = Arc<dyn Fn(RpcEvent) + Send + Sync>;
 
@@ -33,6 +33,7 @@ pub struct CoreState {
     shell_pipe: shell_pipe::ShellPipeManager,
     print_preview: printing::PrintPreviewStore,
     pty_mgr: pty::PtyManager,
+    meeting: meeting_audio::MeetingRecorder,
 }
 
 impl CoreState {
@@ -50,6 +51,7 @@ impl CoreState {
             shell_pipe: shell_pipe::ShellPipeManager::new(),
             print_preview: printing::PrintPreviewStore::new(),
             pty_mgr: pty::PtyManager::new(),
+            meeting: meeting_audio::MeetingRecorder::new(),
         }
     }
 
@@ -869,6 +871,38 @@ impl CoreState {
                 Ok(()) => RpcResponse::ok(&req.id, json!(true)),
                 Err(e) => RpcResponse::err(&req.id, e),
             },
+
+            "meetingRecordingSupported" => RpcResponse::ok(&req.id, json!(true)),
+            "checkMeetingAudioAsync" => {
+                let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
+                let sender = self.event_sender.lock().expect("event_sender mutex").clone();
+                std::thread::spawn(move || {
+                    let probe = meeting_audio::probe_wasapi_endpoints();
+                    if let Some(tx) = sender {
+                        tx(RpcEvent {
+                            topic: "meeting:check".to_string(),
+                            payload: json!({
+                                "reqId": req_id,
+                                "json": probe.to_string()
+                            }),
+                        });
+                    }
+                });
+                RpcResponse::ok(&req.id, json!(true))
+            }
+            "startMeetingRecording" => match self.meeting.start() {
+                Ok(()) => RpcResponse::ok(&req.id, json!(true)),
+                Err(e) => RpcResponse::err(&req.id, e),
+            },
+            "stopMeetingRecordingAsync" => {
+                let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
+                let sender = self.event_sender.lock().expect("event_sender mutex").clone();
+                self.meeting.stop_async(self.env.data_dir.clone(), req_id, sender);
+                RpcResponse::ok(&req.id, json!(true))
+            }
+            "abortMeetingRecording" => {
+                RpcResponse::ok(&req.id, json!(self.meeting.abort()))
+            }
 
             other => RpcResponse::err(&req.id, format!("not_implemented_yet: {other}")),
         }
