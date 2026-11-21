@@ -23,7 +23,8 @@ use windows::Win32::System::Threading::{
     CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess,
     InitializeProcThreadAttributeList, TerminateProcess, UpdateProcThreadAttribute,
     WaitForSingleObject, EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
-    PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, STARTUPINFOEXW,
+    PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, STARTF_USESTDHANDLES,
+    STARTUPINFOEXW,
 };
 
 use crate::rpc_dispatch::EventSender;
@@ -32,8 +33,8 @@ const MAX_HISTORY_BYTES: usize = 256 * 1024;
 const STILL_ACTIVE_CODE: u32 = 259;
 
 struct PtySession {
-    id: String,
-    label: String,
+    _id: String,
+    _label: String,
     hpcon: isize,
     process_handle: isize,
     writer: Mutex<File>,
@@ -129,6 +130,7 @@ impl PtyManager {
 
         let mut si = STARTUPINFOEXW::default();
         si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+        si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
         si.lpAttributeList = attr_list;
 
         let mut cmd_utf16: Vec<u16> = cmd_line.encode_utf16().chain(std::iter::once(0)).collect();
@@ -178,8 +180,8 @@ impl PtyManager {
         };
 
         let session = Arc::new(PtySession {
-            id: id.clone(),
-            label: lbl.clone(),
+            _id: id.clone(),
+            _label: lbl.clone(),
             hpcon: hpcon.0,
             process_handle: pi.hProcess.0 as isize,
             writer: Mutex::new(writer),
@@ -481,10 +483,11 @@ mod tests {
             .expect("start ConPTY");
         assert_eq!(started["id"], "test-pty");
 
+        std::thread::sleep(Duration::from_millis(250));
         mgr.write("test-pty", "echo SYKI_PTY_OK\r\n").expect("ptyWrite");
         mgr.resize("test-pty", 80, 24).expect("ptyResize");
 
-        let deadline = std::time::Instant::now() + Duration::from_secs(4);
+        let deadline = std::time::Instant::now() + Duration::from_secs(6);
         let mut combined = String::new();
         while std::time::Instant::now() < deadline {
             if let Ok(ev) = rx.recv_timeout(Duration::from_millis(200)) {

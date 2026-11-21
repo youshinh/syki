@@ -503,8 +503,32 @@ mod tests {
 
         let srv = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut buf = [0u8; 2048];
-            let _ = stream.read(&mut buf);
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+            let mut req_buf = Vec::new();
+            let mut tmp = [0u8; 1024];
+            while let Ok(n) = stream.read(&mut tmp) {
+                if n == 0 {
+                    break;
+                }
+                req_buf.extend_from_slice(&tmp[..n]);
+                if let Some(pos) = req_buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let hdr = String::from_utf8_lossy(&req_buf[..pos]);
+                    let content_len = hdr
+                        .lines()
+                        .find_map(|l| {
+                            let (k, v) = l.split_once(':')?;
+                            if k.trim().eq_ignore_ascii_case("content-length") {
+                                v.trim().parse::<usize>().ok()
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(0);
+                    if req_buf.len() >= pos + 4 + content_len {
+                        break;
+                    }
+                }
+            }
             let body = r#"{"choices":[{"message":{"content":"mock-reply"}}]}"#;
             let resp = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -512,6 +536,7 @@ mod tests {
                 body
             );
             stream.write_all(resp.as_bytes()).unwrap();
+            stream.flush().unwrap();
         });
 
         let cfg = LlmConfig {
