@@ -16,7 +16,8 @@ use syki_core::storage::{
     SessionStore,
 };
 
-use crate::{assets_store, clipboard, dialogs, ime, shell_pipe};
+use crate::webview_host::HostHandle;
+use crate::{assets_store, clipboard, dialogs, host_lifecycle, ime, shell_pipe};
 
 pub type EventSender = Arc<dyn Fn(RpcEvent) + Send + Sync>;
 
@@ -28,6 +29,7 @@ pub struct CoreState {
     watcher: Mutex<Option<ActiveFileWatcher>>,
     startup_file: Mutex<Option<PathBuf>>,
     event_sender: Mutex<Option<EventSender>>,
+    host_handle: Mutex<Option<HostHandle>>,
     shell_pipe: shell_pipe::ShellPipeManager,
 }
 
@@ -42,12 +44,18 @@ impl CoreState {
             watcher: Mutex::new(None),
             startup_file: Mutex::new(startup_file),
             event_sender: Mutex::new(None),
+            host_handle: Mutex::new(None),
             shell_pipe: shell_pipe::ShellPipeManager::new(),
         }
     }
 
     pub fn set_event_sender(&self, sender: EventSender) {
         *self.event_sender.lock().expect("event_sender mutex") = Some(sender);
+    }
+
+    pub fn set_host_handle(&self, handle: HostHandle) {
+        self.set_event_sender(handle.event_sender.clone());
+        *self.host_handle.lock().expect("host_handle mutex") = Some(handle);
     }
 
     pub fn dispatch(&self, req: &RpcRequest) -> RpcResponse {
@@ -458,6 +466,73 @@ impl CoreState {
                 let fallback = search_scraps_parallel(&dir, &query, limit, &ScrapFilter::default());
                 RpcResponse::ok(&req.id, serde_json::to_value(fallback).unwrap_or(json!([])))
             }
+
+            "trimMemory" => {
+                host_lifecycle::trim_working_set_async();
+                RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "minimizeWindow" => {
+                if let Some(h) = self.host_handle.lock().expect("host_handle mutex").as_ref() {
+                    h.minimize();
+                }
+                RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "toggleMaximize" | "toggleFullscreen" => {
+                if let Some(h) = self.host_handle.lock().expect("host_handle mutex").as_ref() {
+                    h.toggle_maximize();
+                }
+                RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "closeWindow" => {
+                if let Some(h) = self.host_handle.lock().expect("host_handle mutex").as_ref() {
+                    h.hide_to_tray();
+                }
+                RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "forceQuit" => {
+                if let Some(h) = self.host_handle.lock().expect("host_handle mutex").as_ref() {
+                    h.force_quit();
+                }
+                RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "updateGlobalShortcut" => {
+                let spec = param_str(&req.params, 0, "shortcut").unwrap_or_default();
+                let guard = self.host_handle.lock().expect("host_handle mutex");
+                if let Some(h) = guard.as_ref() {
+                    match h.update_main_hotkey(&spec) {
+                        Ok(ok) => RpcResponse::ok(&req.id, json!(ok)),
+                        Err(e) => RpcResponse::err(&req.id, e),
+                    }
+                } else {
+                    match host_lifecycle::parse_shortcut(&spec) {
+                        Some(_) => RpcResponse::ok(&req.id, json!(true)),
+                        None => RpcResponse::err(&req.id, format!("invalid shortcut: {spec}")),
+                    }
+                }
+            }
+
+            "updateQuickCaptureShortcut" => {
+                let spec = param_str(&req.params, 0, "shortcut").unwrap_or_default();
+                let guard = self.host_handle.lock().expect("host_handle mutex");
+                if let Some(h) = guard.as_ref() {
+                    match h.update_qc_hotkey(&spec) {
+                        Ok(ok) => RpcResponse::ok(&req.id, json!(ok)),
+                        Err(e) => RpcResponse::err(&req.id, e),
+                    }
+                } else if spec.trim().is_empty() || host_lifecycle::parse_shortcut(&spec).is_some() {
+                    RpcResponse::ok(&req.id, json!(true))
+                } else {
+                    RpcResponse::err(&req.id, format!("invalid shortcut: {spec}"))
+                }
+            }
+
+            "isSendToShortcutInstalled" => RpcResponse::ok(&req.id, json!(false)),
+            "fileTypesStatus" => RpcResponse::ok(&req.id, json!({ "registered": false })),
 
             other => RpcResponse::err(&req.id, format!("not_implemented_yet: {other}")),
         }

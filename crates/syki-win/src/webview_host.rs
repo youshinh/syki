@@ -29,22 +29,36 @@ use windows::Win32::UI::HiDpi::{SetProcessDpiAwareness, PROCESS_PER_MONITOR_DPI_
 use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW,
-    GetWindowLongPtrW, PostMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow,
-    SetWindowLongPtrW, ShowWindow, TranslateMessage, CW_USEDEFAULT, GWLP_USERDATA, MSG,
-    SW_RESTORE, SW_SHOW, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_DESTROY, WM_SIZE, WNDCLASSW,
-    WS_OVERLAPPEDWINDOW,
+    GetWindowLongPtrW, IsZoomed, PostMessageW, PostQuitMessage, RegisterClassW,
+    SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TranslateMessage, CW_USEDEFAULT,
+    GWLP_USERDATA, MSG, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, WINDOW_EX_STYLE,
+    WM_APP, WM_CLOSE, WM_DESTROY, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP,
+    WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
+use crate::host_lifecycle::{
+    add_tray_icon, apply_hotkey, remove_tray_icon, show_tray_menu, trim_working_set_async,
+    CanvasHostState, HOTKEY_ID_MAIN, HOTKEY_ID_QUICKCAPTURE, TRAY_CMD_EXIT, TRAY_CMD_QUICK_CAPTURE,
+    TRAY_CMD_SHOW, WM_TRAY_ICON,
+};
 use crate::rpc_dispatch::EventSender;
 
 const WM_APP_PUSH_EVENT: u32 = WM_APP + 1;
 const WM_APP_ACTIVATE: u32 = WM_APP + 2;
+const WM_APP_WINDOW_CMD: u32 = WM_APP + 3;
 
-/// Thread-safe handle to push `RpcEvent`s or bring the main window to the foreground.
+const WIN_CMD_MINIMIZE: usize = 1;
+const WIN_CMD_TOGGLE_MAX: usize = 2;
+const WIN_CMD_HIDE: usize = 3;
+const WIN_CMD_FORCE_QUIT: usize = 4;
+
+/// Thread-safe handle to push `RpcEvent`s or control the Win32 host window.
 #[derive(Clone)]
 pub struct HostHandle {
     pub event_sender: EventSender,
     hwnd_raw: isize,
+    hotkey_main: Arc<Mutex<String>>,
+    hotkey_qc: Arc<Mutex<String>>,
 }
 
 impl HostHandle {
@@ -54,6 +68,51 @@ impl HostHandle {
                 Some(HWND(self.hwnd_raw as *mut _)),
                 WM_APP_ACTIVATE,
                 WPARAM(0),
+                LPARAM(0),
+            );
+        }
+    }
+
+    pub fn minimize(&self) {
+        self.post_win_cmd(WIN_CMD_MINIMIZE);
+    }
+
+    pub fn toggle_maximize(&self) {
+        self.post_win_cmd(WIN_CMD_TOGGLE_MAX);
+    }
+
+    pub fn hide_to_tray(&self) {
+        self.post_win_cmd(WIN_CMD_HIDE);
+    }
+
+    pub fn force_quit(&self) {
+        self.post_win_cmd(WIN_CMD_FORCE_QUIT);
+    }
+
+    pub fn update_main_hotkey(&self, spec: &str) -> Result<bool, String> {
+        crate::host_lifecycle::parse_shortcut(spec)
+            .ok_or_else(|| format!("invalid shortcut: {spec}"))?;
+        *self.hotkey_main.lock().expect("hotkey_main mutex") = spec.to_string();
+        self.post_win_cmd(10);
+        Ok(true)
+    }
+
+    pub fn update_qc_hotkey(&self, spec: &str) -> Result<bool, String> {
+        if !spec.trim().is_empty() {
+            crate::host_lifecycle::parse_shortcut(spec)
+                .ok_or_else(|| format!("invalid shortcut: {spec}"))?;
+        }
+        *self.hotkey_qc.lock().expect("hotkey_qc mutex") = spec.to_string();
+        self.post_win_cmd(11);
+        Ok(true)
+    }
+
+    fn post_win_cmd(&self, cmd: usize) {
+        unsafe {
+            let _ = PostMessageW(
+                Some(HWND(self.hwnd_raw as *mut _)),
+                WM_APP_WINDOW_CMD,
+                WPARAM(cmd),
                 LPARAM(0),
             );
         }
@@ -129,6 +188,9 @@ struct WindowState {
     controller: Rc<RefCell<Option<ICoreWebView2Controller>>>,
     webview: Rc<RefCell<Option<ICoreWebView2>>>,
     event_queue: Arc<Mutex<VecDeque<String>>>,
+    canvas: RefCell<CanvasHostState>,
+    hotkey_main: Arc<Mutex<String>>,
+    hotkey_qc: Arc<Mutex<String>>,
 }
 
 fn client_rect_of(hwnd: HWND) -> RECT {
@@ -185,9 +247,88 @@ extern "system" fn host_wnd_proc(
             LRESULT(0)
         }
         WM_APP_ACTIVATE => {
+            let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const WindowState;
+            if !ptr.is_null() {
+                let state = unsafe { &*ptr };
+                state.canvas.borrow_mut().wake();
+                if let Some(ctrl) = state.controller.borrow().as_ref() {
+                    let _ = unsafe { ctrl.SetIsVisible(true) };
+                }
+            }
             unsafe {
                 let _ = ShowWindow(hwnd, SW_RESTORE);
                 let _ = SetForegroundWindow(hwnd);
+            }
+            LRESULT(0)
+        }
+        WM_APP_WINDOW_CMD => {
+            let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const WindowState;
+            match w_param.0 {
+                WIN_CMD_MINIMIZE => {
+                    let _ = unsafe { ShowWindow(hwnd, SW_MINIMIZE) };
+                }
+                WIN_CMD_TOGGLE_MAX => unsafe {
+                    if IsZoomed(hwnd).as_bool() {
+                        let _ = ShowWindow(hwnd, SW_RESTORE);
+                    } else {
+                        let _ = ShowWindow(hwnd, SW_MAXIMIZE);
+                    }
+                },
+                WIN_CMD_HIDE => {
+                    if !ptr.is_null() {
+                        let state = unsafe { &*ptr };
+                        state.canvas.borrow_mut().suspend();
+                        if let Some(ctrl) = state.controller.borrow().as_ref() {
+                            let _ = unsafe { ctrl.SetIsVisible(false) };
+                        }
+                    }
+                    let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+                    trim_working_set_async();
+                }
+                WIN_CMD_FORCE_QUIT => {
+                    let _ = unsafe { DestroyWindow(hwnd) };
+                }
+                10 => {
+                    if !ptr.is_null() {
+                        let state = unsafe { &*ptr };
+                        let spec = state.hotkey_main.lock().expect("hotkey_main mutex").clone();
+                        let _ = apply_hotkey(hwnd, HOTKEY_ID_MAIN, &spec);
+                    }
+                }
+                11 => {
+                    if !ptr.is_null() {
+                        let state = unsafe { &*ptr };
+                        let spec = state.hotkey_qc.lock().expect("hotkey_qc mutex").clone();
+                        let _ = apply_hotkey(hwnd, HOTKEY_ID_QUICKCAPTURE, &spec);
+                    }
+                }
+                _ => {}
+            }
+            LRESULT(0)
+        }
+        WM_HOTKEY => {
+            if w_param.0 as i32 == HOTKEY_ID_MAIN {
+                let _ = unsafe { PostMessageW(Some(hwnd), WM_APP_ACTIVATE, WPARAM(0), LPARAM(0)) };
+            }
+            LRESULT(0)
+        }
+        WM_TRAY_ICON => {
+            let kind = (l_param.0 as u32) & 0xFFFF;
+            if kind == WM_LBUTTONUP || kind == WM_LBUTTONDBLCLK {
+                let _ = unsafe { PostMessageW(Some(hwnd), WM_APP_ACTIVATE, WPARAM(0), LPARAM(0)) };
+            } else if kind == WM_RBUTTONUP {
+                match show_tray_menu(hwnd) {
+                    Some(TRAY_CMD_SHOW) => {
+                        let _ = unsafe {
+                            PostMessageW(Some(hwnd), WM_APP_ACTIVATE, WPARAM(0), LPARAM(0))
+                        };
+                    }
+                    Some(TRAY_CMD_QUICK_CAPTURE) => {}
+                    Some(TRAY_CMD_EXIT) => {
+                        let _ = unsafe { DestroyWindow(hwnd) };
+                    }
+                    _ => {}
+                }
             }
             LRESULT(0)
         }
@@ -206,6 +347,7 @@ extern "system" fn host_wnd_proc(
             LRESULT(0)
         }
         WM_DESTROY => {
+            remove_tray_icon(hwnd);
             let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut WindowState;
             if !ptr.is_null() {
                 unsafe {
@@ -294,14 +436,20 @@ pub fn run_webview_host_with_handle(
     let controller_slot: Rc<RefCell<Option<ICoreWebView2Controller>>> = Rc::new(RefCell::new(None));
     let webview_slot: Rc<RefCell<Option<ICoreWebView2>>> = Rc::new(RefCell::new(None));
     let event_queue: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+    let hotkey_main = Arc::new(Mutex::new(String::new()));
+    let hotkey_qc = Arc::new(Mutex::new(String::new()));
     let boxed_state = Box::new(WindowState {
         controller: Rc::clone(&controller_slot),
         webview: Rc::clone(&webview_slot),
         event_queue: Arc::clone(&event_queue),
+        canvas: RefCell::new(CanvasHostState::new()),
+        hotkey_main: Arc::clone(&hotkey_main),
+        hotkey_qc: Arc::clone(&hotkey_qc),
     });
     unsafe {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(boxed_state) as isize);
     }
+    let _ = add_tray_icon(hwnd, &config.title);
 
     let user_data_str = config.user_data_dir.to_string_lossy().into_owned();
     let environment = {
@@ -374,6 +522,8 @@ pub fn run_webview_host_with_handle(
         cb(HostHandle {
             event_sender: sender,
             hwnd_raw,
+            hotkey_main,
+            hotkey_qc,
         });
     }
     if !config.debug {

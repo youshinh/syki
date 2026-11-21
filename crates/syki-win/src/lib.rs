@@ -4,6 +4,7 @@ pub mod assets;
 pub mod assets_store;
 pub mod clipboard;
 pub mod dialogs;
+pub mod host_lifecycle;
 pub mod ime;
 pub mod rpc_dispatch;
 pub mod shell_pipe;

@@ -183,7 +183,7 @@ fn main() {
         Arc::new(move |req| core_for_rpc.dispatch(req)),
         None,
         Some(Box::new(move |handle| {
-            core_for_events.set_event_sender(handle.event_sender.clone());
+            core_for_events.set_host_handle(handle.clone());
             let env_cb = env_for_ipc.clone();
             let handle_cb = handle.clone();
             if let Ok(srv) = IpcPipeServer::start(&env_for_ipc, move |req| {
