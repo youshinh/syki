@@ -278,6 +278,24 @@
 
     function callMethod(method, args) {
       if (disposed) return Promise.reject(new Error('backend proxy disposed'));
+      const preload = win && win.__sykiPreload;
+      if (preload && args.length === 0) {
+        if (method === 'getConfig' && typeof preload.config === 'string') {
+          const v = preload.config;
+          preload.config = null;
+          return Promise.resolve(v);
+        }
+        if (method === 'getSession' && typeof preload.session === 'string') {
+          const v = preload.session;
+          preload.session = null;
+          return Promise.resolve(v);
+        }
+        if (method === 'getPlatformCapabilities' && preload.caps && typeof preload.caps === 'object') {
+          const v = preload.caps;
+          preload.caps = null;
+          return Promise.resolve(v);
+        }
+      }
       if (!webview || typeof webview.postMessage !== 'function') {
         return Promise.reject(new Error('WebView2 postMessage bridge unavailable'));
       }

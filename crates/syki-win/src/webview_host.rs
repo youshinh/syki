@@ -13,7 +13,8 @@ use std::sync::{mpsc, Arc, Mutex};
 use syki_core::rpc::{RpcEvent, RpcRequest, RpcResponse};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2, ICoreWebView2Controller,
-    ICoreWebView2EnvironmentOptions, ICoreWebView2_3, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+    ICoreWebView2Controller2, ICoreWebView2EnvironmentOptions, ICoreWebView2_3,
+    COREWEBVIEW2_COLOR, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
 };
 use webview2_com::{
     CallDevToolsProtocolMethodCompletedHandler, CoTaskMemPWSTR,
@@ -21,9 +22,11 @@ use webview2_com::{
     TrySuspendCompletedHandler, WebMessageReceivedEventHandler, WebResourceRequestedEventHandler,
 };
 use windows::core::{PCWSTR, PWSTR};
-use windows::Win32::Foundation::{E_POINTER, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    COLORREF, E_POINTER, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM,
+};
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
-use windows::Win32::Graphics::Gdi::UpdateWindow;
+use windows::Win32::Graphics::Gdi::{CreateSolidBrush, UpdateWindow};
 use windows::Win32::System::Com::{CoInitializeEx, IStream, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwareness, PROCESS_PER_MONITOR_DPI_AWARE};
@@ -255,6 +258,33 @@ fn reason_phrase_for(status: u16) -> &'static str {
         500 => "Internal Server Error",
         _ => "Status",
     }
+}
+
+fn build_preload_script(data_dir: &std::path::Path) -> String {
+    let read_valid_json_str = |filename: &str| -> Option<String> {
+        let raw = std::fs::read_to_string(data_dir.join(filename)).ok()?;
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        serde_json::from_str::<serde_json::Value>(trimmed).ok()?;
+        Some(raw)
+    };
+    let config_val = read_valid_json_str("config.json");
+    let session_val = read_valid_json_str("session.json");
+    let payload = serde_json::json!({
+        "config": config_val,
+        "session": session_val,
+        "caps": {
+            "os": "win32",
+            "nativeImeSwitch": true,
+            "tray": true,
+            "globalHotkey": true,
+            "aiOcr": true,
+            "winrtOcr": false
+        }
+    });
+    format!("window.__sykiPreload = {payload};")
 }
 
 /// Returns `true` when closing the window should hide to the tray rather than exit (`general.trayResident`, default `true`).
@@ -572,6 +602,7 @@ pub fn run_webview_host_with_handle(
         lpfnWndProc: Some(host_wnd_proc),
         hInstance: hinstance.unwrap_or_default(),
         hIcon: app_icon,
+        hbrBackground: unsafe { CreateSolidBrush(COLORREF(0x001E_1E1E)) },
         lpszClassName: *class_name.as_ref().as_pcwstr(),
         ..Default::default()
     };
@@ -608,6 +639,7 @@ pub fn run_webview_host_with_handle(
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| syki_core::rpc::RuntimeEnv::from_env().data_dir);
+    let data_dir_for_preload = data_dir.clone();
     let boxed_state = Box::new(WindowState {
         controller: Rc::clone(&controller_slot),
         webview: Rc::clone(&webview_slot),
@@ -630,6 +662,8 @@ pub fn run_webview_host_with_handle(
             &dark_mode as *const _ as *const _,
             std::mem::size_of::<i32>() as u32,
         );
+        let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = UpdateWindow(hwnd);
     }
 
     let user_data_str = config.user_data_dir.to_string_lossy().into_owned();
@@ -677,6 +711,14 @@ pub fn run_webview_host_with_handle(
     };
 
     unsafe {
+        if let Ok(ctrl2) = windows::core::Interface::cast::<ICoreWebView2Controller2>(&controller) {
+            let _ = ctrl2.SetDefaultBackgroundColor(COREWEBVIEW2_COLOR {
+                A: 255,
+                R: 30,
+                G: 30,
+                B: 30,
+            });
+        }
         controller.SetBounds(client_rect_of(hwnd))?;
         controller.SetIsVisible(true)?;
     }
@@ -798,11 +840,12 @@ pub fn run_webview_host_with_handle(
         )?;
     }
 
+    let preload_script = build_preload_script(&data_dir_for_preload);
+    let preload_w = CoTaskMemPWSTR::from(preload_script.as_str());
     let origin_w = CoTaskMemPWSTR::from(config.virtual_origin);
     unsafe {
+        let _ = webview.AddScriptToExecuteOnDocumentCreated(*preload_w.as_ref().as_pcwstr(), None);
         webview.Navigate(*origin_w.as_ref().as_pcwstr())?;
-        let _ = ShowWindow(hwnd, SW_SHOW);
-        let _ = UpdateWindow(hwnd);
     }
 
     let mut msg = MSG::default();
