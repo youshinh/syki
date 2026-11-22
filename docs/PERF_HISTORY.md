@@ -4,4 +4,5 @@ CI / デプロイごとに同一指標で記録した起動速度・省メモリ
 
 | Date (UTC) | Commit | Ref | Runner | Warm `app_ready` (ms) | Cold `app_ready` (ms) | Attached PWS (MB) | Detached PWS (MB) | `syki.exe` (MB) |
 |---|---|---|---|---:|---:|---:|---:|---:|
+| 2026-11-22 00:52:42 | `541598d` | main | Windows-X64 | 5731.6 (+5357.9) | 6258.6 | 83.57 (-21.73) | 0.84 | 5.16 |
 | 2026-11-21 15:19:51 | `3ddea40` | main | win32-x64 | 373.7 | 535.9 | 105.3 | 105.7 | 5.16 |
