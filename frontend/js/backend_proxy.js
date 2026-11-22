@@ -105,6 +105,7 @@
 
     // F21 Local STT (Haas-ja / speech.cpp) & F22 WASAPI Meeting audio
     'getSpeechStatus',
+    'prefetchSpeechModel',
     'installSpeechPartAsync',
     'cancelSpeechInstall',
     'removeSpeechPart',

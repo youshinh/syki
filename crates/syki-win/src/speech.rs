@@ -90,6 +90,47 @@ pub fn voice_cache_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("voice-cache")
 }
 
+/// Hints the OS to page-cache the largest local ASR model file asynchronously while the user speaks.
+pub fn prefetch_model_async(data_dir: PathBuf) {
+    std::thread::spawn(move || {
+        let base = speech_dir(&data_dir);
+        let mut best: Option<(u64, PathBuf)> = None;
+        for sub in [base.clone(), base.join("models")] {
+            if let Ok(rd) = std::fs::read_dir(&sub) {
+                for entry in rd.flatten() {
+                    let p = entry.path();
+                    if !p.is_file() {
+                        continue;
+                    }
+                    let ext = p
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    if matches!(ext.as_str(), "bin" | "gguf" | "onnx") {
+                        if let Ok(m) = entry.metadata() {
+                            if best.as_ref().map(|(sz, _)| m.len() > *sz).unwrap_or(true) {
+                                best = Some((m.len(), p));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some((_, path)) = best {
+            if let Ok(mut f) = std::fs::File::open(path) {
+                use std::io::Read;
+                let mut buf = vec![0u8; 256 * 1024];
+                while let Ok(n) = f.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+}
+
 pub fn validate_whisper_model_file(path: &Path) -> Result<Value, String> {
     let meta = std::fs::metadata(path).map_err(|e| format!("model file unreadable: {e}"))?;
     if !meta.is_file() {

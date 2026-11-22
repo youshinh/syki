@@ -16,7 +16,7 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2Controller2, ICoreWebView2Environment, ICoreWebView2EnvironmentOptions,
     ICoreWebView2_19, ICoreWebView2_3, COREWEBVIEW2_COLOR,
     COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
-    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+    COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
 };
 use webview2_com::{
     CallDevToolsProtocolMethodCompletedHandler, CoTaskMemPWSTR,
@@ -505,7 +505,28 @@ fn attach_webview_controller(
                     };
 
                 let stream: Option<IStream> = SHCreateMemStream(Some(&body));
-                let headers = format!("Content-Type: {mime}\r\nCache-Control: no-store");
+                let rel_path = uri
+                    .strip_prefix(VIRTUAL_ORIGIN)
+                    .unwrap_or("")
+                    .split('?')
+                    .next()
+                    .unwrap_or("");
+                let is_immutable_asset = status == 200
+                    && !rel_path.starts_with("api/")
+                    && !rel_path.is_empty()
+                    && rel_path != "index.html"
+                    && (rel_path.ends_with(".js")
+                        || rel_path.ends_with(".css")
+                        || rel_path.ends_with(".png")
+                        || rel_path.ends_with(".svg")
+                        || rel_path.ends_with(".woff2")
+                        || rel_path.ends_with(".ico"));
+                let cache_hdr = if is_immutable_asset {
+                    "public, max-age=31536000, immutable"
+                } else {
+                    "no-store"
+                };
+                let headers = format!("Content-Type: {mime}\r\nCache-Control: {cache_hdr}");
                 let reason_w = CoTaskMemPWSTR::from(reason_phrase_for(status));
                 let headers_w = CoTaskMemPWSTR::from(headers.as_str());
                 let response = env_for_res.CreateWebResourceResponse(
@@ -626,6 +647,16 @@ extern "system" fn host_wnd_proc(
             unsafe {
                 let _ = ShowWindow(hwnd, SW_RESTORE);
                 let _ = SetForegroundWindow(hwnd);
+            }
+            if !ptr.is_null() {
+                let state = unsafe { &*ptr };
+                if let Some(ctrl) = state.controller.borrow().as_ref() {
+                    let _ = unsafe { ctrl.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC) };
+                }
+                if let Some(wv) = state.webview.borrow().as_ref() {
+                    let msg_w = CoTaskMemPWSTR::from(r#"{"topic":"window:restored","payload":{}}"#);
+                    let _ = unsafe { wv.PostWebMessageAsJson(*msg_w.as_ref().as_pcwstr()) };
+                }
             }
             LRESULT(0)
         }
@@ -1052,6 +1083,10 @@ pub fn run_webview_host_with_handle(
             }
         });
         *event_sender_slot.borrow_mut() = Some(sender.clone());
+        crate::quick_capture::prewarm_quick_capture_popup(
+            state_ref.data_dir.clone(),
+            Some(sender.clone()),
+        );
         cb(HostHandle {
             event_sender: sender,
             hwnd_raw,

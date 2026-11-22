@@ -923,6 +923,10 @@ impl CoreState {
                 let voice_cfg = param_str(&req.params, 0, "voiceConfigJson").unwrap_or_else(|| "{}".into());
                 RpcResponse::ok(&req.id, speech::get_speech_status(&self.env.data_dir, &voice_cfg))
             }
+            "prefetchSpeechModel" => {
+                speech::prefetch_model_async(self.env.data_dir.clone());
+                RpcResponse::ok(&req.id, json!(true))
+            }
             "installSpeechPartAsync" => {
                 let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
                 let part = param_str(&req.params, 1, "part").unwrap_or_else(|| "model".into());

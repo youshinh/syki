@@ -3,7 +3,7 @@
 //! dark GDI surface (`#252526`), `WM_CTLCOLOREDIT`, and owner-drawn flat buttons.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use base64::engine::general_purpose::STANDARD;
@@ -34,10 +34,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetDlgItem,
     GetParent, GetSystemMetrics, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
-    LoadCursorW, RegisterClassW, SendMessageW, SetForegroundWindow, SetLayeredWindowAttributes,
-    SetWindowLongPtrW, SetWindowTextW, ShowWindow, GWLP_USERDATA, GWLP_WNDPROC, HMENU, IDC_ARROW,
-    LWA_ALPHA, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_DESTROY, WM_DRAWITEM, WM_ERASEBKGND, WM_KEYDOWN,
+    IsWindow, LoadCursorW, RegisterClassW, SendMessageW, SetForegroundWindow,
+    SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowTextW, ShowWindow, GWLP_USERDATA,
+    GWLP_WNDPROC, HMENU, IDC_ARROW, LWA_ALPHA, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_SHOW,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_DESTROY, WM_DRAWITEM, WM_ERASEBKGND, WM_KEYDOWN,
     WM_LBUTTONDOWN, WM_NCHITTEST, WM_PAINT, WM_SETFONT, WNDCLASSW, WNDPROC, WS_CHILD,
     WS_CLIPCHILDREN, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_TABSTOP,
     WS_VISIBLE,
@@ -172,6 +172,22 @@ fn load_qc_theme(data_dir: &Path) -> QcTheme {
 
 static POPUP_OPEN: AtomicBool = AtomicBool::new(false);
 static CLASS_REGISTERED: AtomicBool = AtomicBool::new(false);
+static POPUP_HWND: AtomicIsize = AtomicIsize::new(0);
+
+unsafe fn hide_quick_capture_popup(hwnd: HWND) {
+    if let Ok(mut guard) = ACTIVE_CTX.lock() {
+        if let Some(ctx) = guard.as_mut() {
+            if let Some(mic) = ctx.mic.take() {
+                mic.stop.store(true, Ordering::Release);
+            }
+            ctx.snapshots.clear();
+            ctx.status_hint.clear();
+            let _ = SetWindowTextW(HWND(ctx.edit_hwnd as *mut _), w!(""));
+        }
+    }
+    POPUP_OPEN.store(false, Ordering::Release);
+    let _ = ShowWindow(hwnd, SW_HIDE);
+}
 
 struct MicCaptureState {
     stop: Arc<AtomicBool>,
@@ -762,6 +778,7 @@ unsafe extern "system" fn quick_capture_wnd_proc(
                             ctx.status_hint = "変換中...".to_string();
                             Some((mic, ctx.data_dir.clone(), HWND(ctx.edit_hwnd as *mut _)))
                         } else {
+                            speech::prefetch_model_async(ctx.data_dir.clone());
                             ctx.mic = Some(start_mic_capture());
                             ctx.status_hint = "録音中...".to_string();
                             None
@@ -814,30 +831,45 @@ unsafe extern "system" fn quick_capture_wnd_proc(
             } else if cmd_id == ID_BTN_SAVE && (notify == BN_CLICKED || l_param.0 == 0) {
                 let payload = if let Ok(mut guard) = ACTIVE_CTX.lock() {
                     if let Some(ctx) = guard.as_mut() {
-                        if let Some(mic) = ctx.mic.take() {
-                            mic.stop.store(true, Ordering::Release);
-                        }
+                        let active_mic = ctx.mic.take();
                         let body = read_edit_text(HWND(ctx.edit_hwnd as *mut _));
                         let snaps = std::mem::take(&mut ctx.snapshots);
-                        Some((body, snaps, ctx.data_dir.clone(), ctx.event_sender.clone()))
+                        ctx.status_hint.clear();
+                        let _ = SetWindowTextW(HWND(ctx.edit_hwnd as *mut _), w!(""));
+                        Some((body, snaps, active_mic, ctx.data_dir.clone(), ctx.event_sender.clone()))
                     } else {
                         None
                     }
                 } else {
                     None
                 };
-                if let Some((body, snaps, dir, sender)) = payload {
-                    let _ = submit_quick_capture_with_snapshots(
-                        &dir,
-                        &body,
-                        &snaps,
-                        sender.as_ref(),
-                    );
+                POPUP_HWND.store(0, Ordering::Release);
+            POPUP_OPEN.store(false, Ordering::Release);
+                let _ = ShowWindow(hwnd, SW_HIDE);
+                if let Some((mut body, snaps, active_mic, dir, sender)) = payload {
+                    std::thread::spawn(move || {
+                        if let Some(mic) = active_mic {
+                            if let Ok(txt) = stop_mic_and_transcribe(&dir, mic) {
+                                if !txt.is_empty() {
+                                    if body.trim().is_empty() {
+                                        body = txt;
+                                    } else {
+                                        body = format!("{}\r\n{}", body.trim_end(), txt);
+                                    }
+                                }
+                            }
+                        }
+                        let _ = submit_quick_capture_with_snapshots(
+                            &dir,
+                            &body,
+                            &snaps,
+                            sender.as_ref(),
+                        );
+                    });
                 }
-                let _ = DestroyWindow(hwnd);
                 return LRESULT(0);
             } else if cmd_id == ID_BTN_CANCEL {
-                let _ = DestroyWindow(hwnd);
+                hide_quick_capture_popup(hwnd);
                 return LRESULT(0);
             }
             DefWindowProcW(hwnd, msg, w_param, l_param)
@@ -847,7 +879,7 @@ unsafe extern "system" fn quick_capture_wnd_proc(
             DefWindowProcW(hwnd, msg, w_param, l_param)
         }
         WM_CLOSE => {
-            let _ = DestroyWindow(hwnd);
+            hide_quick_capture_popup(hwnd);
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -880,6 +912,7 @@ unsafe extern "system" fn quick_capture_wnd_proc(
                     }
                 }
             }
+            POPUP_HWND.store(0, Ordering::Release);
             POPUP_OPEN.store(false, Ordering::Release);
             LRESULT(0)
         }
@@ -887,11 +920,66 @@ unsafe extern "system" fn quick_capture_wnd_proc(
     }
 }
 
+/// Pre-creates the Win32 Quick Capture popup in hidden state so the first hotkey wake takes 1-3 ms.
+pub fn prewarm_quick_capture_popup(data_dir: PathBuf, event_sender: Option<EventSender>) {
+    let existing = POPUP_HWND.load(Ordering::Acquire);
+    if existing != 0 && unsafe { IsWindow(Some(HWND(existing as *mut _))).as_bool() } {
+        return;
+    }
+    create_quick_capture_window(data_dir, event_sender, false);
+}
+
 /// Opens the native Win32 Quick Capture popup on the UI thread (no-op if already open).
 pub fn open_quick_capture_popup(data_dir: PathBuf, event_sender: Option<EventSender>) {
     if POPUP_OPEN.swap(true, Ordering::AcqRel) {
+        let existing = POPUP_HWND.load(Ordering::Acquire);
+        if existing != 0 {
+            let hwnd = HWND(existing as *mut _);
+            unsafe {
+                let _ = SetForegroundWindow(hwnd);
+            }
+        }
         return;
     }
+
+    let existing = POPUP_HWND.load(Ordering::Acquire);
+    if existing != 0 && unsafe { IsWindow(Some(HWND(existing as *mut _))).as_bool() } {
+        let hwnd = HWND(existing as *mut _);
+        let edit_hwnd = if let Ok(mut guard) = ACTIVE_CTX.lock() {
+            if let Some(ctx) = guard.as_mut() {
+                ctx.data_dir = data_dir;
+                ctx.event_sender = event_sender;
+                ctx.snapshots.clear();
+                ctx.status_hint.clear();
+                let eh = HWND(ctx.edit_hwnd as *mut _);
+                unsafe {
+                    let _ = SetWindowTextW(eh, w!(""));
+                }
+                Some(eh)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_SHOW);
+            let _ = SetForegroundWindow(hwnd);
+            if let Some(eh) = edit_hwnd {
+                let _ = SetFocus(Some(eh));
+            }
+        }
+        return;
+    }
+
+    create_quick_capture_window(data_dir, event_sender, true);
+}
+
+fn create_quick_capture_window(
+    data_dir: PathBuf,
+    event_sender: Option<EventSender>,
+    show_now: bool,
+) {
 
     unsafe {
         if !CLASS_REGISTERED.swap(true, Ordering::AcqRel) {
@@ -926,6 +1014,7 @@ pub fn open_quick_capture_popup(data_dir: PathBuf, event_sender: Option<EventSen
             None,
             None,
         ) else {
+            POPUP_HWND.store(0, Ordering::Release);
             POPUP_OPEN.store(false, Ordering::Release);
             return;
         };
@@ -1132,9 +1221,12 @@ pub fn open_quick_capture_popup(data_dir: PathBuf, event_sender: Option<EventSen
             }));
         }
 
-        let _ = ShowWindow(hwnd, SW_SHOW);
-        let _ = SetForegroundWindow(hwnd);
-        let _ = SetFocus(Some(edit_hwnd));
+        POPUP_HWND.store(hwnd.0 as isize, Ordering::Release);
+        if show_now {
+            let _ = ShowWindow(hwnd, SW_SHOW);
+            let _ = SetForegroundWindow(hwnd);
+            let _ = SetFocus(Some(edit_hwnd));
+        }
     }
 }
 
