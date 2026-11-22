@@ -425,18 +425,86 @@ impl CoreState {
 
             "semanticStatus" => {
                 let index_dir = self.env.data_dir.join("semindex");
-                let enabled = param_value(&req.params, 0, "section")
-                    .and_then(|v| v.get("enabled").and_then(|b| b.as_bool()))
-                    .unwrap_or(true);
+                let sec = param_value(&req.params, 0, "section").unwrap_or_else(|| {
+                    self.config_store
+                        .load_raw()
+                        .ok()
+                        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                        .and_then(|v| v.get("semantic").cloned())
+                        .unwrap_or_else(|| json!({}))
+                });
+                let enabled = sec.get("enabled").and_then(|b| b.as_bool()).unwrap_or(false);
+                let base_url = sec
+                    .pointer("/model/baseUrl")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim();
+                let model = sec
+                    .pointer("/model/model")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim();
+                let destination = extract_host_port(base_url);
+                let local = is_local_host(&destination);
+                let consent_given = local
+                    || sec
+                        .get("consent")
+                        .and_then(|c| c.get(&destination))
+                        .map(|v| {
+                            v.as_bool() == Some(true)
+                                || v.as_str().map(|s| !s.is_empty()).unwrap_or(false)
+                        })
+                        .unwrap_or(false);
+                let scrap_dir = ScrapStore::resolve_scrap_dir(&self.config_store.scrap_dir());
+                let folder_missing = !scrap_dir.is_dir();
                 let report = semantic_status(&index_dir, enabled);
-                RpcResponse::ok(&req.id, serde_json::to_value(report).unwrap_or(json!({})))
+                let exists = report.state == "ready";
+                let updated = std::fs::metadata(index_dir.join("vectors.bin"))
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
+                    .unwrap_or_default();
+                RpcResponse::ok(
+                    &req.id,
+                    json!({
+                        "enabled": enabled,
+                        "model": model,
+                        "destination": destination,
+                        "local": local,
+                        "consent_given": consent_given,
+                        "folder_missing": folder_missing,
+                        "scrap_dir": scrap_dir.to_string_lossy(),
+                        "exists": exists,
+                        "corrupt": false,
+                        "files": report.files_indexed,
+                        "chunks": report.chunks_indexed,
+                        "size_bytes": report.index_bytes,
+                        "updated": updated,
+                        "rebuild_needed": false,
+                        "new_files": 0,
+                        "changed_files": 0,
+                        "removed_files": 0,
+                        "state": report.state,
+                        "filesIndexed": report.files_indexed,
+                        "chunksIndexed": report.chunks_indexed,
+                        "indexBytes": report.index_bytes,
+                        "simdBackend": report.simd_backend
+                    }),
+                )
             }
 
             "semanticUpdate" => {
+                let sec = param_value(&req.params, 0, "section").unwrap_or_else(|| json!({}));
+                if sec.get("enabled").and_then(|b| b.as_bool()) == Some(false) {
+                    return RpcResponse::err(&req.id, "not_enabled");
+                }
+                let rebuild = param_bool(&req.params, 1, "rebuild").unwrap_or(false);
                 let scrap_dir = ScrapStore::resolve_scrap_dir(&self.config_store.scrap_dir());
                 let index_dir = self.env.data_dir.join("semindex");
+                let t0 = std::time::Instant::now();
                 match build_local_semantic_index(&scrap_dir, &index_dir) {
                     Ok((files, chunks)) => {
+                        let secs = (t0.elapsed().as_secs_f64() * 10.0).round() / 10.0;
                         if let Some(tx) = self.event_sender.lock().expect("event_sender mutex").as_ref() {
                             tx(RpcEvent {
                                 topic: "semantic:progress".to_string(),
@@ -448,8 +516,19 @@ impl CoreState {
                                 }),
                             });
                         }
-                        let report = semantic_status(&index_dir, true);
-                        RpcResponse::ok(&req.id, serde_json::to_value(report).unwrap_or(json!({})))
+                        RpcResponse::ok(
+                            &req.id,
+                            json!({
+                                "files": files,
+                                "files_changed": files,
+                                "files_removed": 0,
+                                "chunks": chunks,
+                                "embedded": chunks,
+                                "seconds": secs,
+                                "rebuilt": rebuild,
+                                "state": "ready"
+                            }),
+                        )
                     }
                     Err(e) => RpcResponse::err(&req.id, e),
                 }
@@ -464,11 +543,31 @@ impl CoreState {
                 if let Ok(idx) = MmapVectorIndex::open_mmap(&index_dir) {
                     let q_vec = embed_local_hash(&query, idx.dim());
                     let hits = idx.search(&q_vec, limit);
-                    return RpcResponse::ok(&req.id, serde_json::to_value(hits).unwrap_or(json!([])));
+                    return RpcResponse::ok(
+                        &req.id,
+                        json!({
+                            "results": hits,
+                            "notes": [],
+                            "truncated": false,
+                            "semantic": true,
+                            "pending": 0,
+                            "leftOut": 0
+                        }),
+                    );
                 }
                 let dir = self.config_store.scrap_dir();
                 let fallback = search_scraps_parallel(&dir, &query, limit, &ScrapFilter::default());
-                RpcResponse::ok(&req.id, serde_json::to_value(fallback).unwrap_or(json!([])))
+                RpcResponse::ok(
+                    &req.id,
+                    json!({
+                        "results": fallback,
+                        "notes": [],
+                        "truncated": false,
+                        "semantic": false,
+                        "pending": 0,
+                        "leftOut": 0
+                    }),
+                )
             }
 
             "trimMemory" => {
@@ -1038,6 +1137,30 @@ fn param_bool(params: &Value, idx: usize, key: &str) -> Option<bool> {
     }
 }
 
+fn extract_host_port(base_url: &str) -> String {
+    let s = base_url.trim();
+    if s.is_empty() {
+        return String::new();
+    }
+    let after_scheme = s.split("://").nth(1).unwrap_or(s);
+    after_scheme.split('/').next().unwrap_or("").to_string()
+}
+
+fn is_local_host(host_port: &str) -> bool {
+    if host_port.is_empty() {
+        return true;
+    }
+    let host = if let Some(rest) = host_port.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else {
+        host_port.split(':').next().unwrap_or("")
+    };
+    matches!(
+        host.to_ascii_lowercase().as_str(),
+        "localhost" | "127.0.0.1" | "::1"
+    )
+}
+
 fn sendto_cmd_path() -> Option<PathBuf> {
     let appdata = std::env::var_os("APPDATA")?;
     Some(
@@ -1410,14 +1533,28 @@ mod tests {
         assert!(opts.ok);
         assert_eq!(opts.result.unwrap()["files"], 1);
 
-        let upd = state.dispatch(&req("semanticUpdate", json!([{}, false, true])));
+        let upd = state.dispatch(&req("semanticUpdate", json!([{ "enabled": true }, false, true])));
         assert!(upd.ok);
-        assert_eq!(upd.result.unwrap()["state"], "ready");
+        let upd_val = upd.result.unwrap();
+        assert_eq!(upd_val["state"], "ready");
+        assert!(upd_val["embedded"].as_u64().unwrap() >= 1);
+
+        let st = state.dispatch(&req(
+            "semanticStatus",
+            json!([{ "enabled": true, "model": { "baseUrl": "http://localhost:11434", "model": "bge-m3" } }]),
+        ));
+        assert!(st.ok);
+        let st_val = st.result.unwrap();
+        assert_eq!(st_val["enabled"], true);
+        assert_eq!(st_val["model"], "bge-m3");
+        assert_eq!(st_val["local"], true);
+        assert_eq!(st_val["exists"], true);
 
         let sem_hits = state.dispatch(&req("searchScrapsSemantic", json!(["vector search", 5])));
         assert!(sem_hits.ok);
         let hits = sem_hits.result.unwrap();
-        let arr = hits.as_array().unwrap();
+        assert_eq!(hits["semantic"], true);
+        let arr = hits["results"].as_array().unwrap();
         assert!(!arr.is_empty());
         assert!(arr[0]["matches"][0]["text"]
             .as_str()
