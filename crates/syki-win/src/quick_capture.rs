@@ -609,8 +609,8 @@ unsafe fn draw_round_button(dis: &DrawItemStruct) {
         dis.rc_item.top,
         dis.rc_item.right,
         dis.rc_item.bottom,
-        10,
-        10,
+        12,
+        12,
     );
     SelectObject(dis.hdc, old_b);
     SelectObject(dis.hdc, old_p);
@@ -685,14 +685,9 @@ unsafe extern "system" fn quick_capture_wnd_proc(
             let border_pen = CreatePen(PS_SOLID, 1, COLORREF(theme.border));
             let old_p = SelectObject(hdc, HGDIOBJ(border_pen.0));
             let old_b = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-            let _ = RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 12, 12);
-
-            let field_brush = CreateSolidBrush(COLORREF(theme.field));
-            SelectObject(hdc, HGDIOBJ(field_brush.0));
-            let _ = RoundRect(hdc, 14, 14, rc.right - 14, rc.bottom - 52, 8, 8);
+            let _ = RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 16, 16);
             SelectObject(hdc, old_b);
             SelectObject(hdc, old_p);
-            let _ = DeleteObject(HGDIOBJ(field_brush.0));
             let _ = DeleteObject(HGDIOBJ(border_pen.0));
 
             if !hint.is_empty() {
@@ -702,10 +697,10 @@ unsafe extern "system" fn quick_capture_wnd_proc(
                     SelectObject(hdc, HGDIOBJ(hint_font as *mut _));
                 }
                 let mut hint_rc = RECT {
-                    left: 16,
-                    top: rc.bottom - 40,
-                    right: rc.right - 220,
-                    bottom: rc.bottom - 12,
+                    left: 20,
+                    top: rc.bottom - 48,
+                    right: rc.right - 208,
+                    bottom: rc.bottom - 14,
                 };
                 let mut hint_w: Vec<u16> = hint.encode_utf16().collect();
                 let _ = DrawTextW(hdc, &mut hint_w, &mut hint_rc, DT_VCENTER | DT_SINGLELINE);
@@ -719,8 +714,8 @@ unsafe extern "system" fn quick_capture_wnd_proc(
             if let Ok(guard) = ACTIVE_CTX.lock() {
                 if let Some(ctx) = guard.as_ref() {
                     SetTextColor(hdc, COLORREF(ctx.theme.text));
-                    SetBkColor(hdc, COLORREF(ctx.theme.field));
-                    return LRESULT(ctx.field_brush);
+                    SetBkColor(hdc, COLORREF(ctx.theme.bg));
+                    return LRESULT(ctx.bg_brush);
                 }
             }
             DefWindowProcW(hwnd, msg, w_param, l_param)
@@ -911,8 +906,8 @@ pub fn open_quick_capture_popup(data_dir: PathBuf, event_sender: Option<EventSen
 
         let sw = GetSystemMetrics(SM_CXSCREEN);
         let sh = GetSystemMetrics(SM_CYSCREEN);
-        let width = 660;
-        let height = 185;
+        let width = 640;
+        let height = 240;
         let x = ((sw - width) / 2).max(0);
         let y = ((sh - height) / 4).max(0);
 
@@ -975,7 +970,7 @@ pub fn open_quick_capture_popup(data_dir: PathBuf, event_sender: Option<EventSen
             24,
             22,
             width - 48,
-            height - 82,
+            height - 88,
             Some(hwnd),
             Some(HMENU(ID_EDIT as *mut _)),
             None,
@@ -988,10 +983,10 @@ pub fn open_quick_capture_popup(data_dir: PathBuf, event_sender: Option<EventSen
             w!("BUTTON"),
             w!(""),
             WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | BS_OWNERDRAW),
-            width - 208,
-            height - 43,
-            48,
-            30,
+            width - 192,
+            height - 52,
+            38,
+            38,
             Some(hwnd),
             Some(HMENU(ID_BTN_CAPTURE as *mut _)),
             None,
@@ -1004,10 +999,10 @@ pub fn open_quick_capture_popup(data_dir: PathBuf, event_sender: Option<EventSen
             w!("BUTTON"),
             w!(""),
             WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | BS_OWNERDRAW),
-            width - 152,
-            height - 43,
-            36,
-            30,
+            width - 146,
+            height - 52,
+            38,
+            38,
             Some(hwnd),
             Some(HMENU(ID_BTN_MIC as *mut _)),
             None,
@@ -1020,10 +1015,10 @@ pub fn open_quick_capture_popup(data_dir: PathBuf, event_sender: Option<EventSen
             w!("BUTTON"),
             w!(""),
             WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | BS_OWNERDRAW),
-            width - 108,
-            height - 43,
-            36,
-            30,
+            width - 100,
+            height - 52,
+            38,
+            38,
             Some(hwnd),
             Some(HMENU(ID_BTN_CANCEL as *mut _)),
             None,
@@ -1036,10 +1031,10 @@ pub fn open_quick_capture_popup(data_dir: PathBuf, event_sender: Option<EventSen
             w!("BUTTON"),
             w!(""),
             WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | BS_OWNERDRAW),
-            width - 64,
-            height - 43,
-            48,
-            30,
+            width - 54,
+            height - 52,
+            38,
+            38,
             Some(hwnd),
             Some(HMENU(ID_BTN_SAVE as *mut _)),
             None,
@@ -1101,7 +1096,7 @@ pub fn open_quick_capture_popup(data_dir: PathBuf, event_sender: Option<EventSen
         SetWindowLongPtrW(edit_hwnd, GWLP_USERDATA, orig_edit_proc);
 
         let icon_font = CreateFontW(
-            -15,
+            -16,
             0,
             0,
             0,
