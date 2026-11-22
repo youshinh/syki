@@ -518,7 +518,11 @@ fn stop_mic_and_transcribe(data_dir: &Path, mut mic: MicCaptureState) -> Result<
     let _ = std::fs::create_dir_all(&cache_dir);
     let wav_path = cache_dir.join("qc-voice.wav");
     write_atomic_bytes(&wav_path, &wav).map_err(|e| e.to_string())?;
-    speech::transcribe_wav_file(data_dir, &wav_path, "ja")
+    let res = speech::transcribe_wav_file(data_dir, &wav_path, "ja");
+    if res.is_ok() {
+        let _ = std::fs::remove_file(&wav_path);
+    }
+    res
 }
 
 unsafe extern "system" fn edit_subclass_proc(
@@ -531,7 +535,7 @@ unsafe extern "system" fn edit_subclass_proc(
         let vk = w_param.0 as u16;
         if vk == VK_ESCAPE.0 {
             if let Ok(parent) = GetParent(hwnd) {
-                let _ = DestroyWindow(parent);
+                hide_quick_capture_popup(parent);
                 return LRESULT(0);
             }
         } else if vk == VK_RETURN.0 && (GetKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0 {

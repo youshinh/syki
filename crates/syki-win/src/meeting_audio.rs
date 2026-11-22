@@ -272,9 +272,12 @@ impl MeetingRecorder {
             let wav_path = cache_dir.join(format!("meeting-{stamp}.wav"));
             let _ = write_atomic_bytes(&wav_path, &wav);
 
-            let (text, error) = match speech::transcribe_wav_file(&data_dir, &wav_path, "ja") {
-                Ok(t) => (t, String::new()),
-                Err(e) => (String::new(), e),
+            let (text, error, cache_out) = match speech::transcribe_wav_file(&data_dir, &wav_path, "ja") {
+                Ok(t) => {
+                    let _ = std::fs::remove_file(&wav_path);
+                    (t, String::new(), String::new())
+                }
+                Err(e) => (String::new(), e, wav_path.to_string_lossy().into_owned()),
             };
             if let Some(tx) = sender {
                 tx(RpcEvent {
@@ -283,7 +286,7 @@ impl MeetingRecorder {
                         "reqId": req_id,
                         "text": text,
                         "error": error,
-                        "cachePath": wav_path.to_string_lossy(),
+                        "cachePath": cache_out,
                         "refineErr": ""
                     }),
                 });
