@@ -100,10 +100,13 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main 2>$null
+          git checkout origin/main -- docs/perf-history.jsonl docs/PERF_HISTORY.md 2>$null
+          node tools/perf/record_perf_history.mjs --in perf-latest.json --jsonl docs/perf-history.jsonl --md docs/PERF_HISTORY.md --summary "$env:GITHUB_STEP_SUMMARY"
           git add docs/perf-history.jsonl docs/PERF_HISTORY.md
           $staged = git diff --cached --name-only
           if ($staged) {
             git commit -m "chore(perf): record CI startup & memory metrics [skip ci]"
-            git pull --rebase
+            git pull --rebase origin main
             git push
           }
