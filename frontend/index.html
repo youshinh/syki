@@ -1712,12 +1712,13 @@
             <div class="settings-section-header" data-basic>
               <h4 data-i18n="sectionScrapFolder">Daily scraps folder</h4>
             </div>
-            <div class="local-ai-card" style="background: var(--veil-04); border: 1px solid var(--border-color); border-radius: 6px; padding: 12px 14px;">
-              <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
-                <strong style="font-size: 13px;" data-i18n="scrapAutoConfiguredTitle">データ保存先（自動設定済み）</strong>
-                <span style="font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--veil-10); color: var(--text-muted);" data-i18n="badgeAuto">Auto</span>
+            <div class="form-group" data-basic>
+              <label for="cfg-scrap-dir" data-i18n="scrapDirLabel">Scrap folder (Google Drive, etc.):</label>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <input type="text" id="cfg-scrap-dir" placeholder="~/Documents/syki-sok/scraps" spellcheck="false" autocomplete="off" style="flex: 1;">
+                <button type="button" id="btn-browse-scrap-dir" class="btn-secondary" data-i18n="btnBrowse">Browse...</button>
               </div>
-              <small data-i18n="scrapAutoConfiguredHint">デイリースクラップおよびパイプ出力は OS 標準のデータ保存先（~/Documents/syki-sok/scraps）へ自動保存されます。手動変更が必要な場合のみ config.json の scraps.scrapDir で上書きできます。</small>
+              <small data-i18n="scrapDirHint">デイリースクラップ、Quick Capture、パイプ出力の保存先フォルダです（Google Drive 等の同期フォルダも指定できます）。</small>
             </div>
           </div>
 

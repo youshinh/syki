@@ -158,6 +158,38 @@ fn send_json_post(req: ureq::Request, body: &Value) -> Result<Value, String> {
     serde_json::from_str::<Value>(&raw).map_err(|e| format!("invalid JSON response: {e}"))
 }
 
+fn is_local_openai_compat(base: &str) -> bool {
+    let lower = base.trim().to_ascii_lowercase();
+    lower.contains("://localhost")
+        || lower.contains("://127.0.0.1")
+        || lower.contains("://[::1]")
+}
+
+fn resolve_openai_chat_url(base: &str) -> String {
+    let b = base.trim().trim_end_matches('/');
+    if b.ends_with("/chat/completions") {
+        b.to_string()
+    } else if b.ends_with("/v1") || b.ends_with("/v1beta") || b.ends_with("/openai") {
+        format!("{b}/chat/completions")
+    } else {
+        format!("{b}/v1/chat/completions")
+    }
+}
+
+fn strip_think_tags(s: &str) -> String {
+    let mut out = s.to_string();
+    while let Some(start) = out.find("<think>") {
+        if let Some(rel_end) = out[start..].find("</think>") {
+            let end = start + rel_end + "</think>".len();
+            out.replace_range(start..end, "");
+        } else {
+            out.truncate(start);
+            break;
+        }
+    }
+    out.trim().to_string()
+}
+
 /// Sends a text prompt to the configured LLM endpoint and returns assistant text.
 pub fn query_llm_sync(prompt: &str, cfg: &LlmConfig) -> Result<String, String> {
     let provider = cfg.resolved_provider();
@@ -202,15 +234,14 @@ pub fn query_llm_sync(prompt: &str, cfg: &LlmConfig) -> Result<String, String> {
     }
 
     // OpenAI-compatible (`/chat/completions`, works for OpenAI, Gemini OpenAI-compat, LM Studio, Strata)
-    let url = if base.ends_with("/chat/completions") {
-        base
-    } else {
-        format!("{base}/chat/completions")
-    };
+    let url = resolve_openai_chat_url(&base);
     let mut body = json!({
         "model": model,
         "messages": [{ "role": "user", "content": prompt }]
     });
+    if is_local_openai_compat(&base) {
+        body["chat_template_kwargs"] = json!({ "enable_thinking": false });
+    }
     if let Some(t) = cfg.temperature {
         body["temperature"] = json!(t);
     }
@@ -224,7 +255,7 @@ pub fn query_llm_sync(prompt: &str, cfg: &LlmConfig) -> Result<String, String> {
     let val = send_json_post(req, &body)?;
     val.pointer("/choices/0/message/content")
         .and_then(|v| v.as_str())
-        .map(str::to_string)
+        .map(strip_think_tags)
         .ok_or_else(|| "LLM response missing choices[0].message.content".to_string())
 }
 
@@ -297,8 +328,8 @@ pub fn query_vision_sync(
     }
 
     let data_url = format!("data:{mime};base64,{clean_b64}");
-    let url = format!("{base}/chat/completions");
-    let body = json!({
+    let url = resolve_openai_chat_url(&base);
+    let mut body = json!({
         "model": model,
         "messages": [{
             "role": "user",
@@ -308,6 +339,9 @@ pub fn query_vision_sync(
             ]
         }]
     });
+    if is_local_openai_compat(&base) {
+        body["chat_template_kwargs"] = json!({ "enable_thinking": false });
+    }
     let mut req = http_agent().post(&url);
     if !api_key.is_empty() {
         req = req.set("Authorization", &format!("Bearer {api_key}"));
@@ -315,7 +349,7 @@ pub fn query_vision_sync(
     let val = send_json_post(req, &body)?;
     val.pointer("/choices/0/message/content")
         .and_then(|v| v.as_str())
-        .map(str::to_string)
+        .map(strip_think_tags)
         .ok_or_else(|| "Vision LLM response missing choices[0].message.content".to_string())
 }
 

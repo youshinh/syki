@@ -13571,6 +13571,10 @@ OUTPUT FORMAT:
 
   function openSettings() {
     const ctrl = ensureSettingsModal();
+    const scrapDirEl = document.getElementById('cfg-scrap-dir');
+    if (scrapDirEl) {
+      scrapDirEl.value = (config.scraps && config.scraps.scrapDir) || config.scrap_dir || '~/Documents/syki-sok/scraps';
+    }
     if (ctrl) ctrl.open();
   }
 
