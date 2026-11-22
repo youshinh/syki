@@ -21,7 +21,7 @@ Write-Host "Waiting for GitHub Actions run for commit $sha on $Repo..."
 $deadline = (Get-Date).AddSeconds($TimeoutSec)
 $run = $null
 while ((Get-Date) -lt $deadline) {
-  Start-Sleep -Seconds 15
+  Start-Sleep -Seconds 45
   try {
     $resp = Invoke-RestMethod "https://api.github.com/repos/$Repo/actions/runs?head_sha=$sha&per_page=5"
     $match = $resp.workflow_runs | Where-Object { $_.head_sha -eq $sha } | Select-Object -First 1

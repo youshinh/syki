@@ -149,8 +149,12 @@ async function launchHeadless({ width, height }) {
   let browserPath = '';
   for (let i = 0; i < 200 && !spawnError; i++) {
     if (fs.existsSync(portFile)) {
-      const [portLine, pathLine] = fs.readFileSync(portFile, 'utf8').split('\n');
-      if (portLine && pathLine) { handle.debugPort = Number(portLine); browserPath = pathLine.trim(); break; }
+      try {
+        const [portLine, pathLine] = fs.readFileSync(portFile, 'utf8').split('\n');
+        if (portLine && pathLine) { handle.debugPort = Number(portLine); browserPath = pathLine.trim(); break; }
+      } catch (err) {
+        if (!err || !['EBUSY', 'EACCES', 'EPERM', 'ENOENT'].includes(err.code)) throw err;
+      }
     }
     await sleep(100);
   }
