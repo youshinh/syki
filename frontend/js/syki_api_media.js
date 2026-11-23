@@ -176,11 +176,13 @@
           ? options.scale
           : 2;
 
+        const renderOpts = signal !== undefined ? { theme, scale, signal } : { theme, scale };
+
         // Delegates strictly to an isolated offscreen renderer; never mutates host globals
         // such as mermaidAppliedTone.
         return withDetachGuard(d, () =>
           raceWithSignal(
-            d.renderMermaidOffscreen(mermaidCode, { theme, scale, signal }),
+            d.renderMermaidOffscreen(mermaidCode, renderOpts),
             signal
           )
         );
