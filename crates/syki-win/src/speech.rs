@@ -786,6 +786,11 @@ fn parse_speech_json_output(raw: &str) -> String {
                 return joined.join("\n");
             }
         }
+        // Valid JSON with empty `text` and no `regions` means no speech was recognized;
+        // never leak raw JSON like `{"file":...,"text":"","stop":"complete"}` into the note.
+        if val.is_object() {
+            return String::new();
+        }
     }
     raw.trim().to_string()
 }
@@ -934,7 +939,28 @@ pub fn transcribe_local_with_config(
 }
 
 pub fn transcribe_wav_file(data_dir: &Path, audio_path: &Path, language: &str) -> Result<String, String> {
-    let cfg = json!({ "whisper": { "language": language } });
+    let mut whisper_val = std::fs::read_to_string(data_dir.join("config.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .and_then(|root| {
+            root.pointer("/voice/realtime/whisper")
+                .or_else(|| root.pointer("/voice/whisper"))
+                .cloned()
+        })
+        .unwrap_or_else(|| json!({}));
+    if let Some(obj) = whisper_val.as_object_mut() {
+        let lang_empty = obj
+            .get("language")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true);
+        if lang_empty && !language.trim().is_empty() {
+            obj.insert("language".to_string(), json!(language));
+        }
+    } else {
+        whisper_val = json!({ "language": language });
+    }
+    let cfg = json!({ "whisper": whisper_val });
     transcribe_local_with_config(data_dir, audio_path, &cfg)
 }
 
@@ -1323,5 +1349,17 @@ mod tests {
         assert!(list_voice_caches(&dir).is_empty());
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn parse_speech_json_output_returns_empty_instead_of_raw_json_when_text_empty() {
+        let raw = r#"{"file":"C:\\tmp\\meeting-20261123.wav","text":"","stop":"complete"}"#;
+        assert_eq!(parse_speech_json_output(raw), "");
+
+        let with_text = r#"{"file":"C:\\tmp\\meeting.wav","text":"こんにちは","stop":"complete"}"#;
+        assert_eq!(parse_speech_json_output(with_text), "こんにちは");
+
+        let with_regions = r#"{"text":"","regions":[{"text":"一行目"},{"text":"二行目"}]}"#;
+        assert_eq!(parse_speech_json_output(with_regions), "一行目\n二行目");
     }
 }
