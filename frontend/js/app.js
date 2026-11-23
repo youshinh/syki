@@ -15497,7 +15497,31 @@ OUTPUT FORMAT:
         setPinTabs(true);
       }
     } catch (_) {}
-    editorEl.focus();
+    const focusEditorAtEnd = (onlyIfIdle) => {
+      if (!editorEl || isPreviewMode) return;
+      if (onlyIfIdle && document.activeElement && document.activeElement !== document.body && document.activeElement !== editorEl) {
+        return;
+      }
+      const endPos = editorEl.value.length;
+      editorEl.focus();
+      try {
+        editorEl.setSelectionRange(endPos, endPos);
+      } catch (_) {}
+      editorEl.scrollTop = editorEl.scrollHeight;
+      if (lineNumbersEl) lineNumbersEl.scrollTop = editorEl.scrollTop;
+      const curTab = getTab(activeTabId);
+      if (curTab) curTab.cursorPos = endPos;
+      scheduleUpdateStatusBar();
+    };
+    focusEditorAtEnd(false);
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => focusEditorAtEnd(true));
+    }
+    window.addEventListener('focus', () => {
+      if (document.activeElement === document.body && editorEl && !isPreviewMode) {
+        editorEl.focus();
+      }
+    });
 
     // Replay early captured shortcuts / keystrokes while app.js was loading (0ms response)
     if (typeof window.__cleanupEarlyKey === 'function') {
@@ -15578,6 +15602,7 @@ OUTPUT FORMAT:
               if (sessionData && Array.isArray(sessionData.tabs) && sessionData.tabs.length > 0) {
                 restoreSessionFromData(sessionData);
                 lastRestoredSessionRaw = backendSessionStr;
+                focusEditorAtEnd(true);
               }
             }
           }

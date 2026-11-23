@@ -38,8 +38,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, IsZoomed, KillTimer, PostMessageW, PostQuitMessage, RegisterClassW,
     SetForegroundWindow, SetTimer, SetWindowLongPtrW, ShowWindow, TranslateMessage, CW_USEDEFAULT,
     GWLP_USERDATA, MSG, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, WM_APP, WM_CLOSE,
-    WM_DESTROY, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP, WM_SIZE, WM_TIMER,
-    WNDCLASSW, WS_EX_APPWINDOW, WS_OVERLAPPEDWINDOW,
+    WM_DESTROY, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP, WM_SETFOCUS, WM_SIZE,
+    WM_TIMER, WNDCLASSW, WS_EX_APPWINDOW, WS_OVERLAPPEDWINDOW,
 };
 
 use crate::host_lifecycle::{
@@ -679,6 +679,10 @@ fn attach_webview_controller(
     unsafe {
         let _ = webview.AddScriptToExecuteOnDocumentCreated(*preload_w.as_ref().as_pcwstr(), None);
         webview.Navigate(*origin_w.as_ref().as_pcwstr())?;
+        if visible {
+            let _ = SetForegroundWindow(hwnd);
+            let _ = controller.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+        }
     }
     Ok(())
 }
@@ -690,6 +694,16 @@ extern "system" fn host_wnd_proc(
     l_param: LPARAM,
 ) -> LRESULT {
     match msg {
+        WM_SETFOCUS => {
+            let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const WindowState;
+            if !ptr.is_null() {
+                let state = unsafe { &*ptr };
+                if let Some(ctrl) = state.controller.borrow().as_ref() {
+                    let _ = unsafe { ctrl.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC) };
+                }
+            }
+            LRESULT(0)
+        }
         WM_SIZE => {
             let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const WindowState;
             if !ptr.is_null() {
