@@ -2,12 +2,14 @@
 //! Supports multi-image screen snapshots (`imgcap`), WASAPI mic voice input (`speech`),
 //! dark GDI surface (`#252526`), `WM_CTLCOLOREDIT`, and owner-drawn flat buttons.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use syki_core::rpc::RpcEvent;
 use syki_core::storage::atomic::write_atomic_bytes;
@@ -96,6 +98,84 @@ fn darken_bgr(bgr: u32, pct: u32) -> u32 {
     (b << 16) | (g << 8) | r
 }
 
+const QC_THEME_CACHE_FILE: &str = "qc-theme-cache.json";
+
+fn apply_qc_theme_cache(theme: &mut QcTheme, cache: &serde_json::Value) {
+    if let Some(is_dark) = cache.get("isDark").and_then(|v| v.as_bool()) {
+        theme.is_dark = is_dark;
+    }
+    if let Some(bg) = cache.get("bg").and_then(|v| v.as_str()).and_then(parse_hex_bgr) {
+        theme.bg = bg;
+    }
+    if let Some(field) = cache.get("field").and_then(|v| v.as_str()).and_then(parse_hex_bgr) {
+        theme.field = field;
+    }
+    if let Some(border) = cache.get("border").and_then(|v| v.as_str()).and_then(parse_hex_bgr) {
+        theme.border = border;
+    }
+    if let Some(btn) = cache.get("btn").and_then(|v| v.as_str()).and_then(parse_hex_bgr) {
+        theme.btn = btn;
+        theme.btn_pressed = darken_bgr(btn, 88);
+    }
+    if let Some(btn_pressed) = cache
+        .get("btnPressed")
+        .and_then(|v| v.as_str())
+        .and_then(parse_hex_bgr)
+    {
+        theme.btn_pressed = btn_pressed;
+    }
+    if let Some(btn_save) = cache
+        .get("btnSave")
+        .and_then(|v| v.as_str())
+        .and_then(parse_hex_bgr)
+    {
+        theme.btn_save = btn_save;
+        theme.btn_save_pressed = darken_bgr(btn_save, 82);
+        let r = btn_save & 0xFF;
+        let g = (btn_save >> 8) & 0xFF;
+        let b = (btn_save >> 16) & 0xFF;
+        let luma = (299 * r + 587 * g + 114 * b) / 1000;
+        theme.text_on_save = if luma > 155 { 0x0016_1815 } else { 0x00FF_FFFF };
+    }
+    if let Some(btn_save_pressed) = cache
+        .get("btnSavePressed")
+        .and_then(|v| v.as_str())
+        .and_then(parse_hex_bgr)
+    {
+        theme.btn_save_pressed = btn_save_pressed;
+    }
+    if let Some(btn_rec) = cache
+        .get("btnRec")
+        .and_then(|v| v.as_str())
+        .and_then(parse_hex_bgr)
+    {
+        theme.btn_rec = btn_rec;
+    }
+    if let Some(text) = cache.get("text").and_then(|v| v.as_str()).and_then(parse_hex_bgr) {
+        theme.text = text;
+    }
+    if let Some(text_on_save) = cache
+        .get("textOnSave")
+        .and_then(|v| v.as_str())
+        .and_then(parse_hex_bgr)
+    {
+        theme.text_on_save = text_on_save;
+    }
+    if let Some(hint) = cache.get("hint").and_then(|v| v.as_str()).and_then(parse_hex_bgr) {
+        theme.hint = hint;
+    }
+}
+
+pub fn save_qc_theme_cache(data_dir: &Path, val: &serde_json::Value) -> Result<(), String> {
+    if !val.is_object() {
+        return Err("qc theme cache must be a JSON object".to_string());
+    }
+    std::fs::create_dir_all(data_dir).map_err(|e| format!("create data dir: {e}"))?;
+    let serialized = serde_json::to_string(val).map_err(|e| format!("serialize qc theme cache: {e}"))?;
+    std::fs::write(data_dir.join(QC_THEME_CACHE_FILE), serialized)
+        .map_err(|e| format!("write qc theme cache: {e}"))
+}
+
 fn load_qc_theme(data_dir: &Path) -> QcTheme {
     let val = std::fs::read_to_string(data_dir.join("config.json"))
         .ok()
@@ -137,7 +217,7 @@ fn load_qc_theme(data_dir: &Path) -> QcTheme {
     let luma = (299 * r + 587 * g + 114 * b) / 1000;
     let text_on_save = if luma > 155 { 0x0016_1815 } else { 0x00FF_FFFF };
 
-    if is_dark {
+    let mut theme = if is_dark {
         QcTheme {
             is_dark: true,
             bg: 0x0019_1A18,
@@ -167,7 +247,16 @@ fn load_qc_theme(data_dir: &Path) -> QcTheme {
             text_on_save,
             hint: 0x0078_756E,
         }
+    };
+
+    if let Some(cache) = std::fs::read_to_string(data_dir.join(QC_THEME_CACHE_FILE))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+    {
+        apply_qc_theme_cache(&mut theme, &cache);
     }
+
+    theme
 }
 
 static POPUP_OPEN: AtomicBool = AtomicBool::new(false);
@@ -1234,6 +1323,59 @@ fn create_quick_capture_window(
     }
 }
 
+pub const QUICK_CAPTURE_QUEUE_CAPACITY: usize = 32;
+
+/// Payload recorded when a Quick Capture is saved while the WebView is detached.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickCaptureSavedEvent {
+    pub text: String,
+    pub asset_paths: Vec<String>,
+    pub scrap_path: String,
+}
+
+/// Bounded in-memory ring buffer (max 32 items) holding Quick Capture events
+/// captured while WebView is detached, drained on next attach.
+#[derive(Debug, Clone)]
+pub struct QuickCapturePendingQueue {
+    buf: VecDeque<QuickCaptureSavedEvent>,
+    capacity: usize,
+}
+
+impl Default for QuickCapturePendingQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl QuickCapturePendingQueue {
+    pub fn new() -> Self {
+        Self {
+            buf: VecDeque::with_capacity(QUICK_CAPTURE_QUEUE_CAPACITY),
+            capacity: QUICK_CAPTURE_QUEUE_CAPACITY,
+        }
+    }
+
+    pub fn push(&mut self, ev: QuickCaptureSavedEvent) {
+        while self.buf.len() >= self.capacity {
+            self.buf.pop_front();
+        }
+        self.buf.push_back(ev);
+    }
+
+    pub fn drain_all(&mut self) -> Vec<QuickCaptureSavedEvent> {
+        self.buf.drain(..).collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.buf.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1278,5 +1420,87 @@ mod tests {
         assert_eq!(ev.topic, "host:openFile");
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn qc_theme_cache_roundtrip_and_fallback() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("syki-qc-theme-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Without cache -> fallback to default dark olive theme
+        let default_theme = load_qc_theme(&dir);
+        assert!(default_theme.is_dark);
+        assert_eq!(default_theme.bg, 0x0019_1A18);
+
+        // Save valid theme cache and verify roundtrip
+        let snapshot = serde_json::json!({
+            "isDark": false,
+            "bg": "#112233",
+            "field": "#223344",
+            "border": "#334455",
+            "btn": "#445566",
+            "btnSave": "#556677",
+            "text": "#abcdef",
+            "textOnSave": "#ffffff",
+            "hint": "#8899aa"
+        });
+        save_qc_theme_cache(&dir, &snapshot).unwrap();
+
+        let loaded = load_qc_theme(&dir);
+        assert!(!loaded.is_dark);
+        assert_eq!(loaded.bg, parse_hex_bgr("#112233").unwrap());
+        assert_eq!(loaded.field, parse_hex_bgr("#223344").unwrap());
+        assert_eq!(loaded.border, parse_hex_bgr("#334455").unwrap());
+        assert_eq!(loaded.btn, parse_hex_bgr("#445566").unwrap());
+        assert_eq!(loaded.btn_save, parse_hex_bgr("#556677").unwrap());
+        assert_eq!(loaded.text, parse_hex_bgr("#abcdef").unwrap());
+        assert_eq!(loaded.text_on_save, parse_hex_bgr("#ffffff").unwrap());
+        assert_eq!(loaded.hint, parse_hex_bgr("#8899aa").unwrap());
+
+        // Invalid hex values are ignored without crashing, keeping base fallback
+        let partial_invalid = serde_json::json!({
+            "bg": "not-a-hex",
+            "text": "#123456"
+        });
+        save_qc_theme_cache(&dir, &partial_invalid).unwrap();
+        let partial = load_qc_theme(&dir);
+        assert_eq!(partial.bg, 0x0019_1A18);
+        assert_eq!(partial.text, parse_hex_bgr("#123456").unwrap());
+
+        // Non-object payload is rejected
+        assert!(save_qc_theme_cache(&dir, &serde_json::json!("bad")).is_err());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pending_queue_caps_at_32_evicting_oldest_and_drains_fifo() {
+        let mut queue = QuickCapturePendingQueue::new();
+        assert_eq!(queue.len(), 0);
+        assert!(queue.is_empty());
+
+        for i in 1..=33 {
+            queue.push(QuickCaptureSavedEvent {
+                text: format!("note-{i}"),
+                asset_paths: vec![format!("assets/snap-{i}.png")],
+                scrap_path: format!("scraps/2026-11-23.md#{i}"),
+            });
+            assert!(queue.len() <= QUICK_CAPTURE_QUEUE_CAPACITY);
+        }
+
+        assert_eq!(queue.len(), QUICK_CAPTURE_QUEUE_CAPACITY);
+
+        let drained = queue.drain_all();
+        assert_eq!(drained.len(), QUICK_CAPTURE_QUEUE_CAPACITY);
+        assert_eq!(queue.len(), 0);
+        assert!(queue.is_empty());
+
+        // 1st item was evicted on the 33rd push; remaining items are 2..=33 in FIFO order.
+        assert_eq!(drained[0].text, "note-2");
+        assert_eq!(drained[31].text, "note-33");
     }
 }

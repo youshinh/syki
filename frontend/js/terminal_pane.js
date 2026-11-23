@@ -1862,6 +1862,19 @@
       }
     }
 
+    function setFontSize(px) {
+      const size = Math.max(10, Math.min(36, Math.round(Number(px) || 13)));
+      for (let i = 0; i < sessions.length; i++) {
+        const s = sessions[i];
+        if (s && s.term && s.term.options) {
+          try {
+            s.term.options.fontSize = size;
+            if (s.fit && typeof s.fit.fit === 'function') s.fit.fit();
+          } catch (_) {}
+        }
+      }
+    }
+
     function readActiveOutput(maxLines) {
       const s = getActiveSession();
       if (!s || !s.term) return '';
@@ -2359,6 +2372,7 @@
       getLatestMermaid,
       getLatestMermaids,
       syncTheme,
+      setFontSize,
       fitActive,
       renderRightTabs,
       getSessionsMeta,

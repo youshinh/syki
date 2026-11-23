@@ -66,6 +66,8 @@
     // F04/F05/F11/F12/F23(AI-OCR) Inference, assets & CLI shell pipe
     'detectLLMProvider',
     'queryLLMAsync',
+    'queryDecisionAsync',
+    'cancelLLMRequest',
     'autocompleteAsync',
     'queryVisionAsync',
     'generateImageAsync',
@@ -122,7 +124,15 @@
     'checkMeetingAudioAsync',
     'startMeetingRecording',
     'stopMeetingRecordingAsync',
-    'abortMeetingRecording'
+    'abortMeetingRecording',
+
+    // Extension platform: PolicyDecisionEngine, Program Allowlist, QcTheme cache
+    'runProgramAsync',
+    'getPolicyAuditLog',
+    'approvePlugin',
+    'setPluginDevMode',
+    'approveProgram',
+    'saveQcThemeCache'
   ]);
 
   function parseIncomingMessage(raw) {
@@ -162,6 +172,11 @@
         break;
       case 'llm:result':
         if (typeof win.__onLLMResult === 'function') win.__onLLMResult(p.reqId, p.result, p.error);
+        break;
+      case 'llm:decisionResult':
+        if (typeof win.__onLLMDecisionResult === 'function') {
+          win.__onLLMDecisionResult(p.reqId, p.choiceId, p.reason, p.by, p.ok);
+        }
         break;
       case 'autocomplete:result':
         if (typeof win.__onAutocompleteResult === 'function') win.__onAutocompleteResult(p.reqId, p.suggestion, p.error);
@@ -213,6 +228,150 @@
     }
   }
 
+  function makeAbortError(message) {
+    const err = new Error(message || 'Request aborted');
+    err.name = 'AbortError';
+    err.code = 'ABORT_ERR';
+    return err;
+  }
+
+  function createReqIdDemux(options) {
+    const opts = options || {};
+    const defaultOnCancel = typeof opts.onCancel === 'function' ? opts.onCancel : null;
+    const pending = new Map();
+
+    function safeOnCancel(fn, reqId, topic) {
+      if (typeof fn !== 'function') return;
+      try {
+        fn(reqId, topic);
+      } catch (_) {}
+    }
+
+    function wait(reqId, waitOpts) {
+      const key = String(reqId);
+      const o = waitOpts || {};
+      const topic = typeof o.topic === 'string' && o.topic ? o.topic : null;
+      const signal = o.signal || null;
+      const timeoutMs = Number(o.timeoutMs) > 0 ? Number(o.timeoutMs) : 0;
+      const onCancel = typeof o.onCancel === 'function' ? o.onCancel : defaultOnCancel;
+      const rejectOnError = o.rejectOnError === true;
+
+      if (signal && signal.aborted) {
+        safeOnCancel(onCancel, key, topic);
+        const reason = signal.reason ? String(signal.reason) : 'Request aborted';
+        return Promise.reject(makeAbortError(reason));
+      }
+
+      if (pending.has(key)) {
+        const prev = pending.get(key);
+        prev.abort('Superseded by new request with same reqId');
+      }
+
+      return new Promise((resolve, reject) => {
+        const entry = {
+          topic,
+          rejectOnError,
+          resolve,
+          reject,
+          timer: null,
+          onAbort: null,
+          signal,
+          settled: false,
+          cleanup() {
+            if (entry.settled) return;
+            entry.settled = true;
+            pending.delete(key);
+            if (entry.timer) {
+              clearTimeout(entry.timer);
+              entry.timer = null;
+            }
+            if (entry.signal && entry.onAbort && typeof entry.signal.removeEventListener === 'function') {
+              entry.signal.removeEventListener('abort', entry.onAbort);
+              entry.onAbort = null;
+            }
+          },
+          abort(reason) {
+            if (entry.settled) return;
+            entry.cleanup();
+            safeOnCancel(onCancel, key, topic);
+            reject(makeAbortError(reason || 'Request aborted'));
+          }
+        };
+
+        if (signal && typeof signal.addEventListener === 'function') {
+          entry.onAbort = function () {
+            const reason = signal.reason ? String(signal.reason) : 'Request aborted';
+            entry.abort(reason);
+          };
+          signal.addEventListener('abort', entry.onAbort, { once: true });
+        }
+
+        if (timeoutMs > 0) {
+          entry.timer = setTimeout(() => {
+            if (entry.settled) return;
+            entry.cleanup();
+            safeOnCancel(onCancel, key, topic);
+            const err = new Error(`Event timeout after ${timeoutMs}ms: ${topic || key}`);
+            err.name = 'TimeoutError';
+            err.code = 'TIMEOUT_ERR';
+            reject(err);
+          }, timeoutMs);
+        }
+
+        pending.set(key, entry);
+      });
+    }
+
+    function dispatch(topicOrPayload, maybePayload) {
+      let topic = null;
+      let payload = topicOrPayload;
+      if (arguments.length >= 2) {
+        topic = typeof topicOrPayload === 'string' ? topicOrPayload : null;
+        payload = maybePayload;
+      }
+      if (!payload || typeof payload !== 'object') return false;
+      if (payload.reqId === undefined || payload.reqId === null) return false;
+      const key = String(payload.reqId);
+      const entry = pending.get(key);
+      if (!entry || entry.settled) return false;
+      if (entry.topic && topic && entry.topic !== topic) return false;
+      entry.cleanup();
+      if (entry.rejectOnError && payload.error) {
+        entry.reject(new Error(String(payload.error)));
+      } else {
+        entry.resolve(payload);
+      }
+      return true;
+    }
+
+    function cancel(reqId, reason) {
+      const key = String(reqId);
+      const entry = pending.get(key);
+      if (!entry || entry.settled) return false;
+      entry.abort(reason || 'Request cancelled');
+      return true;
+    }
+
+    function has(reqId) {
+      return pending.has(String(reqId));
+    }
+
+    function pendingCount() {
+      return pending.size;
+    }
+
+    function dispose(reason) {
+      const msg = reason || 'Demux disposed';
+      for (const entry of Array.from(pending.values())) {
+        entry.cleanup();
+        entry.reject(makeAbortError(msg));
+      }
+      pending.clear();
+    }
+
+    return { wait, dispatch, cancel, has, pendingCount, dispose };
+  }
+
   function createPostMessageBackendProxy(options) {
     const opts = options || {};
     const targetWindow = opts.targetWindow !== undefined
@@ -227,6 +386,7 @@
     let disposed = false;
     const pending = new Map();
     const listeners = new Map();
+    const reqDemux = createReqIdDemux();
 
     function settlePending(id, msg) {
       const entry = pending.get(id);
@@ -247,6 +407,7 @@
 
     function handleEvent(topic, payload) {
       dispatchBuiltinTopic(targetWindow, topic, payload);
+      reqDemux.dispatch(topic, payload);
       const set = listeners.get(topic);
       if (!set || set.size === 0) return;
       for (const fn of Array.from(set)) {
@@ -336,6 +497,15 @@
           if (set.size === 0) listeners.delete(topic);
         };
       },
+      waitForEvent: function (topic, reqId, waitOpts) {
+        if (disposed) return Promise.reject(new Error('backend proxy disposed'));
+        const merged = Object.assign({}, waitOpts || {}, { topic });
+        return reqDemux.wait(reqId, merged);
+      },
+      cancelPendingEvent: function (reqId, reason) {
+        return reqDemux.cancel(reqId, reason);
+      },
+      reqDemux,
       __dispose: function () {
         if (disposed) return;
         disposed = true;
@@ -348,6 +518,7 @@
         }
         pending.clear();
         listeners.clear();
+        reqDemux.dispose('backend proxy disposed');
       }
     };
 
@@ -361,7 +532,7 @@
     return proxy;
   }
 
-  const api = { createPostMessageBackendProxy, KEPT_METHODS };
+  const api = { createPostMessageBackendProxy, createReqIdDemux, KEPT_METHODS };
   if (global) global.SykiBackendProxy = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 

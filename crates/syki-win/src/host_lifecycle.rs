@@ -1,6 +1,9 @@
 //! Win32 Tray (`Shell_NotifyIconW`), Global Hotkey (`RegisterHotKey`), Working-Set Trim,
 //! and 3-State Hybrid Memory `CanvasHost` state machine (#08).
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -80,6 +83,103 @@ impl CanvasHostState {
         self.state = CanvasState::Attached;
         prev
     }
+
+    /// Transitions to `Detached` only when no active async task holds the guard.
+    pub fn detach_if_idle(&mut self, guard: &ActiveTaskGuard) -> bool {
+        if guard.is_active() {
+            return false;
+        }
+        self.detach()
+    }
+}
+
+/// Thread-safe reference counter that prevents `CanvasHost` from detaching while
+/// asynchronous `exec` / `flow` jobs are in flight.
+#[derive(Debug, Clone)]
+pub struct ActiveTaskGuard {
+    count: Arc<AtomicUsize>,
+}
+
+impl Default for ActiveTaskGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ActiveTaskGuard {
+    pub fn new() -> Self {
+        Self {
+            count: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// Increments the active task counter and returns an RAII token that
+    /// automatically decrements the counter when dropped.
+    #[must_use = "keep TaskGuardToken alive for the duration of the task"]
+    pub fn acquire(&self) -> TaskGuardToken {
+        self.count.fetch_add(1, Ordering::AcqRel);
+        TaskGuardToken {
+            count: Arc::clone(&self.count),
+            released: false,
+        }
+    }
+
+    /// Increments the active task counter manually (for FFI/RPC bridges that
+    /// pair explicit acquire/release calls) and returns the new count.
+    pub fn acquire_manual(&self) -> usize {
+        self.count.fetch_add(1, Ordering::AcqRel) + 1
+    }
+
+    /// Decrements the active task counter saturating at 0 and returns the new count.
+    pub fn release(&self) -> usize {
+        decrement_saturating(&self.count)
+    }
+
+    pub fn active_count(&self) -> usize {
+        self.count.load(Ordering::Acquire)
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.active_count() > 0
+    }
+}
+
+/// RAII token returned by [`ActiveTaskGuard::acquire`]. Decrements the guard
+/// counter automatically on [`Drop`].
+#[derive(Debug)]
+pub struct TaskGuardToken {
+    count: Arc<AtomicUsize>,
+    released: bool,
+}
+
+impl TaskGuardToken {
+    /// Explicitly releases the guard token before it goes out of scope.
+    pub fn release(mut self) {
+        if !self.released {
+            self.released = true;
+            decrement_saturating(&self.count);
+        }
+    }
+}
+
+impl Drop for TaskGuardToken {
+    fn drop(&mut self) {
+        if !self.released {
+            self.released = true;
+            decrement_saturating(&self.count);
+        }
+    }
+}
+
+fn decrement_saturating(counter: &AtomicUsize) -> usize {
+    let mut curr = counter.load(Ordering::Acquire);
+    while curr > 0 {
+        match counter.compare_exchange_weak(curr, curr - 1, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return curr - 1,
+            Err(next) => curr = next,
+        }
+    }
+    0
 }
 
 /// Parses a human-readable shortcut like `"Ctrl+Alt+S"` or `"Alt+Space"` into `(mods, vk)`.
@@ -324,5 +424,84 @@ mod tests {
     #[test]
     fn current_working_set_reports_nonzero_for_running_process() {
         assert!(current_working_set_bytes() > 0);
+    }
+
+    #[test]
+    fn active_task_guard_raii_acquire_and_drop() {
+        let guard = ActiveTaskGuard::new();
+        assert!(!guard.is_active());
+        assert_eq!(guard.active_count(), 0);
+
+        {
+            let t1 = guard.acquire();
+            assert!(guard.is_active());
+            assert_eq!(guard.active_count(), 1);
+
+            let t2 = guard.acquire();
+            assert_eq!(guard.active_count(), 2);
+
+            t1.release();
+            assert!(guard.is_active());
+            assert_eq!(guard.active_count(), 1);
+            drop(t2);
+        }
+
+        assert!(!guard.is_active());
+        assert_eq!(guard.active_count(), 0);
+    }
+
+    #[test]
+    fn active_task_guard_manual_release_never_underflows() {
+        let guard = ActiveTaskGuard::new();
+        assert_eq!(guard.release(), 0);
+        assert!(!guard.is_active());
+
+        assert_eq!(guard.acquire_manual(), 1);
+        assert_eq!(guard.acquire_manual(), 2);
+        assert!(guard.is_active());
+
+        assert_eq!(guard.release(), 1);
+        assert!(guard.is_active());
+        assert_eq!(guard.release(), 0);
+        assert!(!guard.is_active());
+        assert_eq!(guard.release(), 0);
+    }
+
+    #[test]
+    fn active_task_guard_handles_concurrent_parallel_jobs() {
+        let guard = ActiveTaskGuard::new();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+
+        std::thread::scope(|s| {
+            for _ in 0..8 {
+                let g = guard.clone();
+                let b = std::sync::Arc::clone(&barrier);
+                s.spawn(move || {
+                    let _token = g.acquire();
+                    b.wait();
+                    assert!(g.is_active());
+                    assert_eq!(g.active_count(), 8);
+                    // Wait until all 8 threads have observed count == 8 before dropping tokens.
+                    b.wait();
+                });
+            }
+        });
+
+        assert_eq!(guard.active_count(), 0);
+        assert!(!guard.is_active());
+    }
+
+    #[test]
+    fn canvas_host_blocks_detach_while_guard_is_active() {
+        let mut host = CanvasHostState::new();
+        let guard = ActiveTaskGuard::new();
+
+        let token = guard.acquire();
+        assert!(!host.detach_if_idle(&guard));
+        assert_eq!(host.state(), CanvasState::Attached);
+
+        drop(token);
+        assert!(host.detach_if_idle(&guard));
+        assert_eq!(host.state(), CanvasState::Detached);
     }
 }

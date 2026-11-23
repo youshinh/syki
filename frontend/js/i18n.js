@@ -155,6 +155,7 @@ const I18N = {
     statImeTooltip: "Auto Romaji-to-Japanese conversion (IME Guardian)",
     statImeOn: "IME: ON",
     statImeOff: "IME: OFF",
+    statZoomTooltip: "Zoom level (Click to reset)",
 
     actionEnabledLabel: "Suggest actions automatically while typing",
     actionManualOnlyLabel: "Manual trigger only (suppress auto-popup, press Ctrl+J)",
@@ -615,8 +616,11 @@ const I18N = {
     cliModelHint: "Leave empty to use the Text LLM model. Coding-specialized models (e.g. qwen2.5-coder:latest) are highly recommended.",
 
     // Sections
+    sectionBasicGeneral: "Basic Settings (Look, Language, Save)",
     sectionAppearance: "Appearance & Window",
+    sectionAppearanceAdvanced: "Advanced: Window, Display & Startup",
     sectionEditor: "Editor & Typing",
+    sectionAIAdvanced: "Advanced: System Prompt, Inheritance & History",
     // About syki::sok, the Help menu, the update check and the cloud consent line (UX review I1, I2, I3)
     sectionUpdatesPrivacy: "Updates & Privacy",
     checkUpdatesLabel: "Check for updates at start-up",
@@ -1815,6 +1819,7 @@ const I18N = {
     statImeTooltip: "ローマ字・日本語自動変換 (IME Guardian)",
     statImeOn: "IME: ON",
     statImeOff: "IME: OFF",
+    statZoomTooltip: "拡大縮小率（クリックで100%にリセット）",
 
     actionEnabledLabel: "メモ入力時にアクション候補を自動提示する",
     actionManualOnlyLabel: "手動呼び出しのみ (自動提示せず Ctrl+J で表示)",
@@ -2276,8 +2281,11 @@ const I18N = {
     cliModelHint: "空欄の場合はテキストLLMのモデルが使用されます。コード生成特化モデル (例: qwen2.5-coder:latest) の指定を推奨します。",
 
     // Sections
+    sectionBasicGeneral: "基本設定（外観・言語・保存）",
     sectionAppearance: "外観 & ウィンドウ",
+    sectionAppearanceAdvanced: "詳細設定：ウィンドウ・表示・起動",
     sectionEditor: "エディタ & 入力",
+    sectionAIAdvanced: "詳細設定：システムプロンプト・接続継承・書き換え履歴",
     // syki::sok について、ヘルプメニュー、更新の確認、クラウド送信の同意（UX レビュー I1、I2、I3）
     sectionUpdatesPrivacy: "更新とプライバシー",
     checkUpdatesLabel: "起動時に更新を確認する",

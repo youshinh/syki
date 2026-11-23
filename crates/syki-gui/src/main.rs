@@ -287,10 +287,16 @@ fn main() {
     let core_for_events = Arc::clone(&core);
     let core_for_ipc = Arc::clone(&core);
     let preview_store = core.print_preview_store();
+    let ext_roots = syki_win::ext_store::ExtRoots::new(
+        syki_win::ext_store::portable_dir_from_exe(),
+        env.data_dir.clone(),
+        syki_win::ext_store::safe_mode_from_args(),
+    );
     let dyn_handler: Arc<DynamicRouteHandler> = Arc::new(Box::new(move |rel| {
         preview_store
             .route_response(rel)
             .or_else(|| syki_win::assets_store::serve_local_image_route(rel))
+            .or_else(|| ext_roots.resolve_ext_request(rel))
     }));
     let ipc_server_slot: Arc<Mutex<Option<IpcPipeServer>>> = Arc::new(Mutex::new(None));
     let ipc_slot_ready = Arc::clone(&ipc_server_slot);

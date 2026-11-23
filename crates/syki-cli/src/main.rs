@@ -10,18 +10,21 @@ use std::process::exit;
 
 use serde_json::{json, Value};
 use syki_core::ipc::{
-    is_pipe_available, load_ipc_session, make_auth_envelope, pipe_name_for, send_ipc_request,
-    session_file_path,
+    build_plugin_rpc_envelope, is_pipe_available, load_ipc_session, make_auth_envelope,
+    pipe_name_for, send_ipc_request, session_file_path, IpcEnvelope, METHOD_PLUGIN_LIST,
+    METHOD_PLUGIN_RELOAD, METHOD_PLUGIN_RUN, METHOD_PLUGIN_STATUS,
 };
 use syki_core::rpc::RuntimeEnv;
 use syki_core::storage::{ConfigStore, JsonConfigStore, ScrapStore};
 use syki_core::APP_VERSION;
 
+mod plugin_check;
+
 const MAX_STDIN_PIPE_BYTES: usize = 10 * 1024 * 1024;
 
 /// The only subcommands retained in the slim 2.0 command surface.
 const KEPT_SUBCOMMANDS: &[&str] = &[
-    "buffer", "tab", "ui", "pty", "ocr", "speech", "info", "scrap", "config",
+    "buffer", "tab", "ui", "pty", "ocr", "speech", "info", "scrap", "config", "plugin",
 ];
 
 /// Every pruned subcommand, kept for the help text and for regression tests.
@@ -116,6 +119,7 @@ fn subcommand_summary(name: &str) -> &'static str {
         "info" => "Print the instance report as JSON",
         "scrap" => "Append to or inspect daily scraps",
         "config" => "Read or write configuration",
+        "plugin" => "Manage and run plugins",
         _ => "General-purpose command",
     }
 }
@@ -192,6 +196,95 @@ fn append_scrap_and_notify(env: &RuntimeEnv, text: &str) -> Result<String, Strin
     let scrap_dir = cfg.scrap_dir();
     let path = ScrapStore::append_formatted(&scrap_dir, text, "").map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().into_owned())
+}
+
+fn build_plugin_cli_envelope(auth: &str, args: &[String]) -> Result<IpcEnvelope, String> {
+    let usage = "usage: syki-cli plugin <list | status [plugin_id] | reload <plugin_id> | run <command_id> [--args <json>] [--show]>";
+    match args.first().map(String::as_str) {
+        Some("list") => {
+            if args.len() > 1 {
+                return Err("usage: syki-cli plugin list".to_string());
+            }
+            Ok(build_plugin_rpc_envelope(auth, METHOD_PLUGIN_LIST, json!({}), true))
+        }
+        Some("status") => match args.len() {
+            1 => Ok(build_plugin_rpc_envelope(auth, METHOD_PLUGIN_STATUS, json!({}), true)),
+            2 => Ok(build_plugin_rpc_envelope(
+                auth,
+                METHOD_PLUGIN_STATUS,
+                json!({ "plugin_id": args[1] }),
+                true,
+            )),
+            _ => Err("usage: syki-cli plugin status [plugin_id]".to_string()),
+        },
+        Some("reload") => {
+            if args.len() != 2 {
+                return Err("usage: syki-cli plugin reload <plugin_id>".to_string());
+            }
+            Ok(build_plugin_rpc_envelope(
+                auth,
+                METHOD_PLUGIN_RELOAD,
+                json!({ "plugin_id": args[1] }),
+                true,
+            ))
+        }
+        Some("run") => {
+            let Some(command_id) = args.get(1) else {
+                return Err("usage: syki-cli plugin run <command_id> [--args <json>] [--show]".to_string());
+            };
+            if command_id.starts_with('-') {
+                return Err("usage: syki-cli plugin run <command_id> [--args <json>] [--show]".to_string());
+            }
+            let mut parsed_args = json!({});
+            let mut headless = true;
+            let mut i = 2;
+            while i < args.len() {
+                let token = args[i].as_str();
+                if token == "--show" {
+                    headless = false;
+                    i += 1;
+                } else if token == "--args" {
+                    let raw = args
+                        .get(i + 1)
+                        .ok_or_else(|| "missing JSON value for --args".to_string())?;
+                    parsed_args = serde_json::from_str::<Value>(raw)
+                        .map_err(|e| format!("invalid JSON for --args: {e}"))?;
+                    i += 2;
+                } else if let Some(raw) = token.strip_prefix("--args=") {
+                    parsed_args = serde_json::from_str::<Value>(raw)
+                        .map_err(|e| format!("invalid JSON for --args: {e}"))?;
+                    i += 1;
+                } else {
+                    return Err(format!("unknown argument for `plugin run`: {token}"));
+                }
+            }
+            Ok(build_plugin_rpc_envelope(
+                auth,
+                METHOD_PLUGIN_RUN,
+                json!({ "command_id": command_id, "args": parsed_args }),
+                headless,
+            ))
+        }
+        _ => Err(usage.to_string()),
+    }
+}
+
+fn try_send_plugin_ipc(env: &RuntimeEnv, args: &[String]) -> Result<Value, String> {
+    // Validate CLI arguments and JSON payload before touching the Named Pipe.
+    let mut req = build_plugin_cli_envelope("", args)?;
+    let pipe = pipe_name_for(env);
+    if !is_pipe_available(&pipe) {
+        return Err(format!("syki GUI instance is not running on {pipe}"));
+    }
+    let session = load_ipc_session(&session_file_path(env))
+        .map_err(|e| format!("failed to read ipc-session.json: {e}"))?;
+    req.auth = session.token;
+    let reply = send_ipc_request(&session.pipe_name, &req)?;
+    if reply.ok {
+        Ok(reply.result.unwrap_or(Value::Null))
+    } else {
+        Err(reply.error.unwrap_or_else(|| "ipc error".to_string()))
+    }
 }
 
 fn dispatch_subcommand(cmd: &str, args: &[String]) -> Result<(), String> {
@@ -292,6 +385,26 @@ fn dispatch_subcommand(cmd: &str, args: &[String]) -> Result<(), String> {
             }
             _ => Err("usage: syki-cli ui <activate | new-tab | open <path> | state | set <json> | panel <name>>".to_string()),
         },
+        "plugin" => {
+            if args.first().map(String::as_str) == Some("check") {
+                if args.len() != 2 {
+                    return Err("usage: syki-cli plugin check <path>".to_string());
+                }
+                let report = plugin_check::check_plugin_file(std::path::Path::new(&args[1]));
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report.to_json())
+                        .expect("check report serialises")
+                );
+                if !report.ok {
+                    exit(1);
+                }
+                return Ok(());
+            }
+            let res = try_send_plugin_ipc(&env, args)?;
+            println!("{res}");
+            Ok(())
+        }
         other => {
             let sub = args.first().map(String::as_str).unwrap_or("");
             let method = if sub.is_empty() {
@@ -403,7 +516,7 @@ mod tests {
     fn kept_subcommands_without_arguments_resolve_expected_actions() {
         assert_eq!(parse_cli_action(argv(&["info"])), CliAction::Info);
         assert_eq!(parse_cli_action(argv(&["info", "--json"])), CliAction::Info);
-        for name in ["buffer", "tab", "ui", "pty", "ocr", "speech", "scrap", "config"] {
+        for name in ["buffer", "tab", "ui", "pty", "ocr", "speech", "scrap", "config", "plugin"] {
             assert_eq!(
                 parse_cli_action(argv(&[name])),
                 CliAction::Unimplemented(name),
@@ -427,6 +540,80 @@ mod tests {
             parse_cli_action(argv(&["ui", "activate"])),
             CliAction::Dispatch("ui", argv(&["activate"]))
         );
+        assert_eq!(
+            parse_cli_action(argv(&["plugin", "list"])),
+            CliAction::Dispatch("plugin", argv(&["list"]))
+        );
+    }
+
+    #[test]
+    fn plugin_cli_builds_expected_envelopes() {
+        let list_env = build_plugin_cli_envelope("tok", &argv(&["list"])).expect("plugin list");
+        assert_eq!(list_env.auth, "tok");
+        assert_eq!(list_env.method, METHOD_PLUGIN_LIST);
+        assert_eq!(list_env.params, json!({}));
+        assert!(list_env.headless);
+
+        let status_all = build_plugin_cli_envelope("tok", &argv(&["status"])).expect("plugin status");
+        assert_eq!(status_all.method, METHOD_PLUGIN_STATUS);
+        assert_eq!(status_all.params, json!({}));
+        assert!(status_all.headless);
+
+        let status_one =
+            build_plugin_cli_envelope("tok", &argv(&["status", "my.plugin"])).expect("plugin status id");
+        assert_eq!(status_one.method, METHOD_PLUGIN_STATUS);
+        assert_eq!(status_one.params, json!({ "plugin_id": "my.plugin" }));
+        assert!(status_one.headless);
+
+        let reload_env =
+            build_plugin_cli_envelope("tok", &argv(&["reload", "my.plugin"])).expect("plugin reload");
+        assert_eq!(reload_env.method, METHOD_PLUGIN_RELOAD);
+        assert_eq!(reload_env.params, json!({ "plugin_id": "my.plugin" }));
+        assert!(reload_env.headless);
+
+        let run_default =
+            build_plugin_cli_envelope("tok", &argv(&["run", "demo.echo"])).expect("plugin run default");
+        assert_eq!(run_default.method, METHOD_PLUGIN_RUN);
+        assert_eq!(run_default.params, json!({ "command_id": "demo.echo", "args": {} }));
+        assert!(run_default.headless);
+
+        let run_with_args_and_show = build_plugin_cli_envelope(
+            "tok",
+            &argv(&["run", "demo.echo", "--args", r#"{"text":"hi"}"#, "--show"]),
+        )
+        .expect("plugin run --args --show");
+        assert_eq!(run_with_args_and_show.method, METHOD_PLUGIN_RUN);
+        assert_eq!(
+            run_with_args_and_show.params,
+            json!({ "command_id": "demo.echo", "args": { "text": "hi" } })
+        );
+        assert!(!run_with_args_and_show.headless);
+
+        let run_eq_args =
+            build_plugin_cli_envelope("tok", &argv(&["run", "demo.echo", "--args=[1,2]"]))
+                .expect("plugin run --args=");
+        assert_eq!(
+            run_eq_args.params,
+            json!({ "command_id": "demo.echo", "args": [1, 2] })
+        );
+        assert!(run_eq_args.headless);
+    }
+
+    #[test]
+    fn plugin_cli_rejects_invalid_json_and_missing_args() {
+        let bad_json =
+            build_plugin_cli_envelope("tok", &argv(&["run", "demo.echo", "--args", "{not-json"]))
+                .expect_err("invalid json should error");
+        assert!(bad_json.contains("invalid JSON for --args"));
+
+        let missing_json =
+            build_plugin_cli_envelope("tok", &argv(&["run", "demo.echo", "--args"]))
+                .expect_err("missing json value should error");
+        assert!(missing_json.contains("missing JSON value"));
+
+        assert!(build_plugin_cli_envelope("tok", &argv(&["reload"])).is_err());
+        assert!(build_plugin_cli_envelope("tok", &argv(&["run"])).is_err());
+        assert!(build_plugin_cli_envelope("tok", &argv(&["unknown"])).is_err());
     }
 
     #[test]

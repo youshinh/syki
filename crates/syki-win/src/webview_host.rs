@@ -323,6 +323,12 @@ fn build_preload_script(data_dir: &std::path::Path) -> String {
     };
     let config_val = read_valid_json_str("config.json");
     let session_val = read_valid_json_str("session.json");
+    let ext_flags = crate::ext_store::ExtRoots::new(
+        crate::ext_store::portable_dir_from_exe(),
+        data_dir.to_path_buf(),
+        crate::ext_store::safe_mode_from_args(),
+    )
+    .preload_ext_flags();
     let payload = serde_json::json!({
         "config": config_val,
         "session": session_val,
@@ -333,9 +339,27 @@ fn build_preload_script(data_dir: &std::path::Path) -> String {
             "globalHotkey": true,
             "aiOcr": true,
             "winrtOcr": false
-        }
+        },
+        "ext": ext_flags
     });
     format!("window.__sykiPreload = {payload};")
+}
+
+fn build_response_headers(status: u16, mime: &str, rel_path: &str) -> String {
+    let is_immutable_asset = crate::ext_store::is_immutable_virtual_asset(status, rel_path);
+    let cache_hdr = if is_immutable_asset {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-store"
+    };
+    if status == 200 && (rel_path.is_empty() || rel_path == "index.html") {
+        format!(
+            "Content-Type: {mime}\r\nCache-Control: {cache_hdr}\r\nContent-Security-Policy: {}",
+            crate::ext_store::content_security_policy()
+        )
+    } else {
+        format!("Content-Type: {mime}\r\nCache-Control: {cache_hdr}")
+    }
 }
 
 /// Returns `true` when closing the window should hide to the tray rather than exit (`general.trayResident`, default `true`).
@@ -473,12 +497,19 @@ fn attach_webview_controller(
         }
     }
 
-    let filter_pattern = CoTaskMemPWSTR::from(format!("{}*", state.virtual_origin).as_str());
-    unsafe {
-        webview.AddWebResourceRequestedFilter(
-            *filter_pattern.as_ref().as_pcwstr(),
-            COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
-        )?;
+    let filter_patterns = [
+        format!("{}*", state.virtual_origin),
+        "http://*".to_string(),
+        "https://*".to_string(),
+    ];
+    for pat in &filter_patterns {
+        let filter_pattern = CoTaskMemPWSTR::from(pat.as_str());
+        unsafe {
+            webview.AddWebResourceRequestedFilter(
+                *filter_pattern.as_ref().as_pcwstr(),
+                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+            )?;
+        }
     }
 
     let env_for_res = environment.clone();
@@ -511,22 +542,7 @@ fn attach_webview_controller(
                     .split('?')
                     .next()
                     .unwrap_or("");
-                let is_immutable_asset = status == 200
-                    && !rel_path.starts_with("api/")
-                    && !rel_path.is_empty()
-                    && rel_path != "index.html"
-                    && (rel_path.ends_with(".js")
-                        || rel_path.ends_with(".css")
-                        || rel_path.ends_with(".png")
-                        || rel_path.ends_with(".svg")
-                        || rel_path.ends_with(".woff2")
-                        || rel_path.ends_with(".ico"));
-                let cache_hdr = if is_immutable_asset {
-                    "public, max-age=31536000, immutable"
-                } else {
-                    "no-store"
-                };
-                let headers = format!("Content-Type: {mime}\r\nCache-Control: {cache_hdr}");
+                let headers = build_response_headers(status, mime, rel_path);
                 let reason_w = CoTaskMemPWSTR::from(reason_phrase_for(status));
                 let headers_w = CoTaskMemPWSTR::from(headers.as_str());
                 let response = env_for_res.CreateWebResourceResponse(
@@ -1208,6 +1224,52 @@ mod tests {
 
         std::fs::write(dir.join("config.json"), r#"{"general":{"trayResident":true}}"#).unwrap();
         assert!(is_tray_resident_enabled(&dir));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn response_headers_apply_csp_to_index_and_no_store_to_ext() {
+        let root_hdr = build_response_headers(200, "text/html; charset=utf-8", "");
+        assert!(root_hdr.contains("Cache-Control: no-store"));
+        assert!(root_hdr.contains(&format!(
+            "Content-Security-Policy: {}",
+            crate::ext_store::content_security_policy()
+        )));
+
+        let idx_hdr = build_response_headers(200, "text/html; charset=utf-8", "index.html");
+        assert!(idx_hdr.contains("Content-Security-Policy:"));
+
+        let ext_hdr = build_response_headers(200, "text/css; charset=utf-8", "__ext/r/1/user.css");
+        assert!(ext_hdr.contains("Cache-Control: no-store"));
+        assert!(!ext_hdr.contains("Content-Security-Policy:"));
+
+        let js_hdr =
+            build_response_headers(200, "application/javascript; charset=utf-8", "js/app.js");
+        assert!(js_hdr.contains("Cache-Control: public, max-age=31536000, immutable"));
+        assert!(!js_hdr.contains("Content-Security-Policy:"));
+    }
+
+    #[test]
+    fn preload_script_includes_ext_flags_and_preserves_existing_keys() {
+        let dir = std::env::temp_dir().join(format!("syki_preload_ext_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        std::fs::write(dir.join("user.css"), b"body {}").unwrap();
+
+        let script = build_preload_script(&dir);
+        let json_str = script
+            .strip_prefix("window.__sykiPreload = ")
+            .and_then(|s| s.strip_suffix(';'))
+            .expect("valid preload assignment");
+        let parsed: serde_json::Value = serde_json::from_str(json_str).expect("valid json");
+        assert!(parsed.get("config").is_some());
+        assert!(parsed.get("session").is_some());
+        assert_eq!(parsed["caps"]["os"], "win32");
+        assert_eq!(parsed["ext"]["hasUserCss"], true);
+        assert!(parsed["ext"]["hasPlugins"].is_boolean());
+        assert!(parsed["ext"]["safeMode"].is_boolean());
+        assert!(parsed["ext"]["isPortableCss"].is_boolean());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

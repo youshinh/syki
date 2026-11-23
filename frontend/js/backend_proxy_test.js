@@ -4,7 +4,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const proxyMod = require('./backend_proxy.js');
-const { createPostMessageBackendProxy, KEPT_METHODS } = proxyMod;
+const { createPostMessageBackendProxy, createReqIdDemux, KEPT_METHODS } = proxyMod;
 
 function makeMockWebView() {
   const sent = [];
@@ -166,6 +166,104 @@ async function run() {
     vm.runInNewContext(code, ctxWebView);
     assert.ok(ctxWebView.backend && typeof ctxWebView.backend.getAppVersion === 'function');
     assert.strictEqual(wv.listenerCount(), 1);
+  }
+
+  // 8. createReqIdDemux resolves parallel & out-of-order reqIds and handles AbortSignal cancellation
+  {
+    const cancelledIds = [];
+    const demux = createReqIdDemux({
+      onCancel(reqId, topic) {
+        cancelledIds.push([reqId, topic]);
+      }
+    });
+
+    const p1 = demux.wait('req-1', { topic: 'llm:decisionResult' });
+    const p2 = demux.wait('req-2', { topic: 'llm:decisionResult' });
+    const p3 = demux.wait('req-3', { topic: 'llm:result' });
+    assert.strictEqual(demux.pendingCount(), 3);
+
+    // Out-of-order arrival: req-3 -> req-2 -> req-1
+    assert.strictEqual(demux.dispatch('llm:result', { reqId: 'req-3', result: 'hello', error: '' }), true);
+    // Mismatched topic must NOT settle req-2
+    assert.strictEqual(demux.dispatch('llm:result', { reqId: 'req-2', result: 'wrong-topic' }), false);
+    assert.strictEqual(demux.dispatch('llm:decisionResult', { reqId: 'req-2', choiceId: 'bug', by: 'model', ok: true }), true);
+    assert.strictEqual(demux.dispatch('llm:decisionResult', { reqId: 'req-1', choiceId: 'task', by: 'model', ok: true }), true);
+
+    const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
+    assert.strictEqual(r1.choiceId, 'task');
+    assert.strictEqual(r2.choiceId, 'bug');
+    assert.strictEqual(r3.result, 'hello');
+    assert.strictEqual(demux.pendingCount(), 0);
+
+    // AbortSignal cancellation (in-flight)
+    const ac = new AbortController();
+    const pAbort = demux.wait('req-abort', { topic: 'llm:decisionResult', signal: ac.signal });
+    assert.strictEqual(demux.pendingCount(), 1);
+    ac.abort('user clicked stop');
+    await assert.rejects(pAbort, (err) => {
+      assert.strictEqual(err.name, 'AbortError');
+      assert.match(err.message, /user clicked stop/);
+      return true;
+    });
+    assert.strictEqual(demux.pendingCount(), 0);
+
+    // Pre-aborted AbortSignal rejects immediately without leaking pending entry
+    const preAc = new AbortController();
+    preAc.abort('already aborted');
+    await assert.rejects(
+      demux.wait('req-pre-abort', { topic: 'llm:result', signal: preAc.signal }),
+      (err) => err.name === 'AbortError'
+    );
+    assert.strictEqual(demux.pendingCount(), 0);
+    assert.deepStrictEqual(cancelledIds, [
+      ['req-abort', 'llm:decisionResult'],
+      ['req-pre-abort', 'llm:result']
+    ]);
+  }
+
+  // 9. Backend proxy integrates reqId demux for parallel llm:result / llm:decisionResult + AbortSignal
+  {
+    const wv = makeMockWebView();
+    const decisionHookCalls = [];
+    const targetWindow = {
+      __onLLMDecisionResult(reqId, choiceId, reason, by, ok) {
+        decisionHookCalls.push({ reqId, choiceId, reason, by, ok });
+      }
+    };
+    const backend = createPostMessageBackendProxy({ webview: wv, targetWindow });
+    assert.strictEqual(typeof backend.queryDecisionAsync, 'function');
+    assert.strictEqual(typeof backend.cancelLLMRequest, 'function');
+
+    const ac = new AbortController();
+    const d1 = backend.waitForEvent('llm:decisionResult', 'd-1');
+    const d2 = backend.waitForEvent('llm:decisionResult', 'd-2');
+    const d3 = backend.waitForEvent('llm:decisionResult', 'd-3', { signal: ac.signal });
+    const l1 = backend.waitForEvent('llm:result', 'l-1');
+
+    // Cancel d-3 before any event arrives
+    ac.abort('cancelled d-3');
+    await assert.rejects(d3, (err) => err.name === 'AbortError');
+
+    // Emit out-of-order events over WebView2 bridge
+    wv.emit({ topic: 'llm:decisionResult', payload: { reqId: 'd-2', choiceId: 'memo', reason: 'plain note', by: 'model', ok: true } });
+    wv.emit({ topic: 'llm:result', payload: { reqId: 'l-1', result: 'generated text', error: '' } });
+    wv.emit({ topic: 'llm:decisionResult', payload: { reqId: 'd-1', choiceId: 'task', reason: 'has due date', by: 'model', ok: true } });
+    // Late event for cancelled d-3 is harmlessly ignored by demux
+    wv.emit({ topic: 'llm:decisionResult', payload: { reqId: 'd-3', choiceId: 'bug', reason: 'late', by: 'model', ok: true } });
+
+    const [resD1, resD2, resL1] = await Promise.all([d1, d2, l1]);
+    assert.strictEqual(resD1.choiceId, 'task');
+    assert.strictEqual(resD2.choiceId, 'memo');
+    assert.strictEqual(resL1.result, 'generated text');
+    assert.strictEqual(backend.reqDemux.pendingCount(), 0);
+    assert.strictEqual(decisionHookCalls.length, 3);
+    assert.strictEqual(decisionHookCalls[0].reqId, 'd-2');
+    assert.strictEqual(decisionHookCalls[1].reqId, 'd-1');
+
+    // __dispose rejects any remaining waitForEvent promises
+    const dangling = backend.waitForEvent('llm:result', 'l-dangling');
+    backend.__dispose();
+    await assert.rejects(dangling, /backend proxy disposed/);
   }
 }
 

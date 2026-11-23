@@ -17,6 +17,8 @@
   <link rel="stylesheet" href="css/chrome.css?v=1.0.1" media="screen">
   <!-- Paper look for printing the preview (the printer button of the preview). media="print": it applies to nothing on the screen. -->
   <link rel="stylesheet" href="css/print.css?v=1.0.1" media="print">
+  <script src="js/ext_css.js"></script>
+  <script>(function(){var e=window.SykiExtCss||window.ExtCss;e&&e.initUserCss(document,window.__sykiPreload);})();</script>
   <!-- Early Key Hook: capture shortcuts and early keystrokes before heavy scripts finish loading (0ms feel) -->
   <script>
     (function () {
@@ -54,7 +56,7 @@
   <script>(function(){try{var m=localStorage.getItem('syki_look');if(!m)return;var p=m.split('|'),b=document.body;if(p[0]==='paper'){b.classList.add('look-paper');document.documentElement.classList.add('look-paper');}if(/^(blue|forest|charcoal|vermilion)$/.test(p[1])){b.classList.remove('theme-olive');b.classList.add('theme-'+p[1]);}}catch(e){}})();</script>
   <div id="app">
     <!-- Header: Tabs and Minimal Actions -->
-    <header id="header">
+    <header id="header" data-syki-part="toolbar">
       <!-- The file name of the note on screen, left-aligned to where the text starts (css/chrome.css); app.js (updateHeaderTitle) keeps its text. The tabs are not in this bar: they are the index strips at the window's edge (#tab-index-left, in #workspace). -->
       <div id="header-title" aria-hidden="true"></div>
       <div id="header-actions">
@@ -180,7 +182,7 @@
       <!-- The index tabs (v2, docs/design/v2-plan-P3.md): thin strips on the window's edge, over the text; css/style.css. The left strip holds the
            tabs (app.js renderTabs keeps them, tab_overflow.js scrolls them), then "+" and "All tabs" at its foot. The right strip is the
            second page's, shown only for the view with two note pages (app.js syncStripMode). Nothing in a strip may be renamed: tests, flows and the manual use these ids. -->
-      <div id="tab-index-left" class="tab-index" data-side="left">
+      <div id="tab-index-left" class="tab-index" data-side="left" data-syki-part="tabs">
         <div id="tabs-scroll">
           <div id="tabs-list" role="tablist" aria-orientation="vertical"></div>
         </div>
@@ -213,7 +215,7 @@
         <!-- The edge of the pinned strip, dragged to set its width (app.js initTabResizer); only there while the strip is pinned. -->
         <div id="tab-index-resizer" class="tab-index-resizer" role="separator" aria-orientation="vertical" tabindex="0" data-i18n-title="tabResizerTitle" title="Drag to resize"></div>
       </div>
-      <div id="tab-index-right" class="tab-index" data-side="right" hidden>
+      <div id="tab-index-right" class="tab-index" data-side="right" data-syki-part="tabs" hidden>
         <div id="tabs-scroll-right">
           <div id="tabs-list-right" role="tablist" aria-orientation="vertical"></div>
         </div>
@@ -237,7 +239,7 @@
         </div>
       </div>
       <!-- Floating Find & Replace Bar -->
-      <div id="find-replace-bar" class="find-replace-bar hidden">
+      <div id="find-replace-bar" class="find-replace-bar hidden" data-syki-part="find-bar">
         <div class="find-row">
           <button id="btn-toggle-replace" data-i18n-title="tipToggleReplace" class="btn-icon" title="Toggle Replace (Ctrl+H)">▶</button>
           <div class="find-input-wrap">
@@ -260,7 +262,7 @@
         </div>
       </div>
       <!-- In-Place Non-Modal Ask Bar (Ctrl+L): the chip names what the question is about (selection / current line / whole note) -->
-      <div id="inline-prompt-bar" class="inline-prompt-bar hidden">
+      <div id="inline-prompt-bar" class="inline-prompt-bar hidden" data-syki-part="inline-bar">
         <div class="inline-prompt-row">
           <div id="inline-prompt-badge" class="inline-prompt-badge">AI</div>
           <input type="text" id="inline-prompt-input" list="inline-prompt-suggestions" placeholder="Ask AI: summarize, translate, rewrite... (Enter to run, Esc to close)" data-i18n-placeholder="inlinePromptPlaceholder" spellcheck="false">
@@ -350,7 +352,7 @@
       </div>
 
       <!-- Primary Pane (Left) -->
-      <div id="editor-pane" class="pane">
+      <div id="editor-pane" class="pane" data-syki-part="editor">
         <div id="line-numbers"></div>
         <div id="editor-wrapper">
           <div id="cursor-aura"></div>
@@ -456,18 +458,18 @@
             </button>
           </div>
         </div>
-        <div id="secondary-editor-pane" class="secondary-editor-pane">
+        <div id="secondary-editor-pane" class="secondary-editor-pane" data-syki-part="editor">
           <div id="secondary-line-numbers" class="line-numbers"></div>
           <div id="secondary-editor-wrapper" class="editor-wrapper">
             <textarea id="editor-secondary" spellcheck="false" data-i18n-placeholder="editorSecondaryPlaceholder" placeholder="Type markdown here..."></textarea>
           </div>
         </div>
-        <div id="secondary-preview-pane" class="markdown-body secondary-preview-pane hidden"></div>
-        <div id="secondary-agent-pane" class="secondary-agent-pane hidden"></div>
+        <div id="secondary-preview-pane" class="markdown-body secondary-preview-pane hidden" data-syki-part="preview"></div>
+        <div id="secondary-agent-pane" class="secondary-agent-pane hidden" data-syki-part="terminal"></div>
       </div>
 
       <!-- Preview View (1-Screen Full Preview Toggle) -->
-      <div id="preview-pane" class="pane markdown-body hidden"></div>
+      <div id="preview-pane" class="pane markdown-body hidden" data-syki-part="preview"></div>
       <!-- Shown by CSS (sibling selector) only while #preview-pane is visible: no script involved. -->
       <div id="preview-badge" class="preview-badge" data-i18n="preview" aria-hidden="true">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -488,7 +490,7 @@
     </main>
 
     <!-- Status Bar -->
-    <footer id="status-bar">
+    <footer id="status-bar" data-syki-part="statusbar">
       <div class="status-left">
         <span id="stat-cursor">Ln 1, Col 1</span>
         <span id="stat-chars">Chars: 0</span>
@@ -505,6 +507,7 @@
         <!-- Every item on the right is a real <button> (a 24px target, in the Tab order). The AI item (status_ai.js) groups Text prediction / Suggestions / Voice tidy-up behind one popover and says which model answers. -->
         <button type="button" id="stat-recording" class="clickable-badge recording-status hidden" title="Recording. Click to stop (Esc discards)" data-i18n-title="voiceStatusTitle"><span class="rec-dot" aria-hidden="true"></span><span class="rec-label"></span><span class="rec-time"></span><span class="rec-mode"></span><span class="rec-stop"></span></button>
         <button type="button" id="stat-tasks" class="clickable-badge hidden" data-i18n-title="taskListTitle" title="Task list (Alt+T)"><span class="task-badge-spinner"></span><span id="stat-tasks-count">実行中: 0件</span></button>
+        <button type="button" id="stat-zoom" class="clickable-badge" data-i18n-title="statZoomTooltip" title="Zoom level (Click to reset)">100%</button>
         <button type="button" id="stat-ime" class="clickable-badge" style="display: none;" aria-pressed="true" data-i18n-title="statImeTooltip" title="Auto Romaji-to-Japanese conversion (IME Guardian)">IME: ON</button>
         <button type="button" id="stat-ai" class="clickable-badge status-ai" data-a11y-keep aria-haspopup="dialog" aria-expanded="false" title="AI">AI</button>
         <button type="button" id="stat-autosave" class="clickable-badge" aria-pressed="true" data-i18n-title="statAutosaveTooltip" title="Autosave is enabled (Click to toggle)">Autosave: ON</button>
@@ -512,8 +515,17 @@
       </div>
     </footer>
 
+    <!-- Zoom Popover -->
+    <div id="zoom-popover" class="hidden" role="dialog" aria-label="Zoom" style="position: fixed; z-index: 1200; background: var(--bg-panel, #252623); border: 1px solid var(--border-color, #3e403a); border-radius: 8px; padding: 6px 10px; box-shadow: 0 6px 20px rgba(0,0,0,0.4); display: flex; align-items: center; gap: 8px; font-size: 12px;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity: 0.8;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <button type="button" id="zoom-pop-out" class="clickable-badge" title="Zoom out" style="min-width: 24px; text-align: center;">−</button>
+      <span id="zoom-pop-pct" style="min-width: 40px; text-align: center; font-variant-numeric: tabular-nums;">100%</span>
+      <button type="button" id="zoom-pop-in" class="clickable-badge" title="Zoom in" style="min-width: 24px; text-align: center;">＋</button>
+      <button type="button" id="zoom-pop-reset" class="clickable-badge" title="Reset to 100%" style="margin-left: 2px;">Reset</button>
+    </div>
+
     <!-- Running Tasks Panel (Drawer / HUD) -->
-    <div id="running-tasks-panel" class="running-tasks-panel hidden">
+    <div id="running-tasks-panel" class="running-tasks-panel hidden" data-syki-part="running-tasks">
       <div class="tasks-panel-header">
         <div class="tasks-panel-title">
           <svg class="tasks-title-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -850,7 +862,7 @@
     </div>
 
     <!-- Settings Modal -->
-    <div id="settings-modal" class="modal-backdrop hidden">
+    <div id="settings-modal" class="modal-backdrop hidden" data-syki-part="settings">
       <div class="modal-card">
         <div class="modal-header">
           <h3 data-i18n="settingsModalTitle">Editor & LLM Settings</h3>
@@ -1983,6 +1995,7 @@
   <script src="js/search_workbench.js?v=1.0.1"></script>
   <script src="js/rpc_bridge.js?v=1.0.1"></script>
   <script src="js/settings_modal.js?v=1.0.1"></script>
+  <script src="js/ext_theme_sync.js?v=1.0.0"></script>
   <script src="js/app.js?v=1.6.9"></script>
 </body>
 </html>

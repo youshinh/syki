@@ -4,6 +4,7 @@ pub mod assets;
 pub mod assets_store;
 pub mod clipboard;
 pub mod dialogs;
+pub mod ext_store;
 pub mod host_lifecycle;
 pub mod ime;
 pub mod imgcap;

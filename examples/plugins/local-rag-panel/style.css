@@ -1,0 +1,130 @@
+/* Shadow DOM scoped styles for local-rag-panel (tokens.css variables only) */
+
+:host {
+  display: block;
+  color: var(--text-main);
+  background: var(--bg-main);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.rag-root {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.rag-form {
+  display: flex;
+  gap: 6px;
+}
+
+.rag-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  color: var(--text-main);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+
+.rag-input::placeholder {
+  color: var(--text-placeholder);
+}
+
+.rag-input:focus {
+  border-color: var(--accent-color);
+}
+
+.rag-btn {
+  padding: 6px 10px;
+  color: var(--text-main);
+  background: var(--bg-btn);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.rag-btn:hover:not(:disabled) {
+  background: var(--bg-btn-hover);
+}
+
+.rag-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.rag-btn-primary {
+  color: var(--text-on-accent);
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+}
+
+.rag-btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.rag-status {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.rag-answer-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--bg-header);
+  border: 1px solid var(--panel-line);
+  border-radius: var(--radius-md);
+}
+
+.rag-answer-body {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  color: var(--text-editor);
+}
+
+.rag-hits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rag-hit {
+  padding: 8px 10px;
+  background: var(--bg-header);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+
+.rag-hit-title {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0;
+  margin: 0 0 4px;
+  border: none;
+  background: transparent;
+  color: var(--accent-label);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.rag-hit-title:hover {
+  text-decoration: underline;
+}
+
+.rag-hit-snippet {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 12px;
+}

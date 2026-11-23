@@ -751,6 +751,7 @@
   const statLlmIndicator = document.getElementById('stat-llm-indicator');
   const statLlmText = document.getElementById('stat-llm-text');
   const statMessage = document.getElementById('stat-message');
+  const statZoom = document.getElementById('stat-zoom');
   const statIme = document.getElementById('stat-ime');
   const statAutosave = document.getElementById('stat-autosave');
   const statEncoding = document.getElementById('stat-encoding');
@@ -6993,6 +6994,11 @@
     if (headerForFont && headerForFont.style && typeof headerForFont.style.setProperty === 'function') headerForFont.style.setProperty('--editor-fs', `${currentFontSize}px`); // see noteHeaderGutterDigits
     if (editorSecondary) editorSecondary.style.fontSize = `${currentFontSize}px`;
     if (secondaryLineNumbers) secondaryLineNumbers.style.fontSize = `${currentFontSize}px`;
+    const zoomBase = zoomMod ? zoomMod.calculateZoomReset() : 14;
+    const zoomRatio = currentFontSize / zoomBase;
+    if (previewPane) previewPane.style.zoom = `${zoomRatio}`;
+    if (secondaryPreviewPane) secondaryPreviewPane.style.zoom = `${zoomRatio}`;
+    if (agentController && typeof agentController.setFontSize === 'function') agentController.setFontSize(currentFontSize);
     if (zoomMod) {
       zoomMod.saveFontSize(currentFontSize);
     } else {
@@ -7008,6 +7014,18 @@
     if (window.FileAnchor && window.FileAnchor.scheduleMarks) window.FileAnchor.scheduleMarks();
     scheduleUpdateLineNumbers();
     scheduleUpdateSecondaryLineNumbers();
+    renderZoomStatus();
+  }
+
+  function renderZoomStatus() {
+    const base = zoomMod ? zoomMod.calculateZoomReset() : 14;
+    const pct = Math.round((currentFontSize / base) * 100);
+    if (statZoom) {
+      statZoom.textContent = `${pct}%`;
+      statZoom.style.opacity = pct === 100 ? '0.6' : '1';
+    }
+    const popPct = document.getElementById('zoom-pop-pct');
+    if (popPct) popPct.textContent = `${pct}%`;
   }
   applyFontSize(currentFontSize);
 
@@ -12512,6 +12530,56 @@ OUTPUT FORMAT:
 
   statEncoding.onclick = () => toggleEncoding();
   if (statAutosave) statAutosave.onclick = () => toggleAutoSave();
+  if (statZoom) {
+    const zoomPopover = document.getElementById('zoom-popover');
+    const zoomPopOut = document.getElementById('zoom-pop-out');
+    const zoomPopIn = document.getElementById('zoom-pop-in');
+    const zoomPopReset = document.getElementById('zoom-pop-reset');
+
+    const closeZoomPopover = () => {
+      if (zoomPopover) zoomPopover.classList.add('hidden');
+    };
+    const positionZoomPopover = () => {
+      if (!zoomPopover) return;
+      const r = statZoom.getBoundingClientRect();
+      zoomPopover.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
+      zoomPopover.style.bottom = `${window.innerHeight - r.top + 6}px`;
+    };
+
+    statZoom.onclick = (e) => {
+      e.stopPropagation();
+      if (!zoomPopover) return zoomReset();
+      const willOpen = zoomPopover.classList.contains('hidden');
+      if (willOpen) {
+        renderZoomStatus();
+        positionZoomPopover();
+        zoomPopover.classList.remove('hidden');
+      } else {
+        closeZoomPopover();
+      }
+    };
+    if (zoomPopOut) zoomPopOut.onclick = (e) => { e.stopPropagation(); zoomOut(); };
+    if (zoomPopIn) zoomPopIn.onclick = (e) => { e.stopPropagation(); zoomIn(); };
+    if (zoomPopReset) zoomPopReset.onclick = (e) => { e.stopPropagation(); zoomReset(); };
+
+    document.addEventListener('click', (e) => {
+      if (zoomPopover && !zoomPopover.classList.contains('hidden') && !zoomPopover.contains(e.target) && e.target !== statZoom) {
+        closeZoomPopover();
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && zoomPopover && !zoomPopover.classList.contains('hidden')) {
+        closeZoomPopover();
+      }
+    });
+  }
+  window.addEventListener('wheel', (e) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      if (e.deltaY < 0) zoomIn();
+      else if (e.deltaY > 0) zoomOut();
+    }
+  }, { passive: false });
   if (statIme) statIme.onclick = () => toggleIME();
   initStatusAI();
 

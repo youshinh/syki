@@ -28,6 +28,11 @@ use crate::storage::atomic::write_atomic_bytes;
 
 pub const MAX_IPC_LINE_BYTES: usize = 12 * 1024 * 1024;
 
+pub const METHOD_PLUGIN_LIST: &str = "plugin.list";
+pub const METHOD_PLUGIN_STATUS: &str = "plugin.status";
+pub const METHOD_PLUGIN_RELOAD: &str = "plugin.reload";
+pub const METHOD_PLUGIN_RUN: &str = "plugin.run";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IpcSession {
     pub pid: u32,
@@ -53,6 +58,8 @@ pub struct IpcEnvelope {
     pub path: String,
     #[serde(default)]
     pub cwd: String,
+    #[serde(default)]
+    pub headless: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -328,7 +335,38 @@ pub fn make_auth_envelope(session: &IpcSession, action: &str, method: &str, para
         cwd: std::env::current_dir()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default(),
+        headless: false,
     }
+}
+
+/// Builds an authenticated plugin JSON-RPC [`IpcEnvelope`].
+pub fn build_plugin_rpc_envelope(
+    auth: &str,
+    method: &str,
+    params: Value,
+    headless: bool,
+) -> IpcEnvelope {
+    IpcEnvelope {
+        id: "1".to_string(),
+        auth: auth.to_string(),
+        action: String::new(),
+        method: method.to_string(),
+        params,
+        content: String::new(),
+        path: String::new(),
+        cwd: std::env::current_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        headless,
+    }
+}
+
+/// Returns true if `method` is one of the plugin JSON-RPC methods.
+pub fn is_plugin_rpc_method(method: &str) -> bool {
+    matches!(
+        method,
+        METHOD_PLUGIN_LIST | METHOD_PLUGIN_STATUS | METHOD_PLUGIN_RELOAD | METHOD_PLUGIN_RUN
+    )
 }
 
 #[cfg(test)]
@@ -391,5 +429,48 @@ mod tests {
         server.stop();
         assert!(!session_file_path(&env).exists());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ipc_envelope_headless_defaults_to_false_for_backwards_compatibility() {
+        let legacy_json = r#"{"id":"1","auth":"tok","action":"activate","method":"ui.activate","params":{}}"#;
+        let parsed: IpcEnvelope = serde_json::from_str(legacy_json).expect("deserialize legacy");
+        assert!(!parsed.headless);
+        assert_eq!(parsed.method, "ui.activate");
+    }
+
+    #[test]
+    fn build_plugin_rpc_envelope_roundtrips_json() {
+        let env = build_plugin_rpc_envelope(
+            "secret-token",
+            METHOD_PLUGIN_RUN,
+            json!({ "command_id": "demo.echo", "args": { "msg": "hi" } }),
+            true,
+        );
+        assert_eq!(env.auth, "secret-token");
+        assert_eq!(env.method, METHOD_PLUGIN_RUN);
+        assert!(env.headless);
+
+        let serialized = serde_json::to_string(&env).expect("serialize");
+        let deserialized: IpcEnvelope = serde_json::from_str(&serialized).expect("deserialize");
+        assert_eq!(deserialized.auth, "secret-token");
+        assert_eq!(deserialized.method, METHOD_PLUGIN_RUN);
+        assert_eq!(deserialized.params["command_id"], "demo.echo");
+        assert_eq!(deserialized.params["args"]["msg"], "hi");
+        assert!(deserialized.headless);
+
+        let visible_env = build_plugin_rpc_envelope("tok", METHOD_PLUGIN_RUN, json!({}), false);
+        assert!(!visible_env.headless);
+    }
+
+    #[test]
+    fn is_plugin_rpc_method_matches_only_plugin_methods() {
+        assert!(is_plugin_rpc_method(METHOD_PLUGIN_LIST));
+        assert!(is_plugin_rpc_method(METHOD_PLUGIN_STATUS));
+        assert!(is_plugin_rpc_method(METHOD_PLUGIN_RELOAD));
+        assert!(is_plugin_rpc_method(METHOD_PLUGIN_RUN));
+        assert!(!is_plugin_rpc_method("ui.activate"));
+        assert!(!is_plugin_rpc_method("plugin.unknown"));
+        assert!(!is_plugin_rpc_method(""));
     }
 }

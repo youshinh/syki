@@ -6,6 +6,7 @@
 //! user-data folder). It intentionally has no UI or OS-binding code.
 
 pub mod ipc;
+pub mod policy;
 pub mod rpc;
 pub mod search;
 pub mod semindex;

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
+use syki_core::policy::{PolicyDecisionEngine, PolicyVerdict, TrustRegistry};
 use syki_core::rpc::{RpcEvent, RpcRequest, RpcResponse, RuntimeEnv};
 use syki_core::search::{scrap_filter_options, search_scraps_parallel, ScrapFilter};
 use syki_core::semindex::{
@@ -34,12 +35,19 @@ pub struct CoreState {
     print_preview: printing::PrintPreviewStore,
     pty_mgr: pty::PtyManager,
     meeting: meeting_audio::MeetingRecorder,
+    policy: Mutex<PolicyDecisionEngine>,
+    llm_cancel: Arc<llm::LlmCancelRegistry>,
 }
 
 impl CoreState {
     pub fn new(env: RuntimeEnv, startup_file: Option<PathBuf>) -> Self {
         let config_store = JsonConfigStore::new(env.data_dir.join("config.json"));
         let session_store = SessionStore::new(env.data_dir.join("session.json"));
+        let trust_path = env.data_dir.join("trust-registry.json");
+        let trust_registry: TrustRegistry = std::fs::read_to_string(&trust_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default();
         Self {
             env,
             config_store,
@@ -52,7 +60,17 @@ impl CoreState {
             print_preview: printing::PrintPreviewStore::new(),
             pty_mgr: pty::PtyManager::new(),
             meeting: meeting_audio::MeetingRecorder::new(),
+            policy: Mutex::new(PolicyDecisionEngine::new(trust_registry)),
+            llm_cancel: Arc::new(llm::LlmCancelRegistry::new()),
         }
+    }
+
+    fn save_trust_registry(&self, registry: &TrustRegistry) -> Result<(), String> {
+        let bytes = serde_json::to_vec_pretty(registry)
+            .map_err(|e| format!("failed to serialize trust registry: {e}"))?;
+        let path = self.env.data_dir.join("trust-registry.json");
+        syki_core::storage::atomic::write_atomic_bytes(&path, &bytes)
+            .map_err(|e| format!("failed to save trust registry: {e}"))
     }
 
     pub fn print_preview_store(&self) -> printing::PrintPreviewStore {
@@ -768,8 +786,175 @@ impl CoreState {
                 let prompt = param_str(&req.params, 1, "prompt").unwrap_or_default();
                 let config_json = param_str(&req.params, 2, "config").unwrap_or_default();
                 let sender = self.event_sender.lock().expect("event_sender mutex").clone();
-                llm::query_llm_async(req_id, prompt, config_json, sender);
+                llm::query_llm_async_cancellable(
+                    req_id,
+                    prompt,
+                    config_json,
+                    Some(Arc::clone(&self.llm_cancel)),
+                    sender,
+                );
                 RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "queryDecisionAsync" => {
+                let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
+                let mut action_cfg_json =
+                    param_json_str(&req.params, 1, "actionConfig").unwrap_or_default();
+                let default_cfg_json =
+                    param_json_str(&req.params, 2, "defaultConfig").unwrap_or_default();
+                let input = param_str(&req.params, 3, "input").unwrap_or_default();
+                let choices = param_decision_choices(&req.params, 4, "choices");
+                let fallback = param_str(&req.params, 5, "fallback").unwrap_or_default();
+                let prompt_raw = param_str(&req.params, 6, "prompt").unwrap_or_default();
+                let timeout_ms = param_u64(&req.params, 7, "timeoutMs");
+
+                if let Some(ms) = timeout_ms.filter(|&v| v > 0) {
+                    let mut cfg = llm::DecisionConfig::from_json_str(&action_cfg_json);
+                    if cfg.timeout_ms.is_none() {
+                        cfg.timeout_ms = Some(ms);
+                        if let Ok(serialized) = serde_json::to_string(&cfg) {
+                            action_cfg_json = serialized;
+                        }
+                    }
+                }
+
+                let combined_prompt = if prompt_raw.is_empty() {
+                    input
+                } else if input.is_empty() {
+                    prompt_raw
+                } else if prompt_raw.contains("{{input}}") {
+                    prompt_raw.replace("{{input}}", &input)
+                } else {
+                    format!("{prompt_raw}\n\n{input}")
+                };
+
+                let sender = self.event_sender.lock().expect("event_sender mutex").clone();
+                llm::query_decision_async(
+                    req_id,
+                    combined_prompt,
+                    choices,
+                    fallback,
+                    action_cfg_json,
+                    default_cfg_json,
+                    Some(Arc::clone(&self.llm_cancel)),
+                    sender,
+                );
+                RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "cancelLLMRequest" => {
+                let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
+                RpcResponse::ok(&req.id, json!(self.llm_cancel.cancel(&req_id)))
+            }
+
+            "runProgramAsync" => {
+                let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
+                let program = param_str(&req.params, 1, "program").unwrap_or_default();
+                let args = param_str_vec(&req.params, 2, "args");
+                let stdin_data = param_str(&req.params, 3, "stdin").unwrap_or_default();
+
+                let decision = self
+                    .policy
+                    .lock()
+                    .expect("policy mutex")
+                    .evaluate_program_exec(&program, &args);
+                if decision.verdict != PolicyVerdict::Allow {
+                    return RpcResponse::ok(
+                        &req.id,
+                        json!({ "allowed": false, "decision": decision }),
+                    );
+                }
+
+                let sender = self.event_sender.lock().expect("event_sender mutex").clone();
+                run_program_direct_async(req_id, program, args, stdin_data, sender);
+                RpcResponse::ok(&req.id, json!({ "allowed": true, "decision": decision }))
+            }
+
+            "getPolicyAuditLog" => {
+                let log = self.policy.lock().expect("policy mutex").audit_log();
+                RpcResponse::ok(&req.id, json!(log))
+            }
+
+            "approvePlugin" => {
+                let plugin_id = param_str(&req.params, 0, "pluginId").unwrap_or_default();
+                let sha256_hex = param_str(&req.params, 1, "sha256")
+                    .or_else(|| param_str(&req.params, 1, "sha256Hex"))
+                    .unwrap_or_default();
+                if plugin_id.trim().is_empty() || sha256_hex.trim().is_empty() {
+                    return RpcResponse::err(&req.id, "pluginId and sha256 are required");
+                }
+                let snapshot = {
+                    let mut engine = self.policy.lock().expect("policy mutex");
+                    engine.approve_plugin(&plugin_id, &sha256_hex);
+                    engine.registry().clone()
+                };
+                match self.save_trust_registry(&snapshot) {
+                    Ok(()) => RpcResponse::ok(&req.id, json!(true)),
+                    Err(e) => RpcResponse::err(&req.id, e),
+                }
+            }
+
+            "setPluginDevMode" => {
+                let plugin_id = param_str(&req.params, 0, "pluginId").unwrap_or_default();
+                let enabled = param_bool(&req.params, 1, "enabled").unwrap_or(false);
+                let (changed, snapshot) = {
+                    let mut engine = self.policy.lock().expect("policy mutex");
+                    let ok = engine.set_dev_mode(&plugin_id, enabled);
+                    (ok, engine.registry().clone())
+                };
+                if changed {
+                    if let Err(e) = self.save_trust_registry(&snapshot) {
+                        return RpcResponse::err(&req.id, e);
+                    }
+                }
+                RpcResponse::ok(&req.id, json!(changed))
+            }
+
+            "approveProgram" => {
+                let program = param_str(&req.params, 0, "program").unwrap_or_default();
+                if program.trim().is_empty() {
+                    return RpcResponse::err(&req.id, "program is required");
+                }
+                let snapshot = {
+                    let mut engine = self.policy.lock().expect("policy mutex");
+                    engine.approve_program(&program);
+                    engine.registry().clone()
+                };
+                match self.save_trust_registry(&snapshot) {
+                    Ok(()) => RpcResponse::ok(&req.id, json!(true)),
+                    Err(e) => RpcResponse::err(&req.id, e),
+                }
+            }
+
+            "saveQcThemeCache" => {
+                let snapshot_val = match &req.params {
+                    Value::Array(arr) => arr.first().cloned(),
+                    Value::Object(map) => map
+                        .get("snapshot")
+                        .cloned()
+                        .or_else(|| Some(req.params.clone())),
+                    _ => None,
+                };
+                let Some(val) = snapshot_val else {
+                    return RpcResponse::err(&req.id, "snapshot object is required");
+                };
+                let bytes = match val {
+                    Value::String(s) => s.into_bytes(),
+                    other => match serde_json::to_vec_pretty(&other) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            return RpcResponse::err(
+                                &req.id,
+                                format!("failed to serialize qc theme cache: {e}"),
+                            );
+                        }
+                    },
+                };
+                let path = self.env.data_dir.join("qc-theme-cache.json");
+                match syki_core::storage::atomic::write_atomic_bytes(&path, &bytes) {
+                    Ok(()) => RpcResponse::ok(&req.id, json!(true)),
+                    Err(e) => RpcResponse::err(&req.id, format!("failed to save qc theme cache: {e}")),
+                }
             }
 
             "autocompleteAsync" => {
@@ -1139,6 +1324,115 @@ fn param_bool(params: &Value, idx: usize, key: &str) -> Option<bool> {
         Value::Object(map) => map.get(key).and_then(|v| v.as_bool()),
         _ => None,
     }
+}
+
+fn param_json_str(params: &Value, idx: usize, key: &str) -> Option<String> {
+    let val = param_value(params, idx, key)?;
+    match val {
+        Value::String(s) => Some(s),
+        Value::Null => None,
+        other => serde_json::to_string(&other).ok(),
+    }
+}
+
+fn param_decision_choices(params: &Value, idx: usize, key: &str) -> Vec<llm::DecisionChoice> {
+    let Some(val) = param_value(params, idx, key) else {
+        return Vec::new();
+    };
+    match val {
+        Value::String(s) => serde_json::from_str(&s).unwrap_or_default(),
+        Value::Array(_) => serde_json::from_value(val).unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+fn param_str_vec(params: &Value, idx: usize, key: &str) -> Vec<String> {
+    let Some(val) = param_value(params, idx, key) else {
+        return Vec::new();
+    };
+    match val {
+        Value::Array(arr) => arr
+            .into_iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect(),
+        Value::String(s) => serde_json::from_str(&s).unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+fn run_program_direct_async(
+    req_id: String,
+    program: String,
+    args: Vec<String>,
+    stdin_data: String,
+    sender: Option<EventSender>,
+) {
+    std::thread::spawn(move || {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let mut cmd = Command::new(&program);
+        cmd.args(&args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let res = match cmd.spawn() {
+            Ok(mut child) => {
+                if let Some(mut child_stdin) = child.stdin.take() {
+                    if !stdin_data.is_empty() {
+                        let _ = child_stdin.write_all(stdin_data.as_bytes());
+                    }
+                }
+                match child.wait_with_output() {
+                    Ok(out) => {
+                        let stdout_clean =
+                            shell_pipe::strip_ansi(&String::from_utf8_lossy(&out.stdout));
+                        let stderr_clean =
+                            shell_pipe::strip_ansi(&String::from_utf8_lossy(&out.stderr));
+                        let exit_code = out.status.code().unwrap_or(-1);
+                        shell_pipe::CommandResult {
+                            output: stdout_clean,
+                            error: stderr_clean,
+                            exit_code,
+                        }
+                    }
+                    Err(err) => shell_pipe::CommandResult {
+                        output: String::new(),
+                        error: format!("program wait error: {err}"),
+                        exit_code: -1,
+                    },
+                }
+            }
+            Err(err) => shell_pipe::CommandResult {
+                output: String::new(),
+                error: format!("failed to spawn program: {err}"),
+                exit_code: -1,
+            },
+        };
+
+        if let Some(tx) = sender {
+            let err_str = if res.exit_code != 0 && !res.error.is_empty() {
+                res.error.clone()
+            } else {
+                String::new()
+            };
+            tx(RpcEvent {
+                topic: "cli:result".to_string(),
+                payload: json!({
+                    "reqId": req_id,
+                    "result": res,
+                    "error": err_str
+                }),
+            });
+        }
+    });
 }
 
 fn extract_host_port(base_url: &str) -> String {
@@ -1633,6 +1927,106 @@ mod tests {
         assert_eq!(ev.topic, "ime:retype");
         assert_eq!(ev.payload["reqId"], "req-1");
         assert!(!ev.payload["error"].as_str().unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn run_program_policy_denies_shell_host_asks_unknown_and_allows_approved() {
+        let (root, state) = temp_env("policy-program");
+
+        // 1. Unapproved shell host interpreter must be Deny and not executed
+        let denied_prog = concat!("power", "shell.exe");
+        let denied = state.dispatch(&req(
+            "runProgramAsync",
+            json!(["req-ps", denied_prog, ["-Command", "echo hi"], ""]),
+        ));
+        assert!(denied.ok);
+        let denied_val = denied.result.unwrap();
+        assert_eq!(denied_val["allowed"], false);
+        assert_eq!(denied_val["decision"]["verdict"], "deny");
+
+        // 2. Unapproved non-denied program must be Ask and not executed
+        let asked = state.dispatch(&req(
+            "runProgramAsync",
+            json!(["req-git", "git", ["--version"], ""]),
+        ));
+        assert!(asked.ok);
+        let asked_val = asked.result.unwrap();
+        assert_eq!(asked_val["allowed"], false);
+        assert_eq!(asked_val["decision"]["verdict"], "ask");
+
+        // 3. Approve program and verify execution is allowed and persists to trust-registry.json
+        let approved = state.dispatch(&req("approveProgram", json!(["where.exe"])));
+        assert!(approved.ok);
+        assert!(root.join("trust-registry.json").exists());
+
+        let (tx, rx) = std::sync::mpsc::channel::<RpcEvent>();
+        state.set_event_sender(Arc::new(move |ev| {
+            let _ = tx.send(ev);
+        }));
+        let allowed = state.dispatch(&req(
+            "runProgramAsync",
+            json!(["req-where", "where.exe", ["cmd.exe"], ""]),
+        ));
+        assert!(allowed.ok);
+        let allowed_val = allowed.result.unwrap();
+        assert_eq!(allowed_val["allowed"], true);
+        assert_eq!(allowed_val["decision"]["verdict"], "allow");
+
+        let ev = rx.recv_timeout(Duration::from_secs(5)).expect("cli:result event");
+        assert_eq!(ev.topic, "cli:result");
+        assert_eq!(ev.payload["reqId"], "req-where");
+        assert_eq!(ev.payload["result"]["exitCode"], 0);
+
+        // 4. Policy audit log must record all 3 evaluations
+        let audit = state.dispatch(&req("getPolicyAuditLog", json!([])));
+        assert!(audit.ok);
+        let entries = audit.result.unwrap();
+        let arr = entries.as_array().expect("audit log array");
+        assert!(arr.len() >= 3);
+        assert_eq!(arr[0]["verdict"], "deny");
+        assert_eq!(arr[1]["verdict"], "ask");
+        assert_eq!(arr[2]["verdict"], "allow");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cancel_llm_request_and_plugin_trust_and_theme_cache_rpc() {
+        let (root, state) = temp_env("cancel-trust-theme");
+
+        // cancelLLMRequest returns false for unknown id, true for active registered id
+        let miss = state.dispatch(&req("cancelLLMRequest", json!(["nonexistent-req"])));
+        assert!(miss.ok);
+        assert_eq!(miss.result.unwrap(), false);
+
+        let flag = state.llm_cancel.register("active-req-1");
+        let hit = state.dispatch(&req("cancelLLMRequest", json!(["active-req-1"])));
+        assert!(hit.ok);
+        assert_eq!(hit.result.unwrap(), true);
+        assert!(flag.load(std::sync::atomic::Ordering::SeqCst));
+        state.llm_cancel.finish("active-req-1");
+
+        // approvePlugin + setPluginDevMode
+        let dev_before = state.dispatch(&req("setPluginDevMode", json!(["demo-plugin", true])));
+        assert!(dev_before.ok);
+        assert_eq!(dev_before.result.unwrap(), false);
+
+        let approve = state.dispatch(&req("approvePlugin", json!(["demo-plugin", "deadbeef"])));
+        assert!(approve.ok);
+        let dev_after = state.dispatch(&req("setPluginDevMode", json!(["demo-plugin", true])));
+        assert!(dev_after.ok);
+        assert_eq!(dev_after.result.unwrap(), true);
+
+        // saveQcThemeCache writes atomic JSON
+        let saved = state.dispatch(&req(
+            "saveQcThemeCache",
+            json!([{ "theme": "dark", "bg": "#111111" }]),
+        ));
+        assert!(saved.ok);
+        let raw = std::fs::read_to_string(root.join("qc-theme-cache.json")).unwrap();
+        assert!(raw.contains("\"dark\""));
 
         let _ = std::fs::remove_dir_all(root);
     }

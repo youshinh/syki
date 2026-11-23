@@ -1,5 +1,6 @@
 //! Asset persistence (`saveAsset` / `importAssetFile`) for pasted images & dropped files (#05).
 
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
 use base64::engine::general_purpose::STANDARD;
@@ -291,6 +292,94 @@ fn hex_val(b: u8) -> Option<u8> {
     }
 }
 
+pub const DEFAULT_TEMP_ASSET_CAPACITY: usize = 32;
+
+/// Lightweight handle for an in-memory binary asset stored in `TempAssetStore`,
+/// avoiding base64 round-trips over IPC.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetRef {
+    pub id: String,
+    pub url: String,
+    pub mime: String,
+    pub bytes: usize,
+}
+
+/// Bounded in-memory FIFO store for temporary binary assets.
+#[derive(Debug)]
+pub struct TempAssetStore {
+    max_entries: usize,
+    next_seq: u64,
+    order: VecDeque<String>,
+    entries: HashMap<String, (String, Vec<u8>)>,
+}
+
+impl Default for TempAssetStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TempAssetStore {
+    pub fn new() -> Self {
+        Self::with_capacity(DEFAULT_TEMP_ASSET_CAPACITY)
+    }
+
+    pub fn with_capacity(max_entries: usize) -> Self {
+        let cap = max_entries.max(1);
+        Self {
+            max_entries: cap,
+            next_seq: 0,
+            order: VecDeque::with_capacity(cap),
+            entries: HashMap::with_capacity(cap),
+        }
+    }
+
+    pub fn put(&mut self, mime: impl Into<String>, data: Vec<u8>) -> AssetRef {
+        while self.order.len() >= self.max_entries {
+            if let Some(oldest_id) = self.order.pop_front() {
+                self.entries.remove(&oldest_id);
+            }
+        }
+        self.next_seq = self.next_seq.wrapping_add(1);
+        let id = format!("tmp-{}", self.next_seq);
+        let url = format!("/api/temp-asset/{id}");
+        let mime_str = mime.into();
+        let bytes = data.len();
+
+        self.entries.insert(id.clone(), (mime_str.clone(), data));
+        self.order.push_back(id.clone());
+
+        AssetRef {
+            id,
+            url,
+            mime: mime_str,
+            bytes,
+        }
+    }
+
+    pub fn get(&self, id: &str) -> Option<(String, Vec<u8>)> {
+        self.entries.get(id).cloned()
+    }
+
+    pub fn remove(&mut self, id: &str) -> bool {
+        if self.entries.remove(id).is_some() {
+            self.order.retain(|k| k != id);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,5 +468,50 @@ mod tests {
 
     fn percent_encode_for_test(s: &str) -> String {
         s.bytes().map(|b| format!("%{b:02X}")).collect()
+    }
+
+    #[test]
+    fn temp_asset_store_put_get_fifo_eviction_and_remove() {
+        let mut store = TempAssetStore::with_capacity(3);
+        assert_eq!(store.len(), 0);
+        assert!(store.is_empty());
+
+        let r1 = store.put("image/png", vec![1, 2, 3]);
+        assert_eq!(r1.mime, "image/png");
+        assert_eq!(r1.bytes, 3);
+        assert!(r1.url.contains(&r1.id));
+        assert_eq!(store.len(), 1);
+        assert_eq!(store.get(&r1.id), Some(("image/png".to_string(), vec![1, 2, 3])));
+
+        let r2 = store.put("image/jpeg", vec![4, 5]);
+        let r3 = store.put("application/pdf", vec![6]);
+        assert_eq!(store.len(), 3);
+
+        // 4th insert must evict the oldest entry (r1) in FIFO order.
+        let r4 = store.put("image/webp", vec![7, 8, 9, 10]);
+        assert_eq!(store.len(), 3);
+        assert!(store.get(&r1.id).is_none());
+        assert_eq!(store.get(&r2.id), Some(("image/jpeg".to_string(), vec![4, 5])));
+        assert_eq!(store.get(&r3.id), Some(("application/pdf".to_string(), vec![6])));
+        assert_eq!(store.get(&r4.id), Some(("image/webp".to_string(), vec![7, 8, 9, 10])));
+
+        // Explicit remove frees slot and returns false for unknown ids.
+        assert!(store.remove(&r3.id));
+        assert!(!store.remove(&r3.id));
+        assert_eq!(store.len(), 2);
+        assert!(store.get(&r3.id).is_none());
+
+        // Default store capacity is 32 and caps entries at 32.
+        let mut default_store = TempAssetStore::new();
+        let mut ids = Vec::new();
+        for i in 0..35u8 {
+            let r = default_store.put("application/octet-stream", vec![i]);
+            ids.push(r.id);
+        }
+        assert_eq!(default_store.len(), DEFAULT_TEMP_ASSET_CAPACITY);
+        assert!(default_store.get(&ids[0]).is_none());
+        assert!(default_store.get(&ids[2]).is_none());
+        assert!(default_store.get(&ids[3]).is_some());
+        assert!(default_store.get(&ids[34]).is_some());
     }
 }
