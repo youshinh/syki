@@ -70,7 +70,7 @@ const delta = (cur, prev, unit = '') => {
 };
 
 const lines = [
-  '# syki-lite Performance & Memory History',
+  '# syki Performance & Memory History',
   '',
   'CI / デプロイごとに同一指標で記録した起動速度・省メモリ・バイナリサイズの履歴です。',
   '',
@@ -95,7 +95,7 @@ if (summaryFile) {
   const latest = rows[rows.length - 1];
   const prev = rows.length > 1 ? rows[rows.length - 2] : null;
   const summary = [
-    '### syki-lite Deploy Perf & Memory Gate',
+    '### syki Deploy Perf & Memory Gate',
     `- **Commit**: \`${latest.commit}\` (${latest.ref})`,
     `- **Warm \`app_ready\`**: **${fmt(latest.warmAppReadyMedianMs, ' ms')}**${prev ? delta(latest.warmAppReadyMedianMs, prev.warmAppReadyMedianMs, ' ms') : ''}`,
     `- **Cold \`app_ready\`**: ${fmt(latest.coldAppReadyMs, ' ms')}`,

@@ -1,4 +1,4 @@
-// syki-lite Core v1 API: knowledge / exec / flow (Decision model + CanvasHost detach guard)
+// syki Core v1 API: knowledge / exec / flow (Decision model + CanvasHost detach guard)
 // UMD / CommonJS compatible: window.SykiApiFlow / module.exports
 (function (global) {
   'use strict';

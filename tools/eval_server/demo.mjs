@@ -1,14 +1,14 @@
-// Demo data for headless-Edge functional & smoke evaluations under syki-lite: deterministic, offline, no private content.
+// Demo data for headless-Edge functional & smoke evaluations under syki: deterministic, offline, no private content.
 // buildBoot(query, title) returns the object the mock backend reads as window.__DOCSHOT_BOOT.
 
 export const FIXED_CLOCK = { y: 2026, m: 8, d: 18, h: 10, mi: 24 }; // 2026-09-18 10:24 (month is 0-based)
 
 const ROOT = 'C:\\Users\\demo\\Documents\\notes';
-const SCRAP_DIR = '~/Documents/syki-lite/scraps';
+const SCRAP_DIR = '~/Documents/syki/scraps';
 const P = (name) => ROOT + '\\' + name;
 
 const MAIN_EN = [
-  '# syki-lite rollout',
+  '# syki rollout',
   '',
   'Plan for shipping the lightweight Rust editor and CLI. Owner: Aya.',
   '',
@@ -62,7 +62,7 @@ const MAIN_EN = [
 ].join('\n');
 
 const MAIN_JA = [
-  '# syki-lite 展開計画',
+  '# syki 展開計画',
   '',
   '軽量 Rust エディタと CLI を公開するための計画メモ。担当: 佐藤。',
   '',

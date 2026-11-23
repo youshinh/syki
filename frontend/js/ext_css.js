@@ -1,4 +1,4 @@
-// Zero-overhead user.css loader and hot-reloader for syki-lite.
+// Zero-overhead user.css loader and hot-reloader for syki.
 // When preload.ext.hasUserCss is falsy or safeMode is active, initUserCss performs 0 DOM writes and 0 fetches.
 (function (global) {
   'use strict';

@@ -1,10 +1,10 @@
-// Single WebView2 PostWebMessageAsJson bridge shim for syki-lite (#04).
+// Single WebView2 PostWebMessageAsJson bridge shim for syki (#04).
 // Exposes Promise-based window.backend.<method>(...) over window.chrome.webview.postMessage
 // and routes incoming RpcEvent topics to registered listeners and global host callbacks.
 (function (global) {
   'use strict';
 
-  // Kept syki-lite backend methods across F01/F02/F04/F05/F06/F07/F08/F10a/F10b/F11/F12/F13/F18/F21/F22/F23(AI-OCR).
+  // Kept syki backend methods across F01/F02/F04/F05/F06/F07/F08/F10a/F10b/F11/F12/F13/F18/F21/F22/F23(AI-OCR).
   // Deliberately omits all 13 pruned features (MobileDrop, CFBridge, Inbox, GitSync, ConfigPack, TagEdit,
   // DeepSearch, JEV/AutoSelector, SlotAgent, Lessons, OllamaOps, WinRT OCR, NewWindow).
   const KEPT_METHODS = Object.freeze([

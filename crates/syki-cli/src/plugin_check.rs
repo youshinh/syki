@@ -1,4 +1,4 @@
-//! Static contract checker for Syki Lite plugins (`syki-cli plugin check <path>`).
+//! Static contract checker for syki plugins (`syki-cli plugin check <path>`).
 //!
 //! Uses only the Rust standard library and `serde_json` so `syki-cli` stays lean.
 
@@ -31,7 +31,7 @@ impl CheckReport {
     }
 }
 
-/// Validates a plugin entry file against the Syki Lite static plugin contract.
+/// Validates a plugin entry file against the syki static plugin contract.
 pub fn check_plugin_file(path: &Path) -> CheckReport {
     let path_str = path.to_string_lossy().into_owned();
     let mut errors = Vec::new();

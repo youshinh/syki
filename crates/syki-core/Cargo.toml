@@ -2,7 +2,7 @@
 name = "syki-core"
 version.workspace = true
 edition.workspace = true
-description = "Shared RPC contracts and runtime environment helpers for Syki Lite."
+description = "Shared RPC contracts and runtime environment helpers for syki."
 
 [dependencies]
 serde.workspace = true

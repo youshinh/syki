@@ -1,4 +1,4 @@
-// Verifies kept syki-lite features requested explicitly by the user:
+// Verifies kept syki features requested explicitly by the user:
 // - F11: Ctrl+K inline selection rewrite + undo
 // - F12: InfographicPrompt API & backend.generateImageAsync seam
 // - F23: AI OCR only (backend.queryVisionAsync present, WinRT #cfg-ocr-on-device absent)
@@ -8,7 +8,7 @@ const ORIG_LINE = 'This sentence is way too wordy and redundant for a crisp engi
 const NOTE = `# Draft\n\n${ORIG_LINE}\n`;
 
 export default {
-  title: 'syki-lite core AI: Ctrl+K rewrite (F11), infographic prompt (F12), and AI-OCR-only (F23)',
+  title: 'syki core AI: Ctrl+K rewrite (F11), infographic prompt (F12), and AI-OCR-only (F23)',
   session: {
     notes: [{ title: 'draft.md', content: NOTE }],
     llm: { mode: 'ok', delayMs: 80, reply: 'A crisp engineering sentence.' },
@@ -60,7 +60,7 @@ export default {
       winrtCheckbox: document.getElementById('cfg-ocr-on-device'),
     })`);
     assert.equal(ocrCheck.hasVisionBackend, true, 'backend.queryVisionAsync exists for AI OCR');
-    assert.equal(ocrCheck.winrtCheckbox, null, 'WinRT #cfg-ocr-on-device toggle is absent in syki-lite');
+    assert.equal(ocrCheck.winrtCheckbox, null, 'WinRT #cfg-ocr-on-device toggle is absent in syki');
     await s.key('Escape');
   },
 };

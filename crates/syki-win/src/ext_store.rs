@@ -1,4 +1,4 @@
-//! Safe extension storage and `/__ext/` virtual route resolver for syki-lite.
+//! Safe extension storage and `/__ext/` virtual route resolver for syki.
 //!
 //! Uses only the Rust standard library (plus `serde_json` already in `syki-win`)
 //! to resolve user CSS and plugin static assets with portable precedence,

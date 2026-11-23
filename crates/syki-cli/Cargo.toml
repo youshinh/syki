@@ -2,7 +2,7 @@
 name = "syki-cli"
 version.workspace = true
 edition.workspace = true
-description = "Lean command-line front-end for Syki Lite (kept subcommands only)."
+description = "Lean command-line front-end for syki (kept subcommands only)."
 build = "build.rs"
 
 [[bin]]

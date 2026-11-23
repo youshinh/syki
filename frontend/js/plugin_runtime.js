@@ -1,4 +1,4 @@
-// Syki-lite Frontend Plugin Runtime (UMD / CommonJS compatible Deep Module).
+// syki Frontend Plugin Runtime (UMD / CommonJS compatible Deep Module).
 // Provides startup circuit breaker, scoped plugin proxy with automatic resource cleanup,
 // declarative concurrency-guarded actions, Shadow DOM panel isolation, and lazy/hot-reload manager.
 (function (global) {

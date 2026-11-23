@@ -1,6 +1,6 @@
 //! Single-instance Windows Named Pipe IPC server & client (`#06`).
 //!
-//! Uses `\\.\pipe\syki-lite-<instance_id>` with a per-session random auth token
+//! Uses `\\.\pipe\syki-<instance_id>` with a per-session random auth token
 //! stored atomically in `<data_dir>/ipc-session.json`.
 
 use std::fs::OpenOptions;
@@ -110,7 +110,7 @@ pub fn pipe_name_for(env: &RuntimeEnv) -> String {
     } else {
         clean.as_str()
     };
-    format!(r"\\.\pipe\syki-lite-{suffix}")
+    format!(r"\\.\pipe\syki-{suffix}")
 }
 
 pub fn session_file_path(env: &RuntimeEnv) -> PathBuf {
@@ -394,7 +394,7 @@ mod tests {
             data_dir: PathBuf::from("."),
             instance_id: "my/inst:01".to_string(),
         };
-        assert_eq!(pipe_name_for(&env), r"\\.\pipe\syki-lite-my_inst_01");
+        assert_eq!(pipe_name_for(&env), r"\\.\pipe\syki-my_inst_01");
     }
 
     #[test]

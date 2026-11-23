@@ -42,7 +42,7 @@ syki-cli plugin run <command_id> --show   # ウィンドウを前面表示して
 ## 2. Named Pipe JSON-RPC 直接呼び出しプロトコル
 
 `syki.exe` 起動中（トレイ常駐 `Detached` 中も含む）、以下の Windows Named Pipe が待機しています：
-- **Pipe 名**: `\\.\pipe\syki-lite-<instance_id>`（既定は `ipc-session.json` に記載）
+- **Pipe 名**: `\\.\pipe\syki-<instance_id>`（既定は `ipc-session.json` に記載）
 - **認証情報ファイル**: `<data_dir>/ipc-session.json`（`{ "pid", "pipe_name", "token" }`）
 - **フレーミング**: 1 行 1 JSON（末尾 `\n`、最大 12MB）
 

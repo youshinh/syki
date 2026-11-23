@@ -1,6 +1,6 @@
-// Mock backend for syki-lite headless-Edge smoke & acceptance evaluations.
+// Mock backend for syki headless-Edge smoke & acceptance evaluations.
 // Injected by tools/eval_server/server.mjs before any frontend script runs.
-// Includes ONLY kept syki-lite features + window/platform/UI helpers (13 pruned features omitted).
+// Includes ONLY kept syki features + window/platform/UI helpers (13 pruned features omitted).
 (function () {
   'use strict';
   var B = window.__DOCSHOT_BOOT;
@@ -166,7 +166,7 @@
     var q = String(query || '').toLowerCase();
     var out = [];
     B.scraps.concat(D.filter.extra.map(function (f) {
-      return { filePath: 'C:\\Users\\demo\\Documents\\syki-lite\\scraps\\' + f.fileName, fileName: f.fileName, content: f.lines.join('\n') };
+      return { filePath: 'C:\\Users\\demo\\Documents\\syki\\scraps\\' + f.fileName, fileName: f.fileName, content: f.lines.join('\n') };
     })).forEach(function (f) {
       var lines = f.content.split('\n');
       var matches = [];
@@ -193,7 +193,7 @@
   function semanticHit(i) {
     var name = '2026-09-' + pad2(28 - i) + '.md';
     return {
-      filePath: 'C:\\Users\\demo\\Documents\\syki-lite\\scraps\\' + name, fileName: name,
+      filePath: 'C:\\Users\\demo\\Documents\\syki\\scraps\\' + name, fileName: name,
       matches: [{
         lineNumber: 3, lineText: hitText(i),
         snippet: hitText(i),
@@ -263,8 +263,8 @@
     var s = section || { enabled: true, model: { baseUrl: 'http://localhost:11434', model: 'bge-m3' } }, d = semanticDest(s);
     return resolve(Object.assign({
       enabled: s.enabled === true, model: d.model ? 'ollama:' + d.model : '', model_error: d.model ? '' : 'the embedding model is not set',
-      destination: d.host, local: d.local, consent_given: semanticAllowed(s, d), scrap_dir: 'C:\\Users\\demo\\Documents\\syki-lite\\scraps',
-      index_dir: 'C:\\Users\\demo\\AppData\\Roaming\\syki-lite\\index\\demo', files_in_folder: 53, index_model: d.model ? 'ollama:' + d.model : '', dim: 1024
+      destination: d.host, local: d.local, consent_given: semanticAllowed(s, d), scrap_dir: 'C:\\Users\\demo\\Documents\\syki\\scraps',
+      index_dir: 'C:\\Users\\demo\\AppData\\Roaming\\syki\\index\\demo', files_in_folder: 53, index_model: d.model ? 'ollama:' + d.model : '', dim: 1024
     }, D.semanticIndex.index));
   }
   function semanticUpdate(section, rebuild, yes) {
@@ -301,9 +301,9 @@
     getAppInfo: function () {
       return resolve({
         version: B.aboutVersion || B.version, commit: 'lite-dev', builtAt: '2026-09-18T09:00:00Z', os: 'windows', arch: 'amd64',
-        executable: 'C:\\Program Files\\syki-lite\\syki.exe',
-        configDir: 'C:\\Users\\demo\\AppData\\Roaming\\syki-lite', configFile: 'C:\\Users\\demo\\AppData\\Roaming\\syki-lite\\config.json',
-        scrapDir: 'C:\\Users\\demo\\Documents\\syki-lite\\scraps', signing: 'unsigned'
+        executable: 'C:\\Program Files\\syki\\syki.exe',
+        configDir: 'C:\\Users\\demo\\AppData\\Roaming\\syki', configFile: 'C:\\Users\\demo\\AppData\\Roaming\\syki\\config.json',
+        scrapDir: 'C:\\Users\\demo\\Documents\\syki\\scraps', signing: 'unsigned'
       });
     },
     getPlatformCapabilities: function () { return resolve({ os: 'win32', nativeImeSwitch: true, tray: true, globalHotkey: true }); },
@@ -349,7 +349,7 @@
     updateGlobalShortcut: function () { return resolve(true); },
   };
 
-  // Remaining kept syki-lite backend methods (UI / Win32 / Shell / PTY / Speech / Audio / Vision / ImageGen)
+  // Remaining kept syki backend methods (UI / Win32 / Shell / PTY / Speech / Audio / Vision / ImageGen)
   var names = (
     'openFile openFolder exportPlainTextAs ' +
     'runCommandFilter runCommandFilterAsync cancelCommandFilter ' +

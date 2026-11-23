@@ -82,7 +82,7 @@ if (-not (Test-Path $cliExe)) {
   $oldData = $env:SYKI_DATA_DIR
   $oldInst = $env:SYKI_INSTANCE_ID
   $env:SYKI_DATA_DIR = $tmpData
-  $env:SYKI_INSTANCE_ID = "syki-lite-eval-$PID"
+  $env:SYKI_INSTANCE_ID = "syki-eval-$PID"
   try {
     $times = @()
     $verOk = $true

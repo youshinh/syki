@@ -28,7 +28,7 @@ export default {
     assert.equal(await pressed('scraps-mode-meaning'), 'true');
     assert.equal(await s.ev("document.getElementById('scraps-search-input').placeholder"), await phrase(s, 'scrapsSearchPlaceholderMeaning'));
 
-    t.step('no Deep search button exists in syki-lite; empty vs populated meaning lists render cleanly');
+    t.step('no Deep search button exists in syki; empty vs populated meaning lists render cleanly');
     assert.equal(await s.ev("document.getElementById('btn-scraps-deep')"), null, 'no Deep search button');
     await semanticKnobs(s, { total: 0 });
     await typeQuery(s, 'nothing like it');

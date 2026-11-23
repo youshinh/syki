@@ -1,4 +1,4 @@
-//! syki-cli: the lean command-line front-end for Syki Lite (#01, #06).
+//! syki-cli: the lean command-line front-end for syki (#01, #06).
 //!
 //! Parsing is hand-rolled and the binary pulls in no argument-parsing crate,
 //! so a cold start stays well under the 5 ms budget. Only the subcommands
@@ -90,7 +90,7 @@ fn second_requests_help(argv: &[String]) -> bool {
 }
 
 fn print_top_level_help() {
-    println!("syki-cli {} - lean Syki Lite front-end", APP_VERSION);
+    println!("syki-cli {} - lean syki front-end", APP_VERSION);
     println!();
     println!("USAGE:");
     println!("    syki-cli [COMMAND] [ARGUMENTS...]");
@@ -468,7 +468,7 @@ fn main() {
             name
         )),
         CliAction::Unknown(token) => {
-            report_failure(&format!("`{}` is not a Syki Lite command", token))
+            report_failure(&format!("`{}` is not a syki command", token))
         }
     }
 }

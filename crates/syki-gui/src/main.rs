@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-//! Single-window GUI launcher for syki-lite (`syki.exe`) with single-instance Named Pipe IPC (#06).
+//! Single-window GUI launcher for syki (`syki.exe`) with single-instance Named Pipe IPC (#06).
 
 use std::fs;
 use std::path::{Path, PathBuf};

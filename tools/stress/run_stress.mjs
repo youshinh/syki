@@ -588,7 +588,7 @@ async function runP5() {
         }
       }
 
-      // 2. Mobile Drop removed in syki-lite (pruned feature)
+      // 2. Mobile Drop removed in syki (pruned feature)
 
       // 3. Command Palette open + Escape
       await s.key('p', { ctrl: true, shift: true });

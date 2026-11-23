@@ -1,4 +1,4 @@
-# syki-lite Performance & Memory History
+# syki Performance & Memory History
 
 CI / デプロイごとに同一指標で記録した起動速度・省メモリ・バイナリサイズの履歴です。
 

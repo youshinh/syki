@@ -1,4 +1,4 @@
-//! syki-core: shared contracts used by every Syki Lite crate.
+//! syki-core: shared contracts used by every syki crate.
 //!
 //! This crate owns the JSON-RPC message shapes exchanged between the CLI,
 //! the GUI shell and the native runtime, plus the runtime environment

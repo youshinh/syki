@@ -1,4 +1,4 @@
-// Unified 4-layer Acceptance Test & Functional Evaluation runner for syki-lite.
+// Unified 4-layer Acceptance Test & Functional Evaluation runner for syki.
 // Usage: node tools/eval_runner.mjs [--smoke=none|quick|full] [--rust|--no-rust] [--lang=en|ja] [--json] [--allow-red]
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -59,7 +59,7 @@ function runSmoke(mode, lang) {
   if (mode === 'none') {
     return { mode, skipped: true, passed: 0, total: 0, flows: {} };
   }
-  const tmpOut = path.join(os.tmpdir(), `syki-lite-smoke-${Date.now()}.json`);
+  const tmpOut = path.join(os.tmpdir(), `syki-smoke-${Date.now()}.json`);
   const args = [path.join(REPO, 'tests', 'smoke', 'run.mjs'), '--lang', lang, '--jobs', '3', '--tier', mode, '--json-out', tmpOut];
   const res = spawnSync(process.execPath, args, {
     cwd: REPO,
@@ -196,7 +196,7 @@ const summary = {
 
 // Render Markdown report
 const mdLines = [
-  `# syki-lite Acceptance & Functional Evaluation Report`,
+  `# syki Acceptance & Functional Evaluation Report`,
   ``,
   `- **Generated**: ${summary.generated_at}`,
   `- **Options**: smoke=\`${SMOKE_MODE}\`, rust=\`${RUN_RUST}\`, lang=\`${LANG}\``,

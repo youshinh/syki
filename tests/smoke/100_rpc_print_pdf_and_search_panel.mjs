@@ -45,7 +45,7 @@ export default {
     assert.equal(await s.ev("document.getElementById('scraps-mode-meaning').getAttribute('aria-pressed')"), 'true');
     await s.waitFor("document.querySelectorAll('#scraps-search-results .scraps-match-item').length > 0 && !document.querySelector('#scraps-search-results .scraps-search-empty')");
     assert.deepEqual(await asked(s, 'searchScrapsSemantic'), [['bamboo growth', 10]], 'one meaning search, for the text given');
-    assert.equal(await s.ev("document.getElementById('deep-search-modal')"), null, 'no deep search modal exists in syki-lite');
+    assert.equal(await s.ev("document.getElementById('deep-search-modal')"), null, 'no deep search modal exists in syki');
 
     t.step('the same panel opened again in Exact with another query: that mode, that text, the plain search');
     r = await rpc(s, 'openPanel("scraps_search", {query: "API", mode: "exact"})');

@@ -1,4 +1,4 @@
-//! Ring 0 storage layer for Syki Lite: the only code allowed to touch disk.
+//! Ring 0 storage layer for syki: the only code allowed to touch disk.
 //!
 //! This module owns every persistence primitive the CLI, the GUI shell and the
 //! native runtime share: atomic temp-rename writes, backward-compatible

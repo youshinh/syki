@@ -1,5 +1,5 @@
 /**
- * Syki Lite Extension Platform API Type Definitions
+ * syki Extension Platform API Type Definitions
  * Spec: syki_platform_design_v2 (Core v1 + Extended v1.x)
  */
 

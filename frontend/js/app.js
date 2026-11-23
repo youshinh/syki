@@ -8915,7 +8915,7 @@
       return;
     }
 
-    // Direct CLI execution for syki-lite (Ctrl+E).
+    // Direct CLI execution for syki (Ctrl+E).
     cliBadgeVerdict = '';
     isCliFilterRunning = true;
     updateCliFilterBarModeUI();
@@ -12630,7 +12630,7 @@ OUTPUT FORMAT:
     };
   }
 
-  // External Agent / Slot config management removed for syki-lite.
+  // External Agent / Slot config management removed for syki.
   let settingsModalController = null;
   function ensureSettingsModal() {
     if (settingsModalController) return settingsModalController;
@@ -14451,7 +14451,7 @@ OUTPUT FORMAT:
     });
   }
 
-  // Settings Export/Import (ConfigPack) removed for syki-lite.
+  // Settings Export/Import (ConfigPack) removed for syki.
 
   // Resolves true when config.json took the config (or there is no backend to write to), false when it did not. A failure is
   // said here, in the status bar, every time - not only in the console - so no caller has to remember to (and none can show a

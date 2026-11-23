@@ -1,4 +1,4 @@
-// Verifies that the 13 pruned features from syki::sok are cleanly absent from the DOM and Command Palette in syki-lite.
+// Verifies that the 13 pruned features from syki::sok are cleanly absent from the DOM and Command Palette in syki.
 import { assert, openPalette, paletteTitles, waitHidden } from './lib.mjs';
 
 const PRUNED_DOM_IDS = [
@@ -27,8 +27,8 @@ const FORBIDDEN_PALETTE_PATTERNS = [
 ];
 
 export default {
-  title: 'syki-lite prune gate: pruned DOM IDs and command palette items are completely absent',
-  session: { notes: [{ title: 'note.md', content: '# syki-lite\n\nMinimal fast editor.\n' }] },
+  title: 'syki prune gate: pruned DOM IDs and command palette items are completely absent',
+  session: { notes: [{ title: 'note.md', content: '# syki\n\nMinimal fast editor.\n' }] },
 
   async run(s, t) {
     t.step('pruned DOM elements do not exist in index.html');

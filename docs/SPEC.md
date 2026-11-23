@@ -1,7 +1,7 @@
-# syki-lite (Rust / Windows Native Rewrite) — Master Specification
+# syki (Rust / Windows Native Rewrite) — Master Specification
 
 ## 1. Purpose & Domain Identity
-`syki-lite` is a clean-start Windows-only Rust rewrite of `syki::sok` designed for maximum runtime speed, minimal resident memory, and crash-free stability, while preserving backward compatibility with existing `scraps/`, `config.json`, and `semindex` data.
+`syki` is a clean-start Windows-only Rust rewrite of `syki::sok` designed for maximum runtime speed, minimal resident memory, and crash-free stability, while preserving backward compatibility with existing `scraps/`, `config.json`, and `semindex` data.
 
 Per `GLOSSARY.md` and `docs/adr/0002-three-ring-autotomy-and-local-first-seam.md`:
 - **Stream Kernel (Ring 0)**: `syki-core` — GUI-independent core handling Scrap/Wiki persistence, search, `semindex`, Local-First Inference Seam, speech integration, ConPTY management, and JSON-RPC dispatch.
@@ -14,7 +14,7 @@ Per `GLOSSARY.md` and `docs/adr/0002-three-ring-autotomy-and-local-first-seam.md
 
 | Axis | Decision |
 |---|---|
-| **Repository & Scope** | Clean-start new repo (`syki-lite`), Windows-only, **single main window** (with split panes + Quick Capture popup; no `--new-window`, no macOS code). |
+| **Repository & Scope** | Clean-start new repo (`syki`), Windows-only, **single main window** (with split panes + Quick Capture popup; no `--new-window`, no macOS code). |
 | **Native Stack** | Rust + Microsoft official `windows` + `webview2-com` crates directly (no `wry`/`tao`, no `powershell.exe` child spawns). |
 | **Virtual Origin & Assets** | `https://app.syki.local/` served in-memory via `WebResourceRequested` from `build.rs`-bundled `include_bytes!` assets, plus dynamic routes `/api/print/preview.pdf` and `/api/local-asset`. |
 | **JS ↔ Rust Bridge** | Single native COM JSON-RPC channel via `PostWebMessageAsJson` + `WebMessageReceived` (`RpcRequest`/`RpcResponse`/`RpcEvent`), adapted by a thin JS `window.backend` proxy shim (replaces 176 individual binds). |
@@ -26,7 +26,7 @@ Per `GLOSSARY.md` and `docs/adr/0002-three-ring-autotomy-and-local-first-seam.md
 ## 3. Cargo Workspace Layout
 
 ```text
-syki-lite/
+syki/
 ├── Cargo.toml
 ├── build.rs                 # Bundles frontend/ JS/CSS for include_bytes!
 ├── crates/

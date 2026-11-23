@@ -1,4 +1,4 @@
-// Static HTTP server for syki-lite headless-Edge smoke & acceptance evaluations.
+// Static HTTP server for syki headless-Edge smoke & acceptance evaluations.
 // Serves frontend/ untouched and injects window.__DOCSHOT_BOOT + /__eval/mock.js into "/" in memory.
 import http from 'node:http';
 import fs from 'node:fs';
@@ -35,7 +35,7 @@ function demoDiagramSvg() {
 <text x="84" y="141" font-family="Segoe UI, sans-serif" font-size="18" text-anchor="middle" fill="#2b2a26">Editor</text>
 <text x="240" y="141" font-family="Segoe UI, sans-serif" font-size="18" text-anchor="middle" fill="#2b2a26">Rust Core</text>
 <text x="396" y="141" font-family="Segoe UI, sans-serif" font-size="18" text-anchor="middle" fill="#2b2a26">Note</text>
-<text x="240" y="40" font-family="Segoe UI, sans-serif" font-size="20" font-weight="bold" text-anchor="middle" fill="#2b2a26">syki-lite</text>
+<text x="240" y="40" font-family="Segoe UI, sans-serif" font-size="20" font-weight="bold" text-anchor="middle" fill="#2b2a26">syki</text>
 </svg>`;
 }
 

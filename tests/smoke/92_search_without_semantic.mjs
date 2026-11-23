@@ -49,7 +49,7 @@ export default {
     await s.waitFor("window.__explore.state().tabs.length === 2"); // the note was opened
     await s.waitFor("document.getElementById('editor').classList.contains('scrap-flash-highlight')"); // and the jump to its line has finished
     await waitFocus(s, 'editor');
-    assert.equal(await s.ev("document.getElementById('btn-scraps-deep')"), null, 'no Deep search button exists in syki-lite');
+    assert.equal(await s.ev("document.getElementById('btn-scraps-deep')"), null, 'no Deep search button exists in syki');
 
     t.step('the setting turned on: the switch is there the next time the panel opens, in Exact, with the usual placeholder');
     await s.ev("SykiBridge.getConfig().semantic = { enabled: true }; 1");

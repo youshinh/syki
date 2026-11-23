@@ -1,4 +1,4 @@
-//! Win32 desktop shell, embedded asset registry and WebView2 host for syki-lite.
+//! Win32 desktop shell, embedded asset registry and WebView2 host for syki.
 
 pub mod assets;
 pub mod assets_store;

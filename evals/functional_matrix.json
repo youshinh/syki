@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "title": "syki-lite Functional Evaluation & Acceptance Matrix",
+  "title": "syki Functional Evaluation & Acceptance Matrix",
   "total_weight": 100,
   "quantitative_gates": {
     "cli_cold_start_ms_max": 5,

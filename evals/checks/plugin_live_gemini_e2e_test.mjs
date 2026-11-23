@@ -123,7 +123,7 @@ function makeEl(tag) {
 }
 
 const state = {
-  text: 'syki-lite は高速起動と拡張性を両立するメモプラットフォームです。',
+  text: 'syki は高速起動と拡張性を両立するメモプラットフォームです。',
   selection: { from: 0, to: 34 },
   actions: new Map(),
   toasts: [],
@@ -179,10 +179,10 @@ const platform = Bootstrap.createSykiPlatform({
     set: async (k, v) => { state.storage.set(k, v); },
   },
   searchSemantic: async () => [
-    { path: 'docs/SPEC.md', title: 'SPEC', snippet: 'syki-lite targets <5ms CLI cold start and 3-5MB Detached tray RAM.', score: 0.96 },
+    { path: 'docs/SPEC.md', title: 'SPEC', snippet: 'syki targets <5ms CLI cold start and 3-5MB Detached tray RAM.', score: 0.96 },
   ],
   notes: {
-    read: async () => 'syki-lite targets <5ms CLI cold start and 3-5MB Detached tray RAM.',
+    read: async () => 'syki targets <5ms CLI cold start and 3-5MB Detached tray RAM.',
     list: async () => [],
     create: async () => 'new.md',
     append: async () => {},
@@ -235,7 +235,7 @@ const panelRoot = state.panels[0].root;
 const inputEl = panelRoot.querySelector('.rag-input');
 const submitBtn = panelRoot.querySelector('.rag-submit');
 if (inputEl && submitBtn) {
-  inputEl.value = 'syki-liteのDetached時のメモリ目標は？';
+  inputEl.value = 'sykiのDetached時のメモリ目標は？';
   await submitBtn.click();
   await new Promise((r) => setTimeout(r, 100));
   const ansEl = panelRoot.querySelector('.rag-answer');

@@ -1,4 +1,4 @@
-// Layer 1 static contract & compatibility fixture verification checks for syki-lite.
+// Layer 1 static contract & compatibility fixture verification checks for syki.
 // Run standalone: node evals/checks/static_contract.mjs [--json]
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';

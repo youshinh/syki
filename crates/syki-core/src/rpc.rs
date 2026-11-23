@@ -105,7 +105,7 @@ impl RuntimeEnv {
 
     /// Name of the named-mutex used to detect a duplicate instance.
     pub fn mutex_name(&self) -> String {
-        format!("Local\\syki-lite-{}", self.instance_id)
+        format!("Local\\syki-{}", self.instance_id)
     }
 
     /// Per-instance WebView2 user-data folder.
@@ -232,7 +232,7 @@ mod tests {
         ]));
         assert_eq!(env.data_dir, PathBuf::from("D:\\custom\\syki"));
         assert_eq!(env.instance_id, "worker-7");
-        assert_eq!(env.mutex_name(), "Local\\syki-lite-worker-7");
+        assert_eq!(env.mutex_name(), "Local\\syki-worker-7");
         assert_eq!(
             env.webview_user_data_dir(),
             PathBuf::from("D:\\custom\\syki").join("webview2")
@@ -250,7 +250,7 @@ mod tests {
             PathBuf::from("C:\\Users\\someone\\AppData\\Roaming").join("syki-sok")
         );
         assert_eq!(env.instance_id, "syki-sok-main");
-        assert_eq!(env.mutex_name(), "Local\\syki-lite-syki-sok-main");
+        assert_eq!(env.mutex_name(), "Local\\syki-syki-sok-main");
         assert_eq!(
             env.webview_user_data_dir(),
             env.data_dir.join("webview2")
@@ -273,6 +273,6 @@ mod tests {
         let env = RuntimeEnv::from_lookup(|_| None);
         assert_eq!(env.data_dir, PathBuf::from("syki-sok"));
         assert_eq!(env.instance_id, "syki-sok-main");
-        assert_eq!(env.mutex_name(), "Local\\syki-lite-syki-sok-main");
+        assert_eq!(env.mutex_name(), "Local\\syki-syki-sok-main");
     }
 }
