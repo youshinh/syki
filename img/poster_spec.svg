@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 480 540" width="100%" height="100%">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 500 582" width="100%" height="100%">
   <defs>
     <style>
       @font-face {
@@ -56,42 +56,42 @@
   </defs>
 
   <!-- Background -->
-  <rect width="480" height="540" fill="#09090b" rx="4"/>
-  <rect x="0.5" y="0.5" width="479" height="539" fill="none" stroke="#18181b" stroke-width="1" rx="3.5"/>
+  <rect width="500" height="582" fill="#09090b" rx="4"/>
+  <rect x="0.5" y="0.5" width="499" height="581" fill="none" stroke="#18181b" stroke-width="1" rx="3.5"/>
 
   <!-- Top Title -->
-  <text x="48" y="72" class="sans-title-upper">PRIMITIVES</text>
+  <text x="50" y="76" class="sans-title-upper">PRIMITIVES</text>
 
   <!-- Rows Grid -->
-  <g transform="translate(48, 0)">
-    <g transform="translate(0, 152)">
+  <g transform="translate(50, 0)">
+    <g transform="translate(0, 166)">
       <text x="0" y="0" class="sans-action">INSTANT CAPTURE</text>
-      <text x="384" y="0" text-anchor="end" class="mono-key">~1 ms · STT · OCR</text>
-      <line x1="0" y1="16" x2="384" y2="16" stroke="#141417" stroke-width="0.8"/>
+      <text x="400" y="0" text-anchor="end" class="mono-key">~1 ms · STT · OCR</text>
+      <line x1="0" y1="18" x2="400" y2="18" stroke="#141417" stroke-width="0.8"/>
     </g>
-    <g transform="translate(0, 212)">
+    <g transform="translate(0, 232)">
       <text x="0" y="0" class="sans-action">MARKDOWN STUDIO</text>
-      <text x="384" y="0" text-anchor="end" class="mono-key">Tabs · Preview · PTY</text>
-      <line x1="0" y1="16" x2="384" y2="16" stroke="#141417" stroke-width="0.8"/>
+      <text x="400" y="0" text-anchor="end" class="mono-key">Tabs · Preview · PTY</text>
+      <line x1="0" y1="18" x2="400" y2="18" stroke="#141417" stroke-width="0.8"/>
     </g>
-    <g transform="translate(0, 272)">
+    <g transform="translate(0, 298)">
       <text x="0" y="0" class="sans-action">HYBRID SEARCH</text>
-      <text x="384" y="0" text-anchor="end" class="mono-key">Full-Text · SIMD</text>
-      <line x1="0" y1="16" x2="384" y2="16" stroke="#141417" stroke-width="0.8"/>
+      <text x="400" y="0" text-anchor="end" class="mono-key">Full-Text · SIMD</text>
+      <line x1="0" y1="18" x2="400" y2="18" stroke="#141417" stroke-width="0.8"/>
     </g>
-    <g transform="translate(0, 332)">
+    <g transform="translate(0, 364)">
       <text x="0" y="0" class="sans-action">LOCAL-FIRST AI</text>
-      <text x="384" y="0" text-anchor="end" class="mono-key">Ctrl+L · Ctrl+K · Tab</text>
-      <line x1="0" y1="16" x2="384" y2="16" stroke="#141417" stroke-width="0.8"/>
+      <text x="400" y="0" text-anchor="end" class="mono-key">Ctrl+L · Ctrl+K · Tab</text>
+      <line x1="0" y1="18" x2="400" y2="18" stroke="#141417" stroke-width="0.8"/>
     </g>
-    <g transform="translate(0, 392)">
+    <g transform="translate(0, 430)">
       <text x="0" y="0" class="sans-action">CLI &amp; PLUGINS</text>
-      <text x="384" y="0" text-anchor="end" class="mono-key">stdin · rpc · user.css</text>
-      <line x1="0" y1="16" x2="384" y2="16" stroke="#141417" stroke-width="0.8"/>
+      <text x="400" y="0" text-anchor="end" class="mono-key">stdin · rpc · user.css</text>
+      <line x1="0" y1="18" x2="400" y2="18" stroke="#141417" stroke-width="0.8"/>
     </g>
   </g>
 
   <!-- Bottom Meta -->
-  <text x="48" y="482" class="mono-foot">AGENT-READY SKILL</text>
-  <text x="432" y="482" text-anchor="end" class="mono-foot">PLAIN LOCAL .MD</text>
+  <text x="50" y="524" class="mono-foot">AGENT-READY SKILL</text>
+  <text x="450" y="524" text-anchor="end" class="mono-foot">PLAIN LOCAL .MD</text>
 </svg>
