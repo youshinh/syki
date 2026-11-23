@@ -1,6 +1,6 @@
-# syki-lite 実運用レシピ集（テスト検証済み 12 パターン）
+# syki 実運用レシピ集（テスト検証済み 12 パターン）
 
-以下はすべて `syki-lite` の結合 E2E テストおよび実機 Gemini API（`gemini-decision-1` + `gemini-3.5-flash-lite`）で動作確認済みの設計パターンです。AI Agent はユーザー要望に最も近いレシピをベースにプラグインを生成してください。
+以下はすべて `syki` の結合 E2E テストおよび実機 Gemini API（`gemini-decision-1` + `gemini-3.5-flash-lite`）で動作確認済みの設計パターンです。AI Agent はユーザー要望に最も近いレシピをベースにプラグインを生成してください。
 
 ---
 

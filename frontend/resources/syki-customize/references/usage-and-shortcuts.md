@@ -1,6 +1,6 @@
-# syki-lite 使い方・全機能・ショートカット完全リファレンス
+# syki 使い方・全機能・ショートカット完全リファレンス
 
-## 1. syki-lite の特徴とアーキテクチャ
+## 1. syki の特徴とアーキテクチャ
 - **Windows ネイティブ・超高速**: Rust + Win32 + WebView2（単一メインウィンドウ＋分割ペイン＋Win32 ネイティブ Quick Capture）。
 - **省メモリ 3 状態待機（`CanvasHost`）**:
   - `Attached`（通常表示）→ `SuspendedLowMem`（最小化時低メモリ）→ `Detached`（トレイ待機時 WebView2 破棄で **RAM 3〜5 MB**）。

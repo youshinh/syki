@@ -1,6 +1,6 @@
 # syki-cli・Named Pipe JSON-RPC・パイプライン統合リファレンス
 
-外部の AI Agent・スクリプト・MCP サーバー・AutoHotkey・Stream Deck から `syki-lite` をリアルタイムに読み書き・制御するための公式インターフェース仕様です。
+外部の AI Agent・スクリプト・MCP サーバー・AutoHotkey・Stream Deck から `syki` をリアルタイムに読み書き・制御するための公式インターフェース仕様です。
 
 ---
 
