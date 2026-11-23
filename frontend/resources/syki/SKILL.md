@@ -1,9 +1,9 @@
 ---
-name: syki-customize
+name: syki
 description: Operate, configure, troubleshoot, reset, and extend syki (user.css, plugins/<id>/plugin.js, syki-cli, Named Pipe JSON-RPC). Load when answering syki usage/config questions, building custom UI/workflows, or controlling syki from an external AI agent.
 ---
 
-# syki-customize (Token-Lean Skill)
+# syki (Token-Lean Skill)
 
 Windows-native (Rust + WebView2) fast-boot memo & workflow platform. Core stays fast; extensions load lazily via `user.css` and `plugins/<id>/plugin.js`.
 

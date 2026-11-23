@@ -39,7 +39,7 @@
 ### クイックスタート
 
 1. **ダウンロード** — [Releases](https://github.com/youshinh/syki/releases/latest) の `syki-*-windows-x64.zip` を解凍し `syki.exe` を起動。
-2. **スキル登録** — 同梱 `skills/syki-customize/SKILL.md` を AI エージェントへ追加。
+2. **スキル登録** — 同梱 `skills/syki/SKILL.md` を AI エージェントへ追加。
 3. **聞く＆拡張** — 使い方・設定・カスタマイズはすべてエージェントに指示。
 
 ---

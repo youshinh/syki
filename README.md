@@ -39,7 +39,7 @@ An instant, featherweight Markdown scratchpad. &nbsp;[日本語](README.ja.md)
 ### Quick Start
 
 1. **Download** — Unzip `syki-*-windows-x64.zip` from [Releases](https://github.com/youshinh/syki/releases/latest) and run `syki.exe`.
-2. **Load Skill** — Add `skills/syki-customize/SKILL.md` to your AI agent.
+2. **Load Skill** — Add `skills/syki/SKILL.md` to your AI agent.
 3. **Ask & Extend** — Ask your agent how to use, configure, style, or extend `syki`.
 
 ---
