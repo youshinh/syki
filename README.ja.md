@@ -10,7 +10,7 @@
 超軽量・即起動 Markdown スクラッチパッド。 &nbsp;[English](README.md)
 
 <p align="center">
-  <img src="img/poster_icon.gif" width="440" alt="syki">
+  <img src="img/poster_icon.gif?v=2" width="440" alt="syki">
   <img src="img/poster_spec.svg" width="440" alt="syki primitives">
 </p>
 
