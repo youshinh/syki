@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/privacy-local--first-brightgreen?style=flat-square" alt="Local-First Privacy">
 </p>
 
-An instant, featherweight Markdown scratchpad. &nbsp;**English** · [日本語](README.ja.md)
+An instant, featherweight Markdown scratchpad. &nbsp;[日本語](README.ja.md)
 
 <p align="center">
   <img src="img/poster_icon.svg" width="470" alt="syki">

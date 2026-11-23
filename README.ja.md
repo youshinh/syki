@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/privacy-local--first-brightgreen?style=flat-square" alt="Local-First Privacy">
 </p>
 
-超軽量・即起動 Markdown スクラッチパッド。 &nbsp;[English](README.md) · **日本語**
+超軽量・即起動 Markdown スクラッチパッド。 &nbsp;[English](README.md)
 
 <p align="center">
   <img src="img/poster_icon.svg" width="470" alt="syki">
