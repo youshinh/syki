@@ -289,8 +289,69 @@ struct WindowState {
     hotkey_qc: Arc<Mutex<String>>,
     data_dir: PathBuf,
     idle_detach_ms: u32,
+    detach_commit_ms: u32,
     detach_guard: Option<DetachGuard>,
     event_sender: Rc<RefCell<Option<EventSender>>>,
+}
+
+const DEFAULT_BROWSER_ARGS: &str =
+    "--disable-background-networking --disable-component-update --no-pings";
+
+fn load_perf_params_value() -> Option<serde_json::Value> {
+    let candidates: Vec<PathBuf> = [
+        std::env::var_os("SYKI_PERF_PARAMS_FILE").map(PathBuf::from),
+        std::env::current_exe().ok().and_then(|exe| {
+            let dir = exe.parent()?;
+            let local = dir.join("config").join("perf_params.json");
+            if local.exists() {
+                return Some(local);
+            }
+            // Dev layout: target/{debug,release}/syki.exe -> ../../config/perf_params.json
+            let repo = dir.parent()?.parent()?.join("config").join("perf_params.json");
+            if repo.exists() {
+                return Some(repo);
+            }
+            None
+        }),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+
+    for path in candidates {
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        if let Some(params) = val.get("params") {
+            return Some(params.clone());
+        }
+        return Some(val);
+    }
+    None
+}
+
+fn write_perf_trace_event(phase: &str, elapsed_ms: f64) {
+    let Ok(trace_path) = std::env::var("SYKI_PERF_TRACE_FILE") else {
+        return;
+    };
+    if trace_path.trim().is_empty() {
+        return;
+    }
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(trace_path)
+    {
+        let _ = writeln!(
+            f,
+            r#"{{"phase":"{}","ms":{:.2}}}"#,
+            phase, elapsed_ms
+        );
+    }
 }
 
 fn client_rect_of(hwnd: HWND) -> RECT {
@@ -329,6 +390,7 @@ fn build_preload_script(data_dir: &std::path::Path) -> String {
         crate::ext_store::safe_mode_from_args(),
     )
     .preload_ext_flags();
+    let perf_params = load_perf_params_value();
     let payload = serde_json::json!({
         "config": config_val,
         "session": session_val,
@@ -340,7 +402,8 @@ fn build_preload_script(data_dir: &std::path::Path) -> String {
             "aiOcr": true,
             "winrtOcr": false
         },
-        "ext": ext_flags
+        "ext": ext_flags,
+        "perf": perf_params
     });
     format!("window.__sykiPreload = {payload};")
 }
@@ -561,6 +624,35 @@ fn attach_webview_controller(
     let rpc_for_msg = Arc::clone(&state.rpc_handler);
     let q_for_msg = Arc::clone(&state.event_queue);
     let hwnd_for_msg = hwnd.0 as isize;
+    // Persistent 4-thread RPC worker pool eliminates per-message OS thread spawn overhead
+    // during startup RPC bursts, typing, and voice transcription handoffs.
+    let (rpc_tx, rpc_rx) = mpsc::channel::<String>();
+    let rpc_rx = Arc::new(Mutex::new(rpc_rx));
+    for _ in 0..4 {
+        let rx = Arc::clone(&rpc_rx);
+        let rpc = Arc::clone(&rpc_for_msg);
+        let q = Arc::clone(&q_for_msg);
+        std::thread::spawn(move || loop {
+            let raw_json = {
+                let guard = rx.lock().expect("rpc worker rx mutex");
+                match guard.recv() {
+                    Ok(msg) => msg,
+                    Err(_) => break,
+                }
+            };
+            let reply_json = dispatch_rpc_message(&raw_json, rpc.as_ref());
+            q.lock().expect("event_queue mutex").push_back(reply_json);
+            unsafe {
+                let _ = PostMessageW(
+                    Some(HWND(hwnd_for_msg as *mut _)),
+                    WM_APP_PUSH_EVENT,
+                    WPARAM(0),
+                    LPARAM(0),
+                );
+            }
+        });
+    }
+    let rpc_tx = Arc::new(Mutex::new(rpc_tx));
     let mut msg_token: i64 = 0;
     unsafe {
         webview.add_WebMessageReceived(
@@ -571,18 +663,9 @@ fn attach_webview_controller(
                 let mut raw_pwstr = PWSTR::null();
                 if args.WebMessageAsJson(&mut raw_pwstr).is_ok() {
                     let raw_json = CoTaskMemPWSTR::from(raw_pwstr).to_string();
-                    let rpc = Arc::clone(&rpc_for_msg);
-                    let q = Arc::clone(&q_for_msg);
-                    std::thread::spawn(move || {
-                        let reply_json = dispatch_rpc_message(&raw_json, rpc.as_ref());
-                        q.lock().expect("event_queue mutex").push_back(reply_json);
-                        let _ = PostMessageW(
-                            Some(HWND(hwnd_for_msg as *mut _)),
-                            WM_APP_PUSH_EVENT,
-                            WPARAM(0),
-                            LPARAM(0),
-                        );
-                    });
+                    if let Ok(tx) = rpc_tx.lock() {
+                        let _ = tx.send(raw_json);
+                    }
                 }
                 Ok(())
             })),
@@ -727,7 +810,12 @@ extern "system" fn host_wnd_proc(
                             CoTaskMemPWSTR::from(r#"{"topic":"host:flushSession","payload":{}}"#);
                         let _ = unsafe { wv.PostWebMessageAsJson(*flush_w.as_ref().as_pcwstr()) };
                         unsafe {
-                            let _ = SetTimer(Some(hwnd), TIMER_DETACH_COMMIT, 200, None);
+                            let _ = SetTimer(
+                                Some(hwnd),
+                                TIMER_DETACH_COMMIT,
+                                state.detach_commit_ms,
+                                None,
+                            );
                         }
                     }
                 } else if w_param.0 == TIMER_DETACH_COMMIT {
@@ -1002,12 +1090,36 @@ pub fn run_webview_host_with_handle(
     let webview_slot: Rc<RefCell<Option<ICoreWebView2>>> = Rc::new(RefCell::new(None));
     let env_slot: Rc<RefCell<Option<ICoreWebView2Environment>>> = Rc::new(RefCell::new(None));
     let event_queue: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+    let startup_t0 = std::time::Instant::now();
+    let perf_params = load_perf_params_value();
+    let browser_args = perf_params
+        .as_ref()
+        .and_then(|v| v.pointer("/webview/browserArgs"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(DEFAULT_BROWSER_ARGS)
+        .to_string();
+    let detach_commit_ms = perf_params
+        .as_ref()
+        .and_then(|v| v.pointer("/webview/detachCommitMs"))
+        .and_then(|v| v.as_u64())
+        .map(|ms| ms.clamp(80, 1000) as u32)
+        .unwrap_or(200);
     let data_dir = config
         .user_data_dir
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| syki_core::rpc::RuntimeEnv::from_env().data_dir);
-    let (init_main_hk, init_qc_hk, idle_detach_ms) = read_startup_hotkeys_and_detach(&data_dir);
+    let (init_main_hk, init_qc_hk, mut idle_detach_ms) = read_startup_hotkeys_and_detach(&data_dir);
+    if std::env::var("SYKI_IDLE_DETACH_MS").is_err() && idle_detach_ms == 300_000 {
+        if let Some(p_ms) = perf_params
+            .as_ref()
+            .and_then(|v| v.pointer("/webview/idleDetachMs"))
+            .and_then(|v| v.as_u64())
+        {
+            idle_detach_ms = p_ms.clamp(60_000, 600_000) as u32;
+        }
+    }
     let hotkey_main = Arc::new(Mutex::new(init_main_hk.clone()));
     let hotkey_qc = Arc::new(Mutex::new(init_qc_hk.clone()));
     let event_sender_slot: Rc<RefCell<Option<EventSender>>> = Rc::new(RefCell::new(None));
@@ -1025,6 +1137,7 @@ pub fn run_webview_host_with_handle(
         hotkey_qc: Arc::clone(&hotkey_qc),
         data_dir,
         idle_detach_ms,
+        detach_commit_ms,
         detach_guard: None,
         event_sender: Rc::clone(&event_sender_slot),
     });
@@ -1046,8 +1159,10 @@ pub fn run_webview_host_with_handle(
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = UpdateWindow(hwnd);
     }
+    write_perf_trace_event("window_shown", startup_t0.elapsed().as_secs_f64() * 1000.0);
 
     let user_data_str = config.user_data_dir.to_string_lossy().into_owned();
+    let browser_args_for_env = browser_args;
     let environment = {
         let (tx, rx) = mpsc::channel();
         let user_data_for_env = user_data_str;
@@ -1055,10 +1170,7 @@ pub fn run_webview_host_with_handle(
             Box::new(move |handler| unsafe {
                 let user_data_w = CoTaskMemPWSTR::from(user_data_for_env.as_str());
                 let opts = webview2_com::CoreWebView2EnvironmentOptions::default();
-                opts.set_additional_browser_arguments(
-                    "--disable-background-networking --disable-component-update --no-pings"
-                        .to_string(),
-                );
+                opts.set_additional_browser_arguments(browser_args_for_env.clone());
                 let opts_iface: ICoreWebView2EnvironmentOptions = opts.into();
                 CreateCoreWebView2EnvironmentWithOptions(
                     PCWSTR::null(),
@@ -1077,10 +1189,12 @@ pub fn run_webview_host_with_handle(
         rx.recv()
             .map_err(|_| webview2_com::Error::SendError)??
     };
+    write_perf_trace_event("env_ready", startup_t0.elapsed().as_secs_f64() * 1000.0);
 
     *env_slot.borrow_mut() = Some(environment.clone());
     let state_ref = unsafe { &*state_ptr };
     attach_webview_controller(hwnd, &environment, state_ref, true)?;
+    write_perf_trace_event("controller_ready", startup_t0.elapsed().as_secs_f64() * 1000.0);
 
     if let Some(cb) = on_ready {
         let hwnd_raw = hwnd.0 as isize;

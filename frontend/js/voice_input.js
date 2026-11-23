@@ -4,9 +4,12 @@
 (function (global) {
   'use strict';
 
+  const __perfVoice = (typeof window !== 'undefined' && window.__sykiPreload && window.__sykiPreload.perf && window.__sykiPreload.perf.voice) || {};
   const ID_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
   const RMS_THRESHOLD = 0.015;
-  const SAMPLE_INTERVAL_MS = 200;
+  const SAMPLE_INTERVAL_MS = (__perfVoice.sampleIntervalMs >= 50 && __perfVoice.sampleIntervalMs <= 250)
+    ? __perfVoice.sampleIntervalMs
+    : 200;
   const DEFAULT_SILENCE_SEC = 5;
   const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com';
   const DEFAULT_MODEL = 'gemini-3.5-transcribe';

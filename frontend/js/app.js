@@ -3066,8 +3066,28 @@
   // the typing paths. Call sites that must be correct synchronously (tab switch,
   // programmatic replace, scroll sync, LLM merge...) keep calling the immediate
   // updateLineNumbers() / updateSecondaryLineNumbers().
+  const __perfKbTop = (typeof window !== 'undefined' && window.__sykiPreload && window.__sykiPreload.perf && window.__sykiPreload.perf.keyboard) || {};
+  const LINE_NUMBERS_THROTTLE_MS = (__perfKbTop.lineNumbersThrottleMs >= 0 && __perfKbTop.lineNumbersThrottleMs <= 120)
+    ? __perfKbTop.lineNumbersThrottleMs
+    : 0;
+  const STATUS_BAR_THROTTLE_MS = (__perfKbTop.statusBarThrottleMs >= 0 && __perfKbTop.statusBarThrottleMs <= 120)
+    ? __perfKbTop.statusBarThrottleMs
+    : 0;
+  const IME_SYNC_DEBOUNCE_MS = (__perfKbTop.imeSyncDebounceMs >= 0 && __perfKbTop.imeSyncDebounceMs <= 100)
+    ? __perfKbTop.imeSyncDebounceMs
+    : 0;
+
   let lineNumbersScheduled = false;
+  let lineNumbersTimer = null;
   function scheduleUpdateLineNumbers() {
+    if (LINE_NUMBERS_THROTTLE_MS > 0) {
+      if (lineNumbersTimer) return;
+      lineNumbersTimer = setTimeout(() => {
+        lineNumbersTimer = null;
+        requestAnimationFrame(() => updateLineNumbers());
+      }, LINE_NUMBERS_THROTTLE_MS);
+      return;
+    }
     if (lineNumbersScheduled) return;
     lineNumbersScheduled = true;
     requestAnimationFrame(() => {
@@ -3087,7 +3107,16 @@
   }
 
   let statusBarScheduled = false;
+  let statusBarTimer = null;
   function scheduleUpdateStatusBar() {
+    if (STATUS_BAR_THROTTLE_MS > 0) {
+      if (statusBarTimer) return;
+      statusBarTimer = setTimeout(() => {
+        statusBarTimer = null;
+        requestAnimationFrame(() => updateStatusBar());
+      }, STATUS_BAR_THROTTLE_MS);
+      return;
+    }
     if (statusBarScheduled) return;
     statusBarScheduled = true;
     requestAnimationFrame(() => {
@@ -4006,7 +4035,10 @@
   }
 
   // Core Markdown & Diagram Renderer (Reusable for both Primary and Secondary panes)
-  const PREVIEW_RESPONSIVE_CHAR_LIMIT = 250000;
+  const __perfKb = (typeof window !== 'undefined' && window.__sykiPreload && window.__sykiPreload.perf && window.__sykiPreload.perf.keyboard) || {};
+  const PREVIEW_RESPONSIVE_CHAR_LIMIT = (__perfKb.previewResponsiveCharLimit >= 120000 && __perfKb.previewResponsiveCharLimit <= 350000)
+    ? __perfKb.previewResponsiveCharLimit
+    : 250000;
 
   function formatPreviewSize(chars) {
     return Number(chars || 0).toLocaleString('en-US');
@@ -4714,7 +4746,8 @@
 
   // --- Zenkaku / Hankaku Guards & Code Block IME Mode Steering ---
   let lastInCodeBlock = false;
-  function syncCodeBlockIMEMode(editor) {
+  let imeSyncTimer = null;
+  function syncCodeBlockIMEModeNow(editor) {
     if (!config.general || config.general.imeGuardian === false) return;
     if (!window.backend || !window.backend.setIMEMode) return;
     if (platformCapabilities.nativeImeSwitch === false) return;
@@ -4736,6 +4769,17 @@
     } else if (!inCode && lastInCodeBlock) {
       lastInCodeBlock = false;
     }
+  }
+  function syncCodeBlockIMEMode(editor) {
+    if (IME_SYNC_DEBOUNCE_MS <= 0) {
+      syncCodeBlockIMEModeNow(editor);
+      return;
+    }
+    if (imeSyncTimer) clearTimeout(imeSyncTimer);
+    imeSyncTimer = setTimeout(() => {
+      imeSyncTimer = null;
+      syncCodeBlockIMEModeNow(editor);
+    }, IME_SYNC_DEBOUNCE_MS);
   }
 
   function handleZenkakuGuardOnCompositionEnd(editor, committedData) {
@@ -10272,7 +10316,9 @@ OUTPUT FORMAT:
   // of the line CHAR_MIRROR_WINDOW_LINES above the caret's line (fewer if that would be more than
   // CHAR_MIRROR_WINDOW_CHARS characters; the caret's own line is always whole, so `left` and the
   // wrapped row stay exact) down to the caret.
-  const CHAR_MIRROR_FULL_LIMIT = 150000;
+  const CHAR_MIRROR_FULL_LIMIT = (__perfKb.charMirrorFullLimit >= 80000 && __perfKb.charMirrorFullLimit <= 220000)
+    ? __perfKb.charMirrorFullLimit
+    : 150000;
   const CHAR_MIRROR_WINDOW_LINES = 300;
   const CHAR_MIRROR_WINDOW_CHARS = 40000;
 
@@ -10580,7 +10626,9 @@ OUTPUT FORMAT:
   // searchMatches() scans the whole document with a RegExp and collects every
   // match; running it on each keystroke in the Find box stalls typing on large
   // notes. Debounce it, and flush before anything that acts on the match list.
-  const FIND_DEBOUNCE_MS = 120;
+  const FIND_DEBOUNCE_MS = (__perfKb.findDebounceMs >= 40 && __perfKb.findDebounceMs <= 180)
+    ? __perfKb.findDebounceMs
+    : 120;
   let findSearchTimer = null;
 
   function searchMatchesDebounced() {
@@ -15463,7 +15511,7 @@ OUTPUT FORMAT:
       window.__earlyPendingVoice = false;
       setTimeout(() => {
         if (window.VoiceInput) window.VoiceInput.toggle();
-      }, 50);
+      }, 0);
     } else if (window.__earlyKeys && window.__earlyKeys.length > 0 && editorEl) {
       const earlyChars = window.__earlyKeys.join('');
       window.__earlyKeys = [];

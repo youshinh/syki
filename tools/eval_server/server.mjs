@@ -49,6 +49,16 @@ function send(res, status, type, body) {
   res.end(body);
 }
 
+function loadPerfParams() {
+  const p = process.env.SYKI_PERF_PARAMS_FILE || path.join(REPO, 'config', 'perf_params.json');
+  try {
+    const parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return parsed && parsed.params ? parsed.params : parsed;
+  } catch {
+    return null;
+  }
+}
+
 export function startServer({ title }) {
   const indexTemplate = () => fs.readFileSync(path.join(FRONTEND, 'index.html'), 'utf8');
 
@@ -58,7 +68,14 @@ export function startServer({ title }) {
 
     if (pathname === '/' || pathname === '/index.html') {
       const boot = buildBoot(Object.fromEntries(url.searchParams), title);
+      const perfParams = loadPerfParams();
+      const perfScript = perfParams
+        ? '<script>window.__sykiPreload = Object.assign(window.__sykiPreload || {}, { perf: ' +
+          JSON.stringify(perfParams).replace(/</g, '\\u003c') +
+          ' });</script>\n'
+        : '';
       const inject =
+        perfScript +
         '<script>window.__DOCSHOT_BOOT = ' + JSON.stringify(boot).replace(/</g, '\\u003c') + ';</script>\n' +
         '<script src="/__eval/mock.js"></script>\n';
       let html = indexTemplate();

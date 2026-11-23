@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "params": {
+    "webview": {
+      "browserArgs": "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run --disable-default-apps --disable-background-timer-throttling",
+      "idleDetachMs": 270000,
+      "detachCommitMs": 200
+    },
+    "keyboard": {
+      "findDebounceMs": 120,
+      "previewResponsiveCharLimit": 250000,
+      "charMirrorFullLimit": 150000,
+      "bulkInsertWorkLimit": 16000,
+      "linkMarkDebounceMs": 250,
+      "linkHoverDebounceMs": 300,
+      "linkMarkMaxChars": 150000,
+      "lineNumbersThrottleMs": 20,
+      "statusBarThrottleMs": 20,
+      "imeSyncDebounceMs": 0
+    },
+    "voice": {
+      "sampleIntervalMs": 175,
+      "barSampleMs": 75,
+      "barMinVoicedMs": 120
+    }
+  },
+  "bounds": {
+    "webview.browserArgs": {
+      "choices": [
+        "--disable-background-networking --disable-component-update --no-pings",
+        "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run",
+        "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run --disable-default-apps --disable-background-timer-throttling",
+        "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run --disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter",
+        "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run --disable-default-apps --disable-client-side-phishing-detection --disable-domain-reliability",
+        "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run --disable-features=Translate,MediaRouter,OptimizationHints,AutofillServerCommunication"
+      ]
+    },
+    "webview.idleDetachMs": {
+      "min": 60000,
+      "max": 600000,
+      "step": 30000
+    },
+    "webview.detachCommitMs": {
+      "min": 80,
+      "max": 400,
+      "step": 40
+    },
+    "keyboard.findDebounceMs": {
+      "min": 40,
+      "max": 180,
+      "step": 20
+    },
+    "keyboard.previewResponsiveCharLimit": {
+      "min": 120000,
+      "max": 350000,
+      "step": 30000
+    },
+    "keyboard.charMirrorFullLimit": {
+      "min": 80000,
+      "max": 220000,
+      "step": 20000
+    },
+    "keyboard.bulkInsertWorkLimit": {
+      "min": 8000,
+      "max": 40000,
+      "step": 4000
+    },
+    "keyboard.linkMarkDebounceMs": {
+      "min": 120,
+      "max": 400,
+      "step": 40
+    },
+    "keyboard.linkHoverDebounceMs": {
+      "min": 150,
+      "max": 450,
+      "step": 50
+    },
+    "keyboard.linkMarkMaxChars": {
+      "min": 50000,
+      "max": 150000,
+      "step": 25000
+    },
+    "keyboard.lineNumbersThrottleMs": {
+      "min": 0,
+      "max": 120,
+      "step": 20
+    },
+    "keyboard.statusBarThrottleMs": {
+      "min": 0,
+      "max": 120,
+      "step": 20
+    },
+    "keyboard.imeSyncDebounceMs": {
+      "min": 0,
+      "max": 100,
+      "step": 20
+    },
+    "voice.sampleIntervalMs": {
+      "min": 50,
+      "max": 250,
+      "step": 25
+    },
+    "voice.barSampleMs": {
+      "min": 50,
+      "max": 150,
+      "step": 25
+    },
+    "voice.barMinVoicedMs": {
+      "min": 120,
+      "max": 280,
+      "step": 40
+    }
+  }
+}

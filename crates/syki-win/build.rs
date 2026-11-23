@@ -129,9 +129,13 @@ fn build_bundled_assets(frontend_root: &Path) -> Option<Vec<u8>> {
     let mut out_html = String::with_capacity(raw_html.len());
     let mut css_slot_inserted = false;
     let mut js_slot_inserted = false;
+    let mut in_head = true;
 
     for line in raw_html.lines() {
         let trimmed = line.trim();
+        if trimmed.contains("</head>") {
+            in_head = false;
+        }
         if trimmed.starts_with("<link ")
             && trimmed.contains("rel=\"stylesheet\"")
             && !trimmed.contains("media=\"print\"")
@@ -153,6 +157,13 @@ fn build_bundled_assets(frontend_root: &Path) -> Option<Vec<u8>> {
         if trimmed.starts_with("<script src=\"js/") && trimmed.ends_with("</script>") {
             if let Some(rel) = extract_attr_href_or_src(trimmed, "src") {
                 if let Ok(js) = fs::read_to_string(frontend_root.join(&rel)) {
+                    if in_head {
+                        // Keep <head> scripts inline in-place so body scripts stay after DOM elements exist.
+                        out_html.push_str("  <script>\n");
+                        out_html.push_str(&minify_js_safe(&js));
+                        out_html.push_str("  </script>\n");
+                        continue;
+                    }
                     bundled_js.push_str(&minify_js_safe(&js));
                     bundled_js.push_str(";\n");
                     if !js_slot_inserted {

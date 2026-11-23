@@ -7,17 +7,24 @@
 (function (global) {
   'use strict';
 
+  const __perfKb = (typeof window !== 'undefined' && window.__sykiPreload && window.__sykiPreload.perf && window.__sykiPreload.perf.keyboard) || {};
   const MAX_IMPORT_BYTES = 25 * 1024 * 1024;
   const MAX_HOVER_LINKS = 200;
-  const HOVER_DEBOUNCE_MS = 300;
+  const HOVER_DEBOUNCE_MS = (__perfKb.linkHoverDebounceMs >= 150 && __perfKb.linkHoverDebounceMs <= 450)
+    ? __perfKb.linkHoverDebounceMs
+    : 300;
 
   // Link marks (underlines). The layer holds a full copy of the note, and laying it out costs about
   // 1 ms per 5,000 characters (measured: 12 ms at 60,000, 30 ms at 150,000), so it is only built for
   // notes up to this size (bigger ones stay unmarked; Ctrl+Click still works) and only when the note
   // has a link at all.
-  const MARK_MAX_CHARS = 100000;
+  const MARK_MAX_CHARS = (__perfKb.linkMarkMaxChars >= 50000 && __perfKb.linkMarkMaxChars <= 150000)
+    ? __perfKb.linkMarkMaxChars
+    : 100000;
   const MAX_MARKS = 3000;
-  const MARK_DEBOUNCE_MS = 250;
+  const MARK_DEBOUNCE_MS = (__perfKb.linkMarkDebounceMs >= 120 && __perfKb.linkMarkDebounceMs <= 400)
+    ? __perfKb.linkMarkDebounceMs
+    : 250;
 
   const I18N_FALLBACK = {
     ja: {

@@ -21,8 +21,11 @@
 
   // Fewer new lines than this never count as "long", whatever the size of the note (a Tab, an Enter, a pasted sentence).
   const MIN_NEWLINES = 8;
+  const __perfKb = (typeof window !== 'undefined' && window.__sykiPreload && window.__sykiPreload.perf && window.__sykiPreload.perf.keyboard) || {};
   // The plain command's cost is about newlines x (lines in the note + newlines) microseconds (see above); this is ~20 ms of it.
-  const WORK_LIMIT = 20000;
+  const WORK_LIMIT = (__perfKb.bulkInsertWorkLimit >= 8000 && __perfKb.bulkInsertWorkLimit <= 40000)
+    ? __perfKb.bulkInsertWorkLimit
+    : 20000;
 
   function countNewlines(text) {
     let n = 0;

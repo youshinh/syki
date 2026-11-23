@@ -19,11 +19,16 @@
 (function (global) {
   'use strict';
 
+  const __perfVoice = (typeof window !== 'undefined' && window.__sykiPreload && window.__sykiPreload.perf && window.__sykiPreload.perf.voice) || {};
   const SILENCE_SEC = 1.5;
   const NO_SPEECH_SEC = 6;
   const MAX_SEC = 60;
-  const MIN_VOICED_MS = 200; // a click or a knock is not the first word
-  const SAMPLE_MS = 100;
+  const MIN_VOICED_MS = (__perfVoice.barMinVoicedMs >= 120 && __perfVoice.barMinVoicedMs <= 280)
+    ? __perfVoice.barMinVoicedMs
+    : 200; // a click or a knock is not the first word
+  const SAMPLE_MS = (__perfVoice.barSampleMs >= 50 && __perfVoice.barSampleMs <= 150)
+    ? __perfVoice.barSampleMs
+    : 100;
   const DONE_SHOWN_MS = 2500;
 
   // ---- the pure pause detector --------------------------------------------------------------------------------------------
