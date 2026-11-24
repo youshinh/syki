@@ -1,42 +1,102 @@
 //! Encoding-aware atomic note I/O (`UTF-8`, `Shift_JIS`, `EUC-JP`) with
 //! optimistic concurrency signature checks (`expect_sig`).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::storage::{atomic, LoadedNote, StorageError, TextSignature};
+
+/// Strips Windows verbatim (`\\?\` / `\\?\UNC\`) prefix if present.
+pub fn strip_windows_verbatim_prefix(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        p.to_path_buf()
+    }
+}
+
+/// Canonicalizes `path` (falling back to `path` if it does not exist yet)
+/// and strips the Windows `\\?\` verbatim prefix so all callers compare identical paths.
+pub fn normalize_fs_path(path: &Path) -> PathBuf {
+    let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    strip_windows_verbatim_prefix(&abs)
+}
 
 /// Note file reader/writer with lossless Japanese encoding preservation.
 pub struct NoteFileStore;
 
 impl NoteFileStore {
-    /// Detects encoding (`UTF-8` with/without BOM, strict `Shift_JIS`, strict `EUC-JP`)
+    /// Strictly detects encoding (`UTF-8` with/without BOM, `UTF-16LE/BE` with BOM
+    /// or BOM-less UTF-16LE heuristic, strict `Shift_JIS`, strict `EUC-JP`)
     /// and decodes raw bytes to a UTF-8 string + canonical encoding name.
-    pub fn decode_bytes(raw: &[u8]) -> (String, String) {
+    pub fn decode_bytes_strict(raw: &[u8]) -> Result<(String, String), String> {
         if raw.is_empty() {
-            return (String::new(), "UTF-8".to_string());
+            return Ok((String::new(), "UTF-8".to_string()));
         }
         if raw.starts_with(&[0xEF, 0xBB, 0xBF]) {
             if let Ok(s) = std::str::from_utf8(&raw[3..]) {
-                return (s.to_string(), "UTF-8".to_string());
+                return Ok((s.to_string(), "UTF-8".to_string()));
+            }
+        }
+        if raw.starts_with(&[0xFF, 0xFE]) {
+            if let Some(cow) =
+                encoding_rs::UTF_16LE.decode_without_bom_handling_and_without_replacement(&raw[2..])
+            {
+                return Ok((cow.into_owned(), "UTF-16LE".to_string()));
+            }
+            return Err("invalid UTF-16LE byte sequence".to_string());
+        }
+        if raw.starts_with(&[0xFE, 0xFF]) {
+            if let Some(cow) =
+                encoding_rs::UTF_16BE.decode_without_bom_handling_and_without_replacement(&raw[2..])
+            {
+                return Ok((cow.into_owned(), "UTF-16BE".to_string()));
+            }
+            return Err("invalid UTF-16BE byte sequence".to_string());
+        }
+        // BOM-less UTF-16LE heuristic: must run before std::str::from_utf8 because NUL is valid UTF-8.
+        if raw.len() >= 2 && raw.len() % 2 == 0 && raw.contains(&0x00) {
+            let pairs = raw.len() / 2;
+            let odd_nuls = raw.iter().skip(1).step_by(2).filter(|&&b| b == 0).count();
+            let even_non_nuls = raw.iter().step_by(2).filter(|&&b| b != 0).count();
+            if odd_nuls * 10 > pairs * 4 && even_non_nuls * 10 >= pairs * 5 {
+                if let Some(cow) =
+                    encoding_rs::UTF_16LE.decode_without_bom_handling_and_without_replacement(raw)
+                {
+                    let s = cow.into_owned();
+                    if !s.contains('\0') {
+                        return Ok((s, "UTF-16LE".to_string()));
+                    }
+                }
             }
         }
         if let Ok(s) = std::str::from_utf8(raw) {
-            return (s.to_string(), "UTF-8".to_string());
+            return Ok((s.to_string(), "UTF-8".to_string()));
         }
         if let Some(cow) =
             encoding_rs::SHIFT_JIS.decode_without_bom_handling_and_without_replacement(raw)
         {
-            return (cow.into_owned(), "Shift_JIS".to_string());
+            return Ok((cow.into_owned(), "Shift_JIS".to_string()));
         }
         if let Some(cow) =
             encoding_rs::EUC_JP.decode_without_bom_handling_and_without_replacement(raw)
         {
-            return (cow.into_owned(), "EUC-JP".to_string());
+            return Ok((cow.into_owned(), "EUC-JP".to_string()));
         }
-        (
-            String::from_utf8_lossy(raw).into_owned(),
-            "UTF-8".to_string(),
-        )
+        Err("failed to decode input as UTF-8, UTF-16, Shift_JIS, or EUC-JP".to_string())
+    }
+
+    /// Detects encoding (`UTF-8` with/without BOM, `UTF-16LE/BE`, strict `Shift_JIS`,
+    /// strict `EUC-JP`) and decodes raw bytes to a UTF-8 string + canonical encoding name.
+    pub fn decode_bytes(raw: &[u8]) -> (String, String) {
+        Self::decode_bytes_strict(raw).unwrap_or_else(|_| {
+            (
+                String::from_utf8_lossy(raw).into_owned(),
+                "UTF-8".to_string(),
+            )
+        })
     }
 
     /// Encodes `content` into raw bytes for the requested encoding name.
@@ -196,5 +256,55 @@ mod tests {
             cyrb53_utf16_sig("hello\nworld")
         );
         assert_eq!(cyrb53_utf16_sig("hello\n世界"), "8-5be9f81d6a121");
+    }
+
+    #[test]
+    fn decode_bytes_strict_handles_utf16_cp932_and_rejects_invalid() {
+        // UTF-16LE with BOM
+        let mut le_bom = vec![0xFF, 0xFE];
+        for u in "hello日本語".encode_utf16() {
+            le_bom.extend_from_slice(&u.to_le_bytes());
+        }
+        let (s, enc) = NoteFileStore::decode_bytes_strict(&le_bom).unwrap();
+        assert_eq!(enc, "UTF-16LE");
+        assert_eq!(s, "hello日本語");
+        assert!(!s.contains('\0'));
+
+        // BOM-less UTF-16LE
+        let mut le_nobom = Vec::new();
+        for u in "hello".encode_utf16() {
+            le_nobom.extend_from_slice(&u.to_le_bytes());
+        }
+        let (s, enc) = NoteFileStore::decode_bytes_strict(&le_nobom).unwrap();
+        assert_eq!(enc, "UTF-16LE");
+        assert_eq!(s, "hello");
+
+        // UTF-16BE with BOM
+        let mut be_bom = vec![0xFE, 0xFF];
+        for u in "テスト".encode_utf16() {
+            be_bom.extend_from_slice(&u.to_be_bytes());
+        }
+        let (s, enc) = NoteFileStore::decode_bytes_strict(&be_bom).unwrap();
+        assert_eq!(enc, "UTF-16BE");
+        assert_eq!(s, "テスト");
+
+        // Invalid binary bytes
+        assert!(NoteFileStore::decode_bytes_strict(&[0x80, 0xFE, 0xFF, 0xFF]).is_err());
+    }
+
+    #[test]
+    fn strip_windows_verbatim_prefix_handles_drive_and_unc() {
+        assert_eq!(
+            strip_windows_verbatim_prefix(Path::new(r"\\?\C:\Users\test\a.md")),
+            PathBuf::from(r"C:\Users\test\a.md")
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(Path::new(r"\\?\UNC\server\share\a.md")),
+            PathBuf::from(r"\\server\share\a.md")
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(Path::new(r"C:\Users\test\a.md")),
+            PathBuf::from(r"C:\Users\test\a.md")
+        );
     }
 }

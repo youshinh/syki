@@ -67,7 +67,7 @@ syki/
 - `F18` Embedded PTY terminal (`portable-pty` ConPTY + `xterm.js` + git worktree helper)
 - `F21` Local STT (`speech.cpp` + `Haas-ja` default + OpenAI-compatible STT; pure Rust `symphonia`+`rubato` WAV transcoding)
 - `F22` Meeting recording (typed COM WASAPI loopback + mic dual capture & mix)
-- `F23` Image paste & **AI OCR only** (Vision LLM via OpenAI-compatible VLM / Gemini Vision + `syki ocr <image>`)
+- `F23` Image paste & **AI OCR only** (Vision LLM via OpenAI-compatible VLM / Gemini Vision + `syki-cli ocr run <image>` / `ocr <image>`)
 
 ### Explicitly Pruned Features (Out of Scope)
 `F03` `tagEdit`, `F09` Sticky Notes & Mermaid AI repair, `F14` Deep Search, `F15` JEV (`mvdan.cc/sh/v3` / Auto Selector), `F16` Slot Agent (`{{ }}`), `F17` Lessons, `F19` Ollama service auto-control/install, `F20` `skillinstall`, `F23` WinRT OCR (`Windows.Media.Ocr`), `F24` Mobile Drop, `F25` Cloudflare Bridge, `F26` Hot-Folder Inbox, `F27` Git Sync, `F28` Config Pack, old `whisper.cpp` + `pkg/components` model auto-downloader, macOS support, `--new-window` multi-window.
@@ -115,7 +115,7 @@ flowchart LR
 ```
 
 ## 7. Quantitative Acceptance Gates (Verified in #16)
-- `syki-cli.exe --version` cold start: **< 5 ms**
+- `syki-cli.exe --version` cold start: **~20–30 ms** (including Windows process launch / AV scan)
 - Global hotkey wake (`Attached` / `SuspendedLowMem`): **< 15 ms**
 - `Detached` tray idle resident RAM (`syki.exe` total process tree): **3–5 MB**
 - `powershell.exe` child process spawns across entire runtime: **0**

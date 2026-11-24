@@ -120,12 +120,44 @@ fn minify_js_safe(src: &str) -> String {
     out
 }
 
-fn build_bundled_assets(frontend_root: &Path) -> Option<Vec<u8>> {
+const DEFERRED_BOOT_JS: &[&str] = &[
+    "js/about_dialog.js",
+    "js/infographic_prompt.js",
+    "js/goto_line.js",
+    "js/terminal_pane.js",
+    "js/html_to_md.js",
+    "js/mermaid_tone.js",
+    "js/search_workbench.js",
+    "js/file_anchor.js",
+    "js/result_blocks.js",
+    "js/settings_modal.js",
+    "js/settings_compact.js",
+    "js/speech_settings.js",
+    "js/semantic_settings.js",
+    "js/speech_stream.js",
+    "js/preview_images.js",
+    "js/drop_zones.js",
+    "js/scrap_quote.js",
+    "js/scraps_filter.js",
+    "js/line_operations.js",
+    "js/find_replace_engine.js",
+    "js/comment_toggle.js",
+    "js/html_comments.js",
+    "js/ghost_diff.js",
+    "js/llm_error.js",
+    "js/builtin_ai.js",
+    "js/secret_strip.js",
+    "js/first_run.js",
+    "js/editor_zoom.js",
+];
+
+fn build_bundled_assets(frontend_root: &Path) -> Option<(Vec<u8>, Vec<u8>)> {
     let index_path = frontend_root.join("index.html");
     let raw_html = fs::read_to_string(&index_path).ok()?;
 
     let mut bundled_css = String::with_capacity(64 * 1024);
     let mut bundled_js = String::with_capacity(1024 * 1024);
+    let mut deferred_js = String::with_capacity(256 * 1024);
     let mut out_html = String::with_capacity(raw_html.len());
     let mut css_slot_inserted = false;
     let mut js_slot_inserted = false;
@@ -164,6 +196,11 @@ fn build_bundled_assets(frontend_root: &Path) -> Option<Vec<u8>> {
                         out_html.push_str("  </script>\n");
                         continue;
                     }
+                    if DEFERRED_BOOT_JS.contains(&rel.as_str()) {
+                        deferred_js.push_str(&minify_js_safe(&js));
+                        deferred_js.push_str(";\n");
+                        continue;
+                    }
                     bundled_js.push_str(&minify_js_safe(&js));
                     bundled_js.push_str(";\n");
                     if !js_slot_inserted {
@@ -175,16 +212,29 @@ fn build_bundled_assets(frontend_root: &Path) -> Option<Vec<u8>> {
             }
         }
 
-        out_html.push_str(line);
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || (trimmed.starts_with("<!--")
+                && trimmed.ends_with("-->")
+                && !trimmed.starts_with("<!--SYKI_BUNDLED_"))
+        {
+            continue;
+        }
+        out_html.push_str(trimmed);
         out_html.push('\n');
     }
 
     let style_tag = format!("<style>\n{bundled_css}</style>\n");
-    let script_tag = format!("<script>\n{bundled_js}</script>\n");
+    let deferred_hint = if deferred_js.is_empty() {
+        ""
+    } else {
+        "window.__bootDeferredURL=\"/__boot_deferred.js\";\n"
+    };
+    let script_tag = format!("<script>\n{deferred_hint}{bundled_js}</script>\n");
     let final_html = out_html
         .replace("  <!--SYKI_BUNDLED_CSS-->\n", &style_tag)
         .replace("  <!--SYKI_BUNDLED_JS-->\n", &script_tag);
-    Some(final_html.into_bytes())
+    Some((final_html.into_bytes(), deferred_js.into_bytes()))
 }
 
 fn collect_files(root: &Path, dir: &Path, out: &mut Vec<(String, &'static str, String)>) {
@@ -227,9 +277,17 @@ fn main() {
 
     let mut entries = Vec::new();
     collect_files(&frontend_root, &frontend_root, &mut entries);
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
-
     let bundled = build_bundled_assets(&frontend_root);
+    if let Some((_, ref deferred_bytes)) = bundled {
+        if !deferred_bytes.is_empty() {
+            entries.push((
+                "/__boot_deferred.js".to_string(),
+                "application/javascript; charset=utf-8",
+                String::new(),
+            ));
+        }
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let gz_dir = out_dir.join("gz_assets");
     fs::create_dir_all(&gz_dir).expect("create gz_assets dir");
@@ -270,8 +328,15 @@ fn main() {
     for (url_path, mime, abs_path) in entries {
         assert!(!abs_path.contains('"'), "unexpected quote in path: {abs_path}");
         if url_path == "/index.html" {
-            if let Some(ref html_bytes) = bundled {
+            if let Some((ref html_bytes, _)) = bundled {
                 emit_asset(next_idx, &url_path, mime, html_bytes, None);
+                next_idx += 1;
+                continue;
+            }
+        }
+        if url_path == "/__boot_deferred.js" {
+            if let Some((_, ref deferred_bytes)) = bundled {
+                emit_asset(next_idx, &url_path, mime, deferred_bytes, None);
                 next_idx += 1;
                 continue;
             }

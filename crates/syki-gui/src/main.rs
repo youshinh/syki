@@ -9,11 +9,13 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 use syki_core::ipc::{
     is_pipe_available, load_ipc_session, make_auth_envelope, pipe_name_for, send_ipc_request,
-    session_file_path, IpcEnvelope, IpcPipeServer, IpcReply,
+    session_file_path, IpcEnvelope, IpcPipeServer, IpcReply, METHOD_PLUGIN_LIST,
+    METHOD_PLUGIN_RELOAD, METHOD_PLUGIN_RUN, METHOD_PLUGIN_STATUS,
 };
 use syki_core::rpc::{RpcEvent, RuntimeEnv};
+use syki_core::storage::config::{get_config_value, set_config_value};
 use syki_core::storage::note::cyrb53_utf16_sig;
-use syki_core::storage::{ConfigStore, JsonConfigStore, NoteFileStore, ScrapStore};
+use syki_core::storage::{normalize_fs_path, ConfigStore, JsonConfigStore, NoteFileStore, ScrapStore};
 use syki_core::APP_VERSION;
 use syki_win::rpc_dispatch::CoreState;
 use syki_win::webview_host::{
@@ -30,7 +32,7 @@ fn try_forward_to_running_instance(env: &RuntimeEnv, startup_file: Option<&Path>
         return false;
     };
     let mut req = if let Some(p) = startup_file {
-        let abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        let abs = normalize_fs_path(p);
         let mut r = make_auth_envelope(&session, "open", "", json!({}));
         r.path = abs.to_string_lossy().into_owned();
         r
@@ -41,11 +43,31 @@ fn try_forward_to_running_instance(env: &RuntimeEnv, startup_file: Option<&Path>
     send_ipc_request(&session.pipe_name, &req).is_ok()
 }
 
+fn sanitize_js_error(err: &str) -> String {
+    let first_line = err.lines().next().unwrap_or(err).trim();
+    let cleaned = first_line
+        .replace("https://app.syki.local", "")
+        .trim()
+        .to_string();
+    if cleaned.is_empty() {
+        "rpc error".to_string()
+    } else {
+        cleaned
+    }
+}
+
 fn eval_syki_rpc(handle: &HostHandle, call_js: &str) -> Result<serde_json::Value, String> {
     let expr = format!(
         "(async function(){{ if (!window.__sykiRPC) throw new Error('__sykiRPC not ready'); return await ({call_js}); }})()"
     );
-    handle.eval_js_rpc(&expr)
+    handle.eval_js_rpc(&expr).map_err(|e| sanitize_js_error(&e))
+}
+
+fn eval_syki_plugins(handle: &HostHandle, call_js: &str) -> Result<serde_json::Value, String> {
+    let expr = format!(
+        "(async function(){{ if (!window.__sykiPlugins) throw new Error('plugin runtime not ready'); return await ({call_js}); }})()"
+    );
+    handle.eval_js_rpc(&expr).map_err(|e| sanitize_js_error(&e))
 }
 
 fn handle_ipc_envelope(
@@ -65,7 +87,7 @@ fn handle_ipc_envelope(
         handle.activate_window();
         (handle.event_sender)(RpcEvent {
             topic: "host:openFile".to_string(),
-            payload: json!({ "newTab": true }),
+            payload: json!({ "newTab": true, "isScrap": false }),
         });
         return IpcReply::ok(req.id, json!({ "newTab": true }));
     }
@@ -82,20 +104,29 @@ fn handle_ipc_envelope(
         if path_str.trim().is_empty() {
             return IpcReply::err(req.id, "missing path");
         }
-        match NoteFileStore::read_note(Path::new(path_str.trim())) {
+        let norm_path = normalize_fs_path(Path::new(path_str.trim()));
+        let scrap_dir = normalize_fs_path(&JsonConfigStore::new(env.data_dir.join("config.json")).scrap_dir());
+        let norm_lower = norm_path.to_string_lossy().to_lowercase();
+        let scrap_lower = scrap_dir.to_string_lossy().to_lowercase();
+        let is_scrap = norm_lower == scrap_lower
+            || norm_lower.starts_with(&format!("{scrap_lower}\\"))
+            || norm_lower.starts_with(&format!("{scrap_lower}/"));
+        match NoteFileStore::read_note(&norm_path) {
             Ok(loaded) => {
+                let norm_str = norm_path.to_string_lossy().into_owned();
                 handle.activate_window();
                 (handle.event_sender)(RpcEvent {
                     topic: "host:openFile".to_string(),
                     payload: json!({
-                        "path": loaded.path.to_string_lossy(),
-                        "title": loaded.path.file_name().and_then(|n| n.to_str()).unwrap_or("untitled.md"),
+                        "path": norm_str,
+                        "title": norm_path.file_name().and_then(|n| n.to_str()).unwrap_or("untitled.md"),
                         "content": loaded.content,
                         "encoding": loaded.encoding_name,
-                        "sig": cyrb53_utf16_sig(&loaded.content)
+                        "sig": cyrb53_utf16_sig(&loaded.content),
+                        "isScrap": is_scrap
                     }),
                 });
-                IpcReply::ok(req.id, json!({ "opened": path_str }))
+                IpcReply::ok(req.id, json!({ "opened": norm_str }))
             }
             Err(e) => IpcReply::err(req.id, format!("failed to open file: {e}")),
         }
@@ -111,7 +142,7 @@ fn handle_ipc_envelope(
         };
         let cfg = JsonConfigStore::new(env.data_dir.join("config.json"));
         let scrap_dir = cfg.scrap_dir();
-        match ScrapStore::append_formatted(&scrap_dir, &text, &req.cwd) {
+        match ScrapStore::append_formatted(&scrap_dir, &text, "") {
             Ok(scrap_path) => {
                 if let Ok(loaded) = NoteFileStore::read_note(&scrap_path) {
                     handle.activate_window();
@@ -145,16 +176,86 @@ fn handle_ipc_envelope(
         match store.load_raw() {
             Ok(raw) => {
                 let val: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|_| json!({}));
-                IpcReply::ok(req.id, val)
+                let key = req
+                    .params
+                    .get("key")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| {
+                        req.params
+                            .get("args")
+                            .and_then(|v| v.as_array())
+                            .and_then(|a| a.first())
+                            .and_then(|v| v.as_str())
+                    });
+                if let Some(k) = key.filter(|s| !s.trim().is_empty()) {
+                    match get_config_value(&val, k) {
+                        Ok(out) => IpcReply::ok(req.id, out),
+                        Err(e) => IpcReply::err(req.id, e),
+                    }
+                } else {
+                    IpcReply::ok(req.id, val)
+                }
             }
             Err(e) => IpcReply::err(req.id, e.to_string()),
         }
     } else if method == "config.set" {
         let store = JsonConfigStore::new(env.data_dir.join("config.json"));
-        let raw = serde_json::to_string(&req.params).unwrap_or_else(|_| "{}".to_string());
-        match store.save_raw(&raw) {
-            Ok(()) => IpcReply::ok(req.id, json!(true)),
-            Err(e) => IpcReply::err(req.id, e.to_string()),
+        if let (Some(key), Some(val)) = (
+            req.params.get("key").and_then(|v| v.as_str()),
+            req.params.get("value").cloned(),
+        ) {
+            let raw = store.load_raw().unwrap_or_else(|_| "{}".to_string());
+            let mut obj: serde_json::Value =
+                serde_json::from_str(&raw).unwrap_or_else(|_| json!({}));
+            if let Err(e) = set_config_value(&mut obj, key, val) {
+                return IpcReply::err(req.id, e);
+            }
+            let next = serde_json::to_string_pretty(&obj).unwrap_or_else(|_| "{}".to_string());
+            match store.save_raw(&next) {
+                Ok(()) => IpcReply::ok(req.id, json!({ "ok": true, "key": key })),
+                Err(e) => IpcReply::err(req.id, e.to_string()),
+            }
+        } else {
+            let raw = serde_json::to_string(&req.params).unwrap_or_else(|_| "{}".to_string());
+            match store.save_raw(&raw) {
+                Ok(()) => IpcReply::ok(req.id, json!(true)),
+                Err(e) => IpcReply::err(req.id, e.to_string()),
+            }
+        }
+    } else if method == "tab.open" {
+        let arg0 = req
+            .params
+            .get("args")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_str())
+            .or_else(|| req.params.get("path").and_then(|v| v.as_str()))
+            .unwrap_or("")
+            .trim();
+        if arg0.is_empty() {
+            return IpcReply::err(req.id, "missing path");
+        }
+        let norm_path = normalize_fs_path(Path::new(arg0));
+        match NoteFileStore::read_note(&norm_path) {
+            Ok(loaded) => {
+                let norm_str = norm_path.to_string_lossy().into_owned();
+                let title = norm_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("untitled.md");
+                let js_call = format!(
+                    "window.__sykiRPC.openTab({{ path: {}, title: {}, content: {}, encoding: {} }})",
+                    json!(norm_str),
+                    json!(title),
+                    json!(loaded.content),
+                    json!(loaded.encoding_name)
+                );
+                match eval_syki_rpc(handle, &js_call) {
+                    Ok(v) => IpcReply::ok(req.id, v),
+                    Err(e) => IpcReply::err(req.id, e),
+                }
+            }
+            Err(e) => IpcReply::err(req.id, format!("failed to open file: {e}")),
         }
     } else if method.starts_with("buffer.") || method.starts_with("tab.") || matches!(method, "ui.state" | "ui.set" | "ui.panel") {
         let args = req
@@ -173,11 +274,22 @@ fn handle_ipc_envelope(
             "tab.switch" => format!("window.__sykiRPC.switchTab({})", json!(arg0)),
             "tab.new" => format!("window.__sykiRPC.newTab({}, {})", json!(arg0), json!(arg1)),
             "tab.open" => format!("window.__sykiRPC.openTab({{ path: {} }})", json!(arg0)),
-            "tab.close" => format!("window.__sykiRPC.closeTab({})", json!(if arg0.is_empty() { None } else { Some(arg0) })),
+            "tab.close" => {
+                let force = args.iter().any(|v| v.as_str() == Some("--force") || v.as_str() == Some("-f"));
+                let tab_id = args
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .find(|s| !s.is_empty() && !s.starts_with('-'));
+                format!("window.__sykiRPC.closeTab({}, {{ force: {} }})", json!(tab_id), force)
+            }
             "tab.pdf" => format!("window.__sykiRPC.printPdf(null, {{}}, {})", json!(arg0)),
             "ui.state" => "window.__sykiRPC.getUiState()".to_string(),
             "ui.set" => {
-                let parsed: serde_json::Value = serde_json::from_str(arg0).unwrap_or_else(|_| json!({}));
+                let parsed: serde_json::Value = match serde_json::from_str::<serde_json::Value>(arg0) {
+                    Ok(v) if v.is_object() => v,
+                    Ok(_) => return IpcReply::err(req.id, "ui set requires a JSON object"),
+                    Err(e) => return IpcReply::err(req.id, format!("invalid JSON for ui set: {e}")),
+                };
                 format!("window.__sykiRPC.setUiState({parsed})")
             }
             "ui.panel" => format!("window.__sykiRPC.openPanel({})", json!(arg0)),
@@ -212,7 +324,14 @@ fn handle_ipc_envelope(
             method: "ptyAvailablePresets".to_string(),
             params: json!([]),
         });
-        IpcReply::ok(req.id, resp.result.unwrap_or(json!([])))
+        let val = match resp.result {
+            Some(serde_json::Value::String(s)) => {
+                serde_json::from_str::<serde_json::Value>(&s).unwrap_or_else(|_| json!(s))
+            }
+            Some(other) => other,
+            None => json!([]),
+        };
+        IpcReply::ok(req.id, val)
     } else if method == "speech.status" {
         let resp = core.dispatch(&syki_core::rpc::RpcRequest {
             id: req.id.clone(),
@@ -227,11 +346,63 @@ fn handle_ipc_envelope(
             .and_then(|v| v.as_array())
             .and_then(|a| a.first())
             .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if img_path.trim().is_empty() {
-            return IpcReply::err(req.id, "usage: syki-cli ocr <image-path>");
+            .unwrap_or("")
+            .trim();
+        if img_path.is_empty() {
+            return IpcReply::err(req.id, "usage: syki-cli ocr run <image-path>");
+        }
+        if !Path::new(img_path).is_file() {
+            return IpcReply::err(req.id, format!("image file not found: {img_path}"));
         }
         IpcReply::ok(req.id, json!({ "queued": true, "path": img_path }))
+    } else if method == METHOD_PLUGIN_LIST {
+        match eval_syki_plugins(handle, "window.__sykiPlugins.list()") {
+            Ok(v) => IpcReply::ok(req.id, v),
+            Err(e) => IpcReply::err(req.id, e),
+        }
+    } else if method == METHOD_PLUGIN_STATUS {
+        let plugin_id = req.params.get("plugin_id").and_then(|v| v.as_str());
+        let js_call = format!("window.__sykiPlugins.status({})", json!(plugin_id));
+        match eval_syki_plugins(handle, &js_call) {
+            Ok(v) => IpcReply::ok(req.id, v),
+            Err(e) => IpcReply::err(req.id, e),
+        }
+    } else if method == METHOD_PLUGIN_RELOAD {
+        let Some(plugin_id) = req
+            .params
+            .get("plugin_id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+        else {
+            return IpcReply::err(req.id, "missing plugin_id");
+        };
+        let js_call = format!("window.__sykiPlugins.reload({})", json!(plugin_id));
+        match eval_syki_plugins(handle, &js_call) {
+            Ok(v) => IpcReply::ok(req.id, v),
+            Err(e) => IpcReply::err(req.id, e),
+        }
+    } else if method == METHOD_PLUGIN_RUN {
+        let Some(command_id) = req
+            .params
+            .get("command_id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+        else {
+            return IpcReply::err(req.id, "missing command_id");
+        };
+        if !req.headless {
+            handle.activate_window();
+        }
+        let args = req.params.get("args").cloned().unwrap_or_else(|| json!({}));
+        let js_call = format!(
+            "window.__sykiPlugins.run({}, {})",
+            json!(command_id),
+            args
+        );
+        match eval_syki_plugins(handle, &js_call) {
+            Ok(v) => IpcReply::ok(req.id, v),
+            Err(e) => IpcReply::err(req.id, e),
+        }
     } else {
         IpcReply::err(req.id, format!("unsupported ipc method: {method}"))
     }

@@ -124,12 +124,28 @@ fn subcommand_summary(name: &str) -> &'static str {
     }
 }
 
+fn subcommand_usage(name: &str) -> &'static str {
+    match name {
+        "buffer" => "    syki-cli buffer get [tabId]\n    syki-cli buffer set <text|-> [tabId]\n    syki-cli buffer append <text|-> [tabId]",
+        "tab" => "    syki-cli tab list\n    syki-cli tab new <title> [content]\n    syki-cli tab open <path>\n    syki-cli tab switch <tabId>\n    syki-cli tab close [tabId] [--force]\n    syki-cli tab pdf <outputPath>",
+        "ui" => "    syki-cli ui activate\n    syki-cli ui new-tab\n    syki-cli ui open <path>\n    syki-cli ui state\n    syki-cli ui set <json>\n    syki-cli ui panel <name>",
+        "scrap" => "    syki-cli scrap dir\n    syki-cli scrap append <text|->\n    syki-cli scrap search <query>",
+        "config" => "    syki-cli config get [key]\n    syki-cli config set <key> <value>",
+        "plugin" => "    syki-cli plugin check <path>\n    syki-cli plugin list\n    syki-cli plugin status [plugin_id]\n    syki-cli plugin reload <plugin_id>\n    syki-cli plugin run <command_id> [--args <json>] [--show]",
+        "pty" => "    syki-cli pty list\n    syki-cli pty presets",
+        "ocr" => "    syki-cli ocr run <image>\n    syki-cli ocr <image>",
+        "speech" => "    syki-cli speech status",
+        "info" => "    syki-cli info",
+        _ => "    syki-cli <SUBCOMMAND> [ARGUMENTS...]",
+    }
+}
+
 fn print_subcommand_help(name: &str) {
     println!("syki-cli {} {}", APP_VERSION, name);
     println!("    {}", subcommand_summary(name));
     println!();
     println!("USAGE:");
-    println!("    syki-cli {} [SUBCOMMAND] [ARGUMENTS...]", name);
+    println!("{}", subcommand_usage(name));
     println!();
     println!("FLAGS:");
     println!("    -h, --help   Print this usage");
@@ -149,16 +165,64 @@ fn print_info_report() {
     println!("{}", serde_json::to_string_pretty(&report).expect("report serialises"));
 }
 
-fn read_capped_stdin() -> Result<String, String> {
+struct PipeInput {
+    text: String,
+    truncated: bool,
+}
+
+fn decode_pipe_bytes(raw: &[u8], limit_bytes: usize) -> Result<PipeInput, String> {
+    let truncated = raw.len() > limit_bytes;
+    let slice = if truncated { &raw[..limit_bytes] } else { raw };
+
+    let decoded = if !truncated {
+        syki_core::storage::NoteFileStore::decode_bytes_strict(slice).map(|(s, _)| s)
+    } else {
+        // When truncated at an arbitrary byte cap, a multi-byte UTF-8 sequence may be split
+        // and accidentally look like valid Shift_JIS. Prefer UTF-8 with 0..=3 byte trim first.
+        let mut found = None;
+        for trim in 0..=3 {
+            if slice.len() > trim {
+                let cand = &slice[..slice.len() - trim];
+                if let Ok(s) = std::str::from_utf8(cand) {
+                    found = Some(s.to_string());
+                    break;
+                }
+            }
+        }
+        if found.is_none() {
+            for trim in 0..=3 {
+                if slice.len() > trim {
+                    if let Ok((s, _)) =
+                        syki_core::storage::NoteFileStore::decode_bytes_strict(&slice[..slice.len() - trim])
+                    {
+                        found = Some(s);
+                        break;
+                    }
+                }
+            }
+        }
+        found.ok_or_else(|| "failed to decode truncated input".to_string())
+    }?;
+
+    let mut text = decoded;
+    if truncated {
+        let mb = (limit_bytes / (1024 * 1024)).max(1);
+        eprintln!("warning: stdin exceeded maxPipeSizeMB ({mb} MB) limit and was truncated");
+        text.push_str(&format!(
+            "\n\n[truncated: input exceeded maxPipeSizeMB ({mb} MB) limit]"
+        ));
+    }
+
+    Ok(PipeInput { text, truncated })
+}
+
+fn read_capped_stdin(limit_bytes: usize) -> Result<PipeInput, String> {
     let mut buf = Vec::new();
-    let mut limited = std::io::stdin().take((MAX_STDIN_PIPE_BYTES + 1) as u64);
+    let mut limited = std::io::stdin().take((limit_bytes + 1) as u64);
     limited
         .read_to_end(&mut buf)
         .map_err(|e| format!("failed to read stdin: {e}"))?;
-    if buf.len() > MAX_STDIN_PIPE_BYTES {
-        buf.truncate(MAX_STDIN_PIPE_BYTES);
-    }
-    Ok(String::from_utf8_lossy(&buf).into_owned())
+    decode_pipe_bytes(&buf, limit_bytes)
 }
 
 fn try_send_ipc(env: &RuntimeEnv, action: &str, method: &str, params: Value, content: String, path: String) -> Result<Value, String> {
@@ -297,7 +361,7 @@ fn dispatch_subcommand(cmd: &str, args: &[String]) -> Result<(), String> {
                     let raw = store.load_raw().map_err(|e| e.to_string())?;
                     let val: Value = serde_json::from_str(&raw).unwrap_or_else(|_| json!({}));
                     if let Some(key) = args.get(1) {
-                        let out = val.get(key).cloned().unwrap_or(Value::Null);
+                        let out = syki_core::storage::config::get_config_value(&val, key)?;
                         println!("{}", serde_json::to_string_pretty(&out).unwrap());
                     } else {
                         println!("{}", serde_json::to_string_pretty(&val).unwrap());
@@ -311,9 +375,7 @@ fn dispatch_subcommand(cmd: &str, args: &[String]) -> Result<(), String> {
                     let mut obj: Value = serde_json::from_str(&raw).unwrap_or_else(|_| json!({}));
                     let parsed_val = serde_json::from_str::<Value>(raw_val)
                         .unwrap_or_else(|_| Value::String(raw_val.clone()));
-                    if let Some(map) = obj.as_object_mut() {
-                        map.insert(key.clone(), parsed_val);
-                    }
+                    syki_core::storage::config::set_config_value(&mut obj, key, parsed_val)?;
                     let next = serde_json::to_string_pretty(&obj).map_err(|e| e.to_string())?;
                     store.save_raw(&next).map_err(|e| e.to_string())?;
                     println!("{}", json!({ "ok": true, "key": key }));
@@ -330,16 +392,31 @@ fn dispatch_subcommand(cmd: &str, args: &[String]) -> Result<(), String> {
                 Ok(())
             }
             Some("append") => {
-                let text = if args.get(1).map(String::as_str) == Some("-") || args.len() == 1 {
-                    read_capped_stdin()?
+                if args.len() == 1 && std::io::stdin().is_terminal() {
+                    return Err("usage: syki-cli scrap append <text|->".to_string());
+                }
+                let (text, truncated) = if args.get(1).map(String::as_str) == Some("-") || args.len() == 1 {
+                    let limit = JsonConfigStore::new(env.data_dir.join("config.json")).max_pipe_size_bytes();
+                    let input = read_capped_stdin(limit)?;
+                    (input.text, input.truncated)
                 } else {
-                    args[1..].join(" ")
+                    (args[1..].join(" "), false)
                 };
+                if text.trim().is_empty() {
+                    println!("{}", json!({ "ok": true, "skipped": true, "reason": "empty input" }));
+                    return Ok(());
+                }
                 let saved = append_scrap_and_notify(&env, &text)?;
-                println!("{}", json!({ "ok": true, "path": saved }));
+                println!("{}", json!({ "ok": true, "path": saved, "truncated": truncated }));
                 Ok(())
             }
-            _ => Err("usage: syki-cli scrap <dir | append <text|->>".to_string()),
+            Some("search") => {
+                let query = args.get(1).ok_or("usage: syki-cli scrap search <query>")?;
+                let res = try_send_ipc(&env, "", "scrap.search", json!({ "args": [query] }), String::new(), String::new())?;
+                println!("{}", serde_json::to_string_pretty(&res).unwrap_or_else(|_| res.to_string()));
+                Ok(())
+            }
+            _ => Err("usage: syki-cli scrap <dir | append <text|-> | search <query>>".to_string()),
         },
         "ui" => match args.first().map(String::as_str) {
             Some("activate") => {
@@ -354,7 +431,7 @@ fn dispatch_subcommand(cmd: &str, args: &[String]) -> Result<(), String> {
             }
             Some("open") => {
                 let p = args.get(1).ok_or("usage: syki-cli ui open <path>")?;
-                let abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.into());
+                let abs = syki_core::storage::normalize_fs_path(std::path::Path::new(p));
                 let res = try_send_ipc(
                     &env,
                     "open",
@@ -405,6 +482,68 @@ fn dispatch_subcommand(cmd: &str, args: &[String]) -> Result<(), String> {
             println!("{res}");
             Ok(())
         }
+        "buffer" => match args.first().map(String::as_str) {
+            Some("get") => {
+                let rest: Vec<String> = args.iter().skip(1).cloned().collect();
+                let res = try_send_ipc(&env, "", "buffer.get", json!({ "args": rest }), String::new(), String::new())?;
+                println!("{res}");
+                Ok(())
+            }
+            Some("set") => {
+                let mut rest: Vec<String> = args.iter().skip(1).cloned().collect();
+                if rest.is_empty() {
+                    return Err("usage: syki-cli buffer set <text|-> [tabId]".to_string());
+                }
+                if rest.first().map(String::as_str) == Some("-") {
+                    let limit = JsonConfigStore::new(env.data_dir.join("config.json")).max_pipe_size_bytes();
+                    let input = read_capped_stdin(limit)?;
+                    if input.text.trim().is_empty() {
+                        return Err("empty stdin input; buffer was not modified".to_string());
+                    }
+                    rest[0] = input.text;
+                }
+                let res = try_send_ipc(&env, "", "buffer.set", json!({ "args": rest }), String::new(), String::new())?;
+                println!("{res}");
+                Ok(())
+            }
+            Some("append") => {
+                let mut rest: Vec<String> = args.iter().skip(1).cloned().collect();
+                if rest.is_empty() {
+                    return Err("usage: syki-cli buffer append <text|-> [tabId]".to_string());
+                }
+                if rest.first().map(String::as_str) == Some("-") {
+                    let limit = JsonConfigStore::new(env.data_dir.join("config.json")).max_pipe_size_bytes();
+                    let input = read_capped_stdin(limit)?;
+                    if input.text.trim().is_empty() {
+                        return Err("empty stdin input; buffer was not modified".to_string());
+                    }
+                    rest[0] = input.text;
+                }
+                let res = try_send_ipc(&env, "", "buffer.append", json!({ "args": rest }), String::new(), String::new())?;
+                println!("{res}");
+                Ok(())
+            }
+            _ => Err("usage: syki-cli buffer <get [tabId] | set <text> [tabId] | append <text|-> [tabId]>".to_string()),
+        },
+        "ocr" => {
+            let img_arg = if args.first().map(String::as_str) == Some("run") {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            let p = img_arg.ok_or("usage: syki-cli ocr run <image>")?;
+            let norm = syki_core::storage::normalize_fs_path(std::path::Path::new(p));
+            let res = try_send_ipc(
+                &env,
+                "",
+                "ocr.run",
+                json!({ "args": [norm.to_string_lossy()] }),
+                String::new(),
+                String::new(),
+            )?;
+            println!("{res}");
+            Ok(())
+        }
         other => {
             let sub = args.first().map(String::as_str).unwrap_or("");
             let method = if sub.is_empty() {
@@ -430,9 +569,19 @@ fn main() {
     let raw_args: Vec<String> = std::env::args().skip(1).collect();
     if raw_args.is_empty() && !std::io::stdin().is_terminal() {
         let env = RuntimeEnv::from_env();
-        match read_capped_stdin().and_then(|text| append_scrap_and_notify(&env, &text)) {
-            Ok(path) => {
-                println!("{}", json!({ "ok": true, "path": path }));
+        let limit = JsonConfigStore::new(env.data_dir.join("config.json")).max_pipe_size_bytes();
+        match read_capped_stdin(limit).and_then(|input| {
+            if input.text.trim().is_empty() {
+                return Ok((String::new(), false, true));
+            }
+            append_scrap_and_notify(&env, &input.text).map(|path| (path, input.truncated, false))
+        }) {
+            Ok((_path, _truncated, true)) => {
+                println!("{}", json!({ "ok": true, "skipped": true, "reason": "empty input" }));
+                exit(0);
+            }
+            Ok((path, truncated, false)) => {
+                println!("{}", json!({ "ok": true, "path": path, "truncated": truncated }));
                 exit(0);
             }
             Err(e) => report_failure(&e),
@@ -640,5 +789,30 @@ mod tests {
             parse_cli_action(argv(&["--bogus", "--help"])),
             CliAction::Unknown("--bogus".to_string())
         );
+    }
+
+    #[test]
+    fn decode_pipe_bytes_handles_bom_cp932_utf16_and_truncation() {
+        // UTF-8 BOM stripped
+        let utf8_bom = [b"\xEF\xBB\xBF".as_slice(), "hello".as_bytes()].concat();
+        let res = decode_pipe_bytes(&utf8_bom, 1024).unwrap();
+        assert_eq!(res.text, "hello");
+        assert!(!res.truncated);
+
+        // Shift_JIS (CP932)
+        let sjis = syki_core::storage::NoteFileStore::encode_str("日本語テスト", "Shift_JIS");
+        let res = decode_pipe_bytes(&sjis, 1024).unwrap();
+        assert_eq!(res.text, "日本語テスト");
+        assert!(!res.truncated);
+
+        // Invalid binary rejected
+        assert!(decode_pipe_bytes(&[0x80, 0xFE, 0xFF, 0xFF], 1024).is_err());
+
+        // Oversized multi-byte UTF-8 truncated cleanly without splitting char
+        let s = "あ".repeat(10); // 30 bytes
+        let res = decode_pipe_bytes(s.as_bytes(), 10).unwrap();
+        assert!(res.truncated);
+        assert!(res.text.starts_with("あああ"));
+        assert!(res.text.contains("[truncated: input exceeded maxPipeSizeMB"));
     }
 }

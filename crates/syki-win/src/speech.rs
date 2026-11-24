@@ -1307,6 +1307,97 @@ pub fn transcribe_audio_async(
     });
 }
 
+pub fn is_audio_media(file_name: &str, mime: &str) -> bool {
+    if mime.trim().to_ascii_lowercase().starts_with("audio/") {
+        return true;
+    }
+    let ext = Path::new(file_name)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    matches!(
+        ext.as_str(),
+        "wav" | "mp3" | "m4a" | "aac" | "ogg" | "oga" | "opus" | "flac" | "weba"
+    )
+}
+
+pub fn infer_audio_mime(file_name: &str, mime: &str) -> String {
+    let trimmed = mime.trim();
+    if !trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+    let ext = Path::new(file_name)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "aac" => "audio/aac",
+        "ogg" | "oga" | "opus" => "audio/ogg",
+        "flac" => "audio/flac",
+        "weba" => "audio/webm",
+        _ => "audio/wav",
+    }
+    .to_string()
+}
+
+pub fn transcribe_dropped_audio_async(
+    data_dir: PathBuf,
+    req_id: String,
+    file_name: String,
+    audio_b64: String,
+    mime_type: String,
+    voice_config_json: String,
+    sender: Option<EventSender>,
+) {
+    std::thread::spawn(move || {
+        let cfg: Value = serde_json::from_str(&voice_config_json).unwrap_or_else(|_| json!({}));
+        let engine = cfg
+            .get("engine")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let effective_mime = infer_audio_mime(&file_name, &mime_type);
+        let has_cloud_key = cfg
+            .get("apiKey")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+        let use_local = engine == "whisper-local" || (engine.is_empty() && !has_cloud_key);
+
+        let res = if use_local {
+            match save_audio_to_cache(&data_dir, &audio_b64, &effective_mime) {
+                Ok(p) => {
+                    let r = transcribe_local_with_config(&data_dir, &p, &cfg);
+                    let _ = std::fs::remove_file(&p);
+                    r
+                }
+                Err(e) => Err(e),
+            }
+        } else {
+            transcribe_cloud(&data_dir, &audio_b64, &effective_mime, &cfg)
+        };
+
+        let (text, error) = match res {
+            Ok(t) => (t, String::new()),
+            Err(e) => (String::new(), e),
+        };
+        if let Some(tx) = sender {
+            tx(RpcEvent {
+                topic: "media:dropped".to_string(),
+                payload: json!({
+                    "reqId": req_id,
+                    "text": text,
+                    "error": error
+                }),
+            });
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1361,5 +1452,15 @@ mod tests {
 
         let with_regions = r#"{"text":"","regions":[{"text":"一行目"},{"text":"二行目"}]}"#;
         assert_eq!(parse_speech_json_output(with_regions), "一行目\n二行目");
+    }
+
+    #[test]
+    fn is_audio_media_and_infer_audio_mime_detect_wav_and_ignore_png() {
+        assert!(is_audio_media("meeting.wav", ""));
+        assert!(is_audio_media("voice.mp3", "application/octet-stream"));
+        assert!(is_audio_media("clip.bin", "audio/wav"));
+        assert!(!is_audio_media("photo.png", "image/png"));
+        assert_eq!(infer_audio_mime("meeting.wav", ""), "audio/wav");
+        assert_eq!(infer_audio_mime("meeting.wav", "audio/wav"), "audio/wav");
     }
 }

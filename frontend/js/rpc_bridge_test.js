@@ -79,4 +79,29 @@ test('getCursor and setCursor compute 1-based line and col', () => {
   assert.strictEqual(c1.col, 3);
 });
 
+test('openTab derives filename title when omitted', () => {
+  const created = [];
+  const port = makeFakePort('');
+  port.findTabByPath = () => null;
+  port.createTab = (title, _content, path) => {
+    const tab = { id: 't2', title: title || '無題-1.md', path };
+    created.push(tab);
+    return tab;
+  };
+  const rpc = SykiRpcBridge.create(port);
+  const res = rpc.openTab({ path: 'C:\\Users\\test\\notes\\a.md' });
+  assert.strictEqual(res.title, 'a.md');
+  assert.strictEqual(created[0].title, 'a.md');
+});
+
+test('closeTab rejects unknown tab and reports unsaved_changes unless forced', () => {
+  const port = makeFakePort('abc');
+  port.closeTabForRpc = (_id, _ifSaved, force) =>
+    force ? { closed: true, forced: true } : { closed: false, reason: 'unsaved_changes' };
+  const rpc = SykiRpcBridge.create(port);
+  assert.throws(() => rpc.closeTab('missing'), /no such tab/);
+  assert.deepStrictEqual(rpc.closeTab('t1'), { closed: false, reason: 'unsaved_changes' });
+  assert.deepStrictEqual(rpc.closeTab('t1', { force: true }), { closed: true, forced: true });
+});
+
 console.log(`${passed} rpc_bridge unit tests passed.`);

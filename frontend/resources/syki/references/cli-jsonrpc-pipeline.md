@@ -4,18 +4,18 @@
 
 ---
 
-## 1. `syki-cli.exe` 全 10 サブコマンド一覧（起動 `< 5ms`）
+## 1. `syki-cli.exe` 全 10 サブコマンド一覧（起動 ~20–30 ms ※Windows プロセス起動・AV スキャン込み）
 
 | コマンド | 用途・代表例 |
 |---|---|
 | `syki-cli info` | 稼働インスタンスの `dataDir` / `instanceId` / IPC 状態を JSON 出力 |
-| `syki-cli buffer ...` | アクティブエディタのテキスト取得・置換・挿入 |
+| `syki-cli buffer get|set|append` | アクティブエディタのテキスト取得・設定・追記 |
 | `syki-cli tab ...` | タブ一覧・新規作成・切替・PDF 出力（`syki-cli tab pdf`） |
 | `syki-cli ui ...` | ウィンドウ表示・前面化・UI 制御 |
-| `syki-cli scrap ...` | スクラップ検索・追記 |
-| `syki-cli ocr <image>` | Vision LLM による画像 AI OCR 実行 |
-| `syki-cli speech ...` | ローカル STT 音声文字起こし |
-| `syki-cli pty ...` | 組み込み ConPTY ターミナル制御 |
+| `syki-cli scrap dir|append|search` | スクラップ保存先取得・追記・検索 |
+| `syki-cli ocr run <image>` | Vision LLM による画像 AI OCR 実行（`ocr <image>` エイリアス可） |
+| `syki-cli speech status` | ローカル STT 状態確認 |
+| `syki-cli pty list|presets` | 組み込み ConPTY ターミナル一覧・プリセット取得 |
 | `syki-cli config ...` | `config.json` の参照・更新 |
 | `syki-cli plugin ...` | プラグインの静的検査・一覧・状態確認・リロード・コマンド実行 |
 | `<cmd> \| syki-cli` | 標準出力を日次スクラップへ直接パイプ投入（最大 10MB） |

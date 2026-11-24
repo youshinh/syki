@@ -1105,6 +1105,7 @@ pub fn run_webview_host_with_handle(
     let env_slot: Rc<RefCell<Option<ICoreWebView2Environment>>> = Rc::new(RefCell::new(None));
     let event_queue: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
     let startup_t0 = std::time::Instant::now();
+    crate::assets::prewarm_boot_assets();
     let perf_params = load_perf_params_value();
     let browser_args = perf_params
         .as_ref()
@@ -1227,10 +1228,12 @@ pub fn run_webview_host_with_handle(
             }
         });
         *event_sender_slot.borrow_mut() = Some(sender.clone());
-        crate::quick_capture::prewarm_quick_capture_popup(
-            state_ref.data_dir.clone(),
-            Some(sender.clone()),
-        );
+        let qc_data_dir = state_ref.data_dir.clone();
+        let qc_sender = sender.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            crate::quick_capture::prewarm_quick_capture_popup(qc_data_dir, Some(qc_sender));
+        });
         cb(HostHandle {
             event_sender: sender,
             hwnd_raw,

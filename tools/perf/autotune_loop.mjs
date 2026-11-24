@@ -32,13 +32,26 @@ const MIN_IMPROVE = Number(opt('--min-improve', '0.015')) || 0.015;
 const MAX_AXIS_REGRESSION = Number(opt('--max-axis-regression', '0.06')) || 0.06;
 const SKIP_NATIVE = hasFlag('--skip-native');
 const FAST_GATE = hasFlag('--fast-gate');
+const FOCUS = opt('--focus', 'all'); // all | startup | keyboard | voice | processing
 
-// High-impact priority order: WebView startup -> Keyboard hot path -> Voice responsiveness -> Secondary
+const FOCUS_PREFIXES = {
+  startup: ['startup.', 'webview.'],
+  keyboard: ['keyboard.'],
+  voice: ['voice.'],
+  processing: ['keyboard.', 'startup.']
+};
+const keyMomentum = new Map();
+
+// High-impact priority order: Startup pacing -> WebView -> Keyboard hot path -> Voice responsiveness -> Secondary
 const PRIORITY_KEYS = [
+  'startup.deferredScriptDelayMs',
+  'startup.backgroundSyncDelayMs',
+  'startup.pluginBootDelayMs',
   'webview.browserArgs',
   'keyboard.lineNumbersThrottleMs',
   'keyboard.statusBarThrottleMs',
   'keyboard.imeSyncDebounceMs',
+  'voice.streamBufferSize',
   'voice.sampleIntervalMs',
   'voice.barSampleMs',
   'voice.barMinVoicedMs',
@@ -107,7 +120,7 @@ function runBench(paramsFile, mode = 'all') {
 
 function selectModeForChanges(changes) {
   if (SKIP_NATIVE) return 'browser';
-  const hasWebview = changes.some((c) => c.key.startsWith('webview.'));
+  const hasWebview = changes.some((c) => c.key.startsWith('webview.') || c.key.startsWith('startup.'));
   const hasBrowser = changes.some((c) => !c.key.startsWith('webview.'));
   if (hasWebview && !hasBrowser) return 'native';
   if (hasBrowser && !hasWebview) return 'browser';
@@ -174,7 +187,12 @@ function runUxGate(fullOverride = false) {
 }
 
 function orderedKeys(bounds) {
-  const present = Object.keys(bounds || {}).filter((k) => !(SKIP_NATIVE && k.startsWith('webview.')));
+  const prefixes = FOCUS_PREFIXES[FOCUS] || null;
+  const present = Object.keys(bounds || {}).filter((k) => {
+    if (SKIP_NATIVE && k.startsWith('webview.')) return false;
+    if (prefixes && !prefixes.some((p) => k.startsWith(p))) return false;
+    return true;
+  });
   const ordered = PRIORITY_KEYS.filter((k) => present.includes(k));
   for (const k of present) {
     if (!ordered.includes(k)) ordered.push(k);
@@ -204,9 +222,11 @@ function generateCandidate(doc, tried, roundIndex, iterIndex) {
         next = spec.choices[(idx + 1 + attempt) % spec.choices.length];
       } else if (typeof spec.min === 'number' && typeof spec.max === 'number') {
         const step = spec.step || Math.max(1, Math.round((spec.max - spec.min) / 6));
-        // For throttle/debounce starting at 0, explore upward first; for voice intervals, explore downward first
+        // Use momentum if this key recently improved; otherwise explore upward for throttle/debounce and downward for voice/startup
         const preferUp = key.endsWith('ThrottleMs') || key.endsWith('DebounceMs');
-        const dir = (attempt + m) % 2 === 0 ? (preferUp ? 1 : -1) : (preferUp ? -1 : 1);
+        const momentumDir = keyMomentum.get(key);
+        const baseDir = momentumDir || (preferUp ? 1 : -1);
+        const dir = (attempt + m) % 2 === 0 ? baseDir : -baseDir;
         const mult = 1 + (attempt % 3);
         next = Math.min(spec.max, Math.max(spec.min, Number(cur) + dir * step * mult));
       }
@@ -350,6 +370,9 @@ function main() {
         }
 
         if (!verdict.accept) {
+          if (changes.length === 1 && typeof changes[0].from === 'number' && typeof changes[0].to === 'number') {
+            keyMomentum.delete(changes[0].key);
+          }
           staleStreak++;
           console.error(
             `[autotune] R${round} I${iter} REJECTED (${finalScores.composite} vs ${bestReport.scores.composite}): ${verdict.reason} [stale ${staleStreak}/${PATIENCE}]`
@@ -394,6 +417,9 @@ function main() {
           });
           if (staleStreak >= PATIENCE) break;
           continue;
+        }
+        if (changes.length === 1 && typeof changes[0].from === 'number' && typeof changes[0].to === 'number') {
+          keyMomentum.set(changes[0].key, Math.sign(changes[0].to - changes[0].from) || 1);
         }
 
         bestDoc = candDoc;

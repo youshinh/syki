@@ -2,6 +2,12 @@
 (function (global) {
   'use strict';
 
+  const __perfVoice = (typeof window !== 'undefined' && window.__sykiPreload && window.__sykiPreload.perf && window.__sykiPreload.perf.voice) || {};
+  const VALID_STREAM_BUFFERS = [1024, 2048, 4096];
+  const DEFAULT_STREAM_BUFFER_SIZE = VALID_STREAM_BUFFERS.includes(__perfVoice.streamBufferSize)
+    ? __perfVoice.streamBufferSize
+    : 1024;
+
   function floatTo16BitPCM(input) {
     const output = new Int16Array(input.length);
     for (let i = 0; i < input.length; i++) {
@@ -12,13 +18,14 @@
   }
 
   function base64EncodePCM(pcm16) {
-    const bytes = new Uint8Array(pcm16.buffer);
-    let binary = '';
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(bytes[i]);
+    const bytes = new Uint8Array(pcm16.buffer, pcm16.byteOffset, pcm16.byteLength);
+    const chunkSize = 0x8000;
+    const parts = [];
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const slice = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+      parts.push(String.fromCharCode.apply(null, slice));
     }
-    return btoa(binary);
+    return btoa(parts.join(''));
   }
 
   function createSpeechStream(opts) {
@@ -56,8 +63,10 @@
 
       audioCtx = new AudioContextClass({ sampleRate: 16000 });
       sourceNode = audioCtx.createMediaStreamSource(stream);
-      // 4096 buffer at 16kHz = ~256ms per chunk
-      processorNode = audioCtx.createScriptProcessor(4096, 1, 1);
+      const bufSize = VALID_STREAM_BUFFERS.includes(opts.bufferSize)
+        ? opts.bufferSize
+        : DEFAULT_STREAM_BUFFER_SIZE;
+      processorNode = audioCtx.createScriptProcessor(bufSize, 1, 1);
 
       processorNode.onaudioprocess = function (e) {
         if (!active || !ws || ws.readyState !== WebSocket.OPEN) return;

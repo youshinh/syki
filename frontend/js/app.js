@@ -3,9 +3,11 @@
   'use strict';
 
   // Code-level startup pacing parameters (non-user-facing tuning knobs for boot responsiveness).
+  const __perfStartup = (typeof window !== 'undefined' && window.__sykiPreload && window.__sykiPreload.perf && window.__sykiPreload.perf.startup) || {};
   const BOOT_POLICY = Object.freeze(Object.assign({
-    deferredScriptDelayMs: 60,
-    backgroundSyncDelayMs: 60,
+    deferredScriptDelayMs: (__perfStartup.deferredScriptDelayMs >= 20 && __perfStartup.deferredScriptDelayMs <= 200) ? __perfStartup.deferredScriptDelayMs : 60,
+    backgroundSyncDelayMs: (__perfStartup.backgroundSyncDelayMs >= 20 && __perfStartup.backgroundSyncDelayMs <= 240) ? __perfStartup.backgroundSyncDelayMs : 60,
+    pluginBootDelayMs: (__perfStartup.pluginBootDelayMs >= 40 && __perfStartup.pluginBootDelayMs <= 400) ? __perfStartup.pluginBootDelayMs : 120,
     workspaceRestoreDelayMs: 300,
     voiceRecoveryDelayMs: 1200,
     diskVerifyDelayMs: 1700,
@@ -11412,7 +11414,7 @@ OUTPUT FORMAT:
       }
       const newTab = createTab(data.fileName, content, data.filePath);
       newTab.isAutoTitle = false; // Bypass auto title from 1st line
-      newTab.isScrap = true;
+      newTab.isScrap = (data && typeof data.isScrap === 'boolean') ? data.isScrap : true;
       selectTab(newTab.id);
       setTimeout(() => {
         editorEl.scrollTop = editorEl.scrollHeight;
@@ -15799,7 +15801,7 @@ OUTPUT FORMAT:
   // ---- The update check (UX review I2), About syki::sok (I1) and the Help menu ----
   // Nothing here runs at start-up except the one timer that asks GitHub for the latest release number, and only when
   // general.checkUpdates is not false. About syki::sok > Check now works whatever that setting says.
-  const UPDATE_API_URL = 'https://api.github.com/repos/youshinh/syki-sok/releases/latest';
+  const UPDATE_API_URL = 'https://api.github.com/repos/youshinh/syki/releases/latest';
   const HELP_DOCS_URL = 'https://youshinh.github.io/syki-sok/';
   const UPDATE_CHECK_TIMEOUT_MS = 15000;
 
@@ -15887,6 +15889,9 @@ OUTPUT FORMAT:
           }, UPDATE_CHECK_TIMEOUT_MS);
         });
         const ask = (async () => {
+          if (window.backend && typeof window.backend.checkAppUpdate === 'function') {
+            return await window.backend.checkAppUpdate();
+          }
           const init = { headers: { 'Accept': 'application/vnd.github.v3+json' }, cache: 'no-cache' };
           if (control) init.signal = control.signal;
           const resp = await fetch(UPDATE_API_URL, init);
@@ -16211,7 +16216,10 @@ OUTPUT FORMAT:
   // Path comparison for "is this file already open": separators are not told apart, and a Windows path (drive letter or UNC)
   // is compared without regard to case.
   function pathKey(p) {
-    let key = String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
+    let key = String(p || '').replace(/\\/g, '/');
+    if (/^\/\/\?\/UNC\//i.test(key)) key = '//' + key.slice(8);
+    else if (key.startsWith('//?/')) key = key.slice(4);
+    key = key.replace(/\/+$/, '');
     if (/^[A-Za-z]:\//.test(key) || key.indexOf('//') === 0) key = key.toLowerCase();
     return key;
   }
@@ -16359,10 +16367,15 @@ OUTPUT FORMAT:
   //     between cancels the close. Otherwise {closed:false, reason:'unsaved'}.
   //   no if_saved: a tab without unsaved changes is closed; one with them gets the GUI's own save prompt (not awaited) and
   //     the answer is {closed:false, reason:'prompt'}.
-  async function closeTabForRpc(tabId, ifSaved) {
+  async function closeTabForRpc(tabId, ifSaved, force) {
     if (!tabId) rpcFail('invalid_params', 'tab_id is required');
     const tab = getTab(tabId);
     if (!tab) rpcFail('not_found', 'no such tab: ' + tabId);
+
+    if (force) {
+      removeTab(tab.id);
+      return { closed: true, forced: true };
+    }
 
     if (ifSaved) {
       if (!tab.path) return { closed: false, reason: 'unsaved' };
@@ -16385,8 +16398,7 @@ OUTPUT FORMAT:
       removeTab(tab.id);
       return { closed: true };
     }
-    closeTab(tab.id); // the usual Save / Don't save / Cancel prompt; the RPC must not wait for a person
-    return { closed: false, reason: 'prompt' };
+    return { closed: false, reason: 'unsaved_changes' };
   }
 
   // ---- Support for the JSON-RPC reads and controls of the editor's own state: cursor, UI layout, panels, tasks ----
@@ -16842,7 +16854,187 @@ OUTPUT FORMAT:
     setTimeout(inject, BOOT_POLICY.deferredScriptDelayMs);
   }
 
+  let pluginPlatformPromise = null;
+  let pluginPlatformState = null;
+
+  function loadPluginPlatformScripts() {
+    if (window.SykiBootstrap && typeof window.SykiBootstrap.installWindowSyki === 'function') {
+      return Promise.resolve();
+    }
+    const scripts = [
+      'js/syki_api_core.js?v=1.0.0',
+      'js/syki_api_flow.js?v=1.0.0',
+      'js/syki_api_ext.js?v=1.0.0',
+      'js/syki_api_media.js?v=1.0.0',
+      'js/plugin_runtime.js?v=1.0.0',
+      'js/syki_bootstrap.js?v=1.0.0',
+    ];
+    return scripts.reduce((chain, src) => chain.then(() => new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error('failed to load ' + src));
+      document.head.appendChild(s);
+    })), Promise.resolve());
+  }
+
+  function ensurePluginPlatform() {
+    if (pluginPlatformState) return Promise.resolve(pluginPlatformState);
+    if (pluginPlatformPromise) return pluginPlatformPromise;
+    pluginPlatformPromise = loadPluginPlatformScripts().then(() => {
+      if (!window.SykiBootstrap || typeof window.SykiBootstrap.installWindowSyki !== 'function') {
+        throw new Error('SykiBootstrap not available');
+      }
+      const registeredCommands = new Map();
+
+      function ensurePluginActionBar() {
+        let bar = document.getElementById('syki-plugin-actions');
+        if (bar) return bar;
+        const header = document.getElementById('header');
+        if (!header) return null;
+        bar = document.createElement('span');
+        bar.id = 'syki-plugin-actions';
+        bar.className = 'syki-plugin-actions';
+        bar.style.display = 'inline-flex';
+        bar.style.alignItems = 'center';
+        bar.style.gap = '4px';
+        header.appendChild(bar);
+        return bar;
+      }
+
+      const deps = {
+        locale: (config && config.general && config.general.language === 'en') ? 'en' : 'ja',
+        getText: () => (window.__sykiRPC ? window.__sykiRPC.getBuffer().text : ''),
+        setText: (text) => { if (window.__sykiRPC) window.__sykiRPC.writeText(text, 'set'); },
+        getSelection: () => (window.__sykiRPC ? window.__sykiRPC.getSelection().text : ''),
+        replaceSelection: (text) => { if (window.__sykiRPC) window.__sykiRPC.replaceSelection(text); },
+        insertAtCursor: (text) => { if (window.__sykiRPC) window.__sykiRPC.replaceSelection(text); },
+        openTab: (opts) => (window.__sykiRPC ? window.__sykiRPC.openTab(opts) : null),
+        toast: (msg) => { if (typeof showMessage === 'function') showMessage(String(msg || ''), 3000); },
+        getTheme: () => (document.body && document.body.classList.contains('look-paper') ? 'paper' : 'ink'),
+        mountPanel: (opts) => {
+          const host = document.createElement('div');
+          host.className = 'syki-plugin-panel-host';
+          host.dataset.sykiPluginPanel = (opts && opts.id) || 'panel';
+          document.body.appendChild(host);
+          return {
+            host,
+            unmount() { host.remove(); },
+            dispose() { host.remove(); },
+          };
+        },
+        registerAction: (spec) => {
+          const bar = ensurePluginActionBar();
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'toolbar-btn syki-plugin-btn';
+          if (spec && spec.id) btn.dataset.pluginAction = String(spec.id);
+          const labelSpan = document.createElement('span');
+          labelSpan.textContent = (spec && spec.label) ? String(spec.label) : (spec && spec.id ? String(spec.id) : 'Plugin');
+          btn.appendChild(labelSpan);
+          const badgeSpan = document.createElement('span');
+          badgeSpan.className = 'syki-plugin-badge';
+          if (spec && spec.badge) badgeSpan.textContent = ' ' + String(spec.badge);
+          btn.appendChild(badgeSpan);
+          if (spec && typeof spec.run === 'function') {
+            btn.addEventListener('click', () => { Promise.resolve(spec.run()).catch(() => {}); });
+            if (spec.id) registeredCommands.set(String(spec.id), spec.run);
+            if (spec.pluginId && spec.id) registeredCommands.set(String(spec.pluginId) + ':' + String(spec.id), spec.run);
+          }
+          if (bar) bar.appendChild(btn);
+          return {
+            update(patch) {
+              if (!patch || typeof patch !== 'object') return;
+              if (typeof patch.label === 'string') labelSpan.textContent = patch.label;
+              if (typeof patch.badge === 'string') badgeSpan.textContent = patch.badge ? ' ' + patch.badge : '';
+              if (typeof patch.disabled === 'boolean') btn.disabled = patch.disabled;
+            },
+            dispose() {
+              btn.remove();
+              if (spec && spec.id) registeredCommands.delete(String(spec.id));
+              if (spec && spec.pluginId && spec.id) registeredCommands.delete(String(spec.pluginId) + ':' + String(spec.id));
+            },
+          };
+        },
+        registerCommand: (payload) => {
+          const id = payload && payload.id ? String(payload.id) : '';
+          if (id && payload && typeof payload.run === 'function') {
+            registeredCommands.set(id, payload.run);
+          }
+          return {
+            dispose() {
+              if (id) registeredCommands.delete(id);
+            },
+          };
+        },
+        storageGet: async (key) => {
+          try {
+            const raw = localStorage.getItem('syki:plugin:storage:' + String(key));
+            return raw === null ? undefined : JSON.parse(raw);
+          } catch (_) {
+            return undefined;
+          }
+        },
+        storageSet: async (key, val) => {
+          try {
+            localStorage.setItem('syki:plugin:storage:' + String(key), JSON.stringify(val));
+          } catch (_) {}
+        },
+      };
+
+      const platform = window.SykiBootstrap.installWindowSyki(deps, window);
+      pluginPlatformState = { platform, registeredCommands };
+      return pluginPlatformState;
+    });
+    return pluginPlatformPromise;
+  }
+
+  function initPluginPlatform() {
+    if (!window.__sykiPlugins) {
+      window.__sykiPlugins = {
+        async list() {
+          const preloadExt = window.__sykiPreload && window.__sykiPreload.ext;
+          const hasAny = preloadExt && !preloadExt.safeMode && Array.isArray(preloadExt.plugins) && preloadExt.plugins.length > 0;
+          if (!pluginPlatformState && !hasAny) return [];
+          const { platform } = await ensurePluginPlatform();
+          return platform.pluginManager.getStatus();
+        },
+        async status(pluginId) {
+          const all = await window.__sykiPlugins.list();
+          if (pluginId) {
+            const found = all.find((p) => p.id === pluginId);
+            if (!found) throw new Error('plugin not found: ' + pluginId);
+            return found;
+          }
+          return all;
+        },
+        async reload(pluginId) {
+          const { platform } = await ensurePluginPlatform();
+          return await platform.pluginManager.reload(pluginId, Date.now());
+        },
+        async run(commandId, args) {
+          const { registeredCommands } = await ensurePluginPlatform();
+          const fn = registeredCommands.get(String(commandId));
+          if (typeof fn !== 'function') {
+            throw new Error('unknown plugin command: ' + commandId);
+          }
+          return await fn(args);
+        },
+      };
+    }
+
+    const preloadExt = window.__sykiPreload && window.__sykiPreload.ext;
+    if (preloadExt && !preloadExt.safeMode && Array.isArray(preloadExt.plugins) && preloadExt.plugins.length > 0) {
+      setTimeout(() => {
+        ensurePluginPlatform()
+          .then(({ platform }) => platform.pluginManager.loadAll(preloadExt.plugins))
+          .catch((err) => { console.warn('Plugin loadAll failed:', err); });
+      }, BOOT_POLICY.pluginBootDelayMs);
+    }
+  }
+
   initApp();
+  initPluginPlatform();
   if (window.FileAnchor && typeof window.FileAnchor.init === 'function') {
     window.FileAnchor.init();
   }

@@ -15,7 +15,7 @@ pub mod session;
 pub mod watch;
 
 pub use config::{ConfigStore, JsonConfigStore};
-pub use note::NoteFileStore;
+pub use note::{normalize_fs_path, NoteFileStore};
 pub use scrap::ScrapStore;
 pub use session::SessionStore;
 pub use watch::ActiveFileWatcher;

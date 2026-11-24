@@ -16,7 +16,7 @@
 |---|---|---|
 | `F01` | **Markdown エディタ I/O** | タブ・分割ペイン・セッション自動復元・原子保存・Shift_JIS 自動判定・外部変更ホットリロード（`notify`） |
 | `F02` | **日次スクラップ＆並列全文検索** | `scraps/YYYY-MM-DD.md` へ高速追記。タグ・日付フィルタ付き並列全文検索 |
-| `F04` | **`syki-cli.exe` / Named Pipe JSON-RPC / `cat \| syki`** | 10 サブコマンド（`< 5ms` 起動）・標準入力パイプ投入・単一インスタンス IPC 制御 |
+| `F04` | **`syki-cli.exe` / Named Pipe JSON-RPC / `cat \| syki`** | 10 サブコマンド（~20–30 ms 起動 ※Windows プロセス起動・AV スキャン込み）・標準入力パイプ投入・単一インスタンス IPC 制御 |
 | `F05` | **シェルパイプ (`Ctrl+E`)** | 選択テキストを任意 CLI コマンドの stdin に通して stdout で置換 |
 | `F06` | **ライブプレビュー** | `markdown-it` + `KaTeX` 数式 + `Mermaid` 図解のリアルタイム描画 |
 | `F07` | **日本語 IME Guardian** | `imm32` 連携による IME 状態保護・誤変換再入力（`ime_retype`）・IME 変換中のショートカット誤爆自動抑止 |
@@ -29,7 +29,7 @@
 | `F18` | **組み込み PTY ターミナル** | `portable-pty` (ConPTY) + `xterm.js` + Git Worktree 作成ヘルパー |
 | `F21` | **ローカル音声入力 (STT)** | `speech.cpp` + `Haas-ja` デフォルト（または OpenAI 互換 STT）。純 Rust WAV 変換 |
 | `F22` | **会議録音** | WASAPI ループバック（相手音声）＋マイクのデュアル録音＆ミックス文字起こし |
-| `F23` | **画像貼付＆AI OCR** | 貼付／ドロップ画像を Vision LLM で OCR・構造化テキスト化（`syki-cli ocr <image>` 対応） |
+| `F23` | **画像貼付＆AI OCR** | 貼付／ドロップ画像を Vision LLM で OCR・構造化テキスト化（`syki-cli ocr run <image>` / `ocr <image>` 対応） |
 
 ---
 

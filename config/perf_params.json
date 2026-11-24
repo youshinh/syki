@@ -1,8 +1,13 @@
 {
   "version": 1,
   "params": {
+    "startup": {
+      "deferredScriptDelayMs": 120,
+      "backgroundSyncDelayMs": 120,
+      "pluginBootDelayMs": 120
+    },
     "webview": {
-      "browserArgs": "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run --disable-default-apps --disable-background-timer-throttling",
+      "browserArgs": "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run --disable-default-apps --disable-background-timer-throttling --disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints,AutofillServerCommunication",
       "idleDetachMs": 270000,
       "detachCommitMs": 200
     },
@@ -14,17 +19,33 @@
       "linkMarkDebounceMs": 250,
       "linkHoverDebounceMs": 300,
       "linkMarkMaxChars": 150000,
-      "lineNumbersThrottleMs": 20,
-      "statusBarThrottleMs": 20,
+      "lineNumbersThrottleMs": 40,
+      "statusBarThrottleMs": 40,
       "imeSyncDebounceMs": 0
     },
     "voice": {
-      "sampleIntervalMs": 175,
-      "barSampleMs": 75,
-      "barMinVoicedMs": 120
+      "sampleIntervalMs": 75,
+      "barSampleMs": 50,
+      "barMinVoicedMs": 80,
+      "streamBufferSize": 1024
     }
   },
   "bounds": {
+    "startup.deferredScriptDelayMs": {
+      "min": 20,
+      "max": 200,
+      "step": 20
+    },
+    "startup.backgroundSyncDelayMs": {
+      "min": 20,
+      "max": 240,
+      "step": 20
+    },
+    "startup.pluginBootDelayMs": {
+      "min": 40,
+      "max": 400,
+      "step": 40
+    },
     "webview.browserArgs": {
       "choices": [
         "--disable-background-networking --disable-component-update --no-pings",
@@ -32,7 +53,8 @@
         "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run --disable-default-apps --disable-background-timer-throttling",
         "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run --disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter",
         "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run --disable-default-apps --disable-client-side-phishing-detection --disable-domain-reliability",
-        "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run --disable-features=Translate,MediaRouter,OptimizationHints,AutofillServerCommunication"
+        "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run --disable-features=Translate,MediaRouter,OptimizationHints,AutofillServerCommunication",
+        "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run --disable-default-apps --disable-background-timer-throttling --disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints,AutofillServerCommunication --in-process-gpu"
       ]
     },
     "webview.idleDetachMs": {
@@ -106,9 +128,12 @@
       "step": 25
     },
     "voice.barMinVoicedMs": {
-      "min": 120,
+      "min": 80,
       "max": 280,
-      "step": 40
+      "step": 20
+    },
+    "voice.streamBufferSize": {
+      "choices": [1024, 2048, 4096]
     }
   }
 }

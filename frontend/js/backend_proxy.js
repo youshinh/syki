@@ -72,6 +72,7 @@
     'queryVisionAsync',
     'generateImageAsync',
     'processDroppedMedia',
+    'checkAppUpdate',
     'saveAsset',
     'importAssetFile',
     'copyPNGToClipboard',

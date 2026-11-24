@@ -466,8 +466,9 @@ impl CoreState {
                 let local = is_local_host(&destination);
                 let consent_given = local
                     || sec
-                        .get("consent")
+                        .pointer("/privacy/cloudConsent")
                         .and_then(|c| c.get(&destination))
+                        .or_else(|| sec.get("consent").and_then(|c| c.get(&destination)))
                         .map(|v| {
                             v.as_bool() == Some(true)
                                 || v.as_str().map(|s| !s.is_empty()).unwrap_or(false)
@@ -993,9 +994,61 @@ impl CoreState {
                 let mime = param_str(&req.params, 2, "mimeType").unwrap_or_default();
                 let b64 = param_str(&req.params, 3, "data").unwrap_or_default();
                 let vision_cfg = param_str(&req.params, 4, "visionConfig").unwrap_or_default();
+                let voice_cfg = param_str(&req.params, 5, "voiceConfig").unwrap_or_default();
                 let sender = self.event_sender.lock().expect("event_sender mutex").clone();
-                llm::process_dropped_media_async(req_id, file_name, mime, b64, vision_cfg, sender);
+                if speech::is_audio_media(&file_name, &mime) {
+                    speech::transcribe_dropped_audio_async(
+                        self.env.data_dir.clone(),
+                        req_id,
+                        file_name,
+                        b64,
+                        mime,
+                        voice_cfg,
+                        sender,
+                    );
+                } else {
+                    llm::process_dropped_media_async(
+                        req_id,
+                        file_name,
+                        mime,
+                        b64,
+                        vision_cfg,
+                        sender,
+                    );
+                }
                 RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "checkAppUpdate" => {
+                let agent = ureq::AgentBuilder::new()
+                    .timeout(std::time::Duration::from_secs(12))
+                    .user_agent("syki-app")
+                    .build();
+                match agent
+                    .get("https://api.github.com/repos/youshinh/syki/releases/latest")
+                    .set("Accept", "application/vnd.github.v3+json")
+                    .call()
+                {
+                    Ok(resp) => match resp.into_string() {
+                        Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
+                            Ok(val) => RpcResponse::ok(&req.id, val),
+                            Err(e) => RpcResponse::err(&req.id, format!("invalid JSON: {e}")),
+                        },
+                        Err(e) => RpcResponse::err(&req.id, format!("read response error: {e}")),
+                    },
+                    Err(ureq::Error::Status(404, _)) => RpcResponse::ok(
+                        &req.id,
+                        json!({
+                            "tag_name": syki_core::APP_VERSION,
+                            "html_url": "https://github.com/youshinh/syki/releases",
+                            "no_release": true
+                        }),
+                    ),
+                    Err(ureq::Error::Status(code, _)) => {
+                        RpcResponse::err(&req.id, format!("GitHub HTTP {code}"))
+                    }
+                    Err(e) => RpcResponse::err(&req.id, format!("GitHub check failed: {e}")),
+                }
             }
 
             "generateCliCommandAsync" => {
@@ -1852,6 +1905,17 @@ mod tests {
         assert!(sem_hits.ok);
         let hits = sem_hits.result.unwrap();
         assert_eq!(hits["semantic"], true);
+
+        let cloud_consent_status = state.dispatch(&req(
+            "semanticStatus",
+            json!([{
+                "enabled": true,
+                "model": { "baseUrl": "https://api.openai.com/v1", "model": "text-embedding-3-small" },
+                "privacy": { "cloudConsent": { "api.openai.com": "2026-11-24" } }
+            }]),
+        ));
+        assert!(cloud_consent_status.ok);
+        assert_eq!(cloud_consent_status.result.unwrap()["consent_given"], true);
         let arr = hits["results"].as_array().unwrap();
         assert!(!arr.is_empty());
         assert!(arr[0]["matches"][0]["text"]

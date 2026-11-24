@@ -94,12 +94,25 @@ impl ConfigStore for JsonConfigStore {
         let raw = self.load_raw().ok().unwrap_or_else(|| "{}".to_string());
         let parsed: serde_json::Value =
             serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
-        let configured = non_empty_str(parsed.pointer("/scraps/scrapDir"))
+        if let Some(configured) = non_empty_str(parsed.pointer("/scraps/scrapDir"))
             .or_else(|| non_empty_str(parsed.get("scrap_dir")))
             .or_else(|| non_empty_str(parsed.pointer("/general/scrapDir")))
-            .unwrap_or("~/Documents/syki-sok/scraps");
-        ScrapStore::resolve_scrap_dir(Path::new(configured))
+        {
+            return ScrapStore::resolve_scrap_dir(Path::new(configured));
+        }
+        resolve_default_scrap_dir(std::env::var_os("SYKI_DATA_DIR").as_deref())
     }
+}
+
+pub fn resolve_default_scrap_dir(env_data_dir: Option<&std::ffi::OsStr>) -> PathBuf {
+    if let Some(val) = env_data_dir {
+        let s = val.to_string_lossy();
+        let trimmed = s.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed).join("scraps");
+        }
+    }
+    ScrapStore::resolve_scrap_dir(Path::new("~/Documents/syki-sok/scraps"))
 }
 
 fn non_empty_str(val: Option<&serde_json::Value>) -> Option<&str> {
@@ -136,8 +149,12 @@ impl AutoDetectHints {
         } else {
             (None, None)
         };
+        let default_scrap_dir = std::env::var_os("SYKI_DATA_DIR")
+            .filter(|v| !v.to_string_lossy().trim().is_empty())
+            .map(|v| PathBuf::from(v).join("scraps").to_string_lossy().into_owned())
+            .or_else(|| Some("~/Documents/syki-sok/scraps".to_string()));
         Self {
-            default_scrap_dir: Some("~/Documents/syki-sok/scraps".to_string()),
+            default_scrap_dir,
             llm_base_url,
             llm_model,
         }
@@ -253,6 +270,214 @@ impl JsonConfigStore {
         let resolved = resolve_config_with_defaults(&raw, &AutoDetectHints::from_system());
         Ok(serde_json::to_string(&resolved)?)
     }
+
+    /// Returns the configured pipe input cap in bytes (`scraps.maxPipeSizeMB` or legacy
+    /// `max_pipe_size_mb`, clamped to `1..=100` MiB, defaulting to `10` MiB).
+    pub fn max_pipe_size_bytes(&self) -> usize {
+        let raw = self.load_raw().ok().unwrap_or_else(|| "{}".to_string());
+        let parsed: serde_json::Value =
+            serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+        let mb = parsed
+            .pointer("/scraps/maxPipeSizeMB")
+            .and_then(|v| v.as_u64())
+            .or_else(|| parsed.get("max_pipe_size_mb").and_then(|v| v.as_u64()))
+            .unwrap_or(10)
+            .clamp(1, 100);
+        (mb as usize) * 1024 * 1024
+    }
+}
+
+/// Expected JSON value type for a `config.json` key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigValueKind {
+    Bool,
+    Int,
+    Number,
+    String,
+    StringArray,
+    Object,
+}
+
+impl ConfigValueKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Bool => "boolean",
+            Self::Int => "integer",
+            Self::Number => "number",
+            Self::String => "string",
+            Self::StringArray => "array of strings",
+            Self::Object => "object",
+        }
+    }
+
+    fn matches(self, val: &serde_json::Value) -> bool {
+        match self {
+            Self::Bool => val.is_boolean(),
+            Self::Int => val.as_i64().is_some() || val.as_u64().is_some(),
+            Self::Number => val.is_number(),
+            Self::String => val.is_string(),
+            Self::StringArray => val
+                .as_array()
+                .map(|arr| arr.iter().all(|item| item.is_string()))
+                .unwrap_or(false),
+            Self::Object => val.is_object(),
+        }
+    }
+}
+
+/// Looks up the expected [`ConfigValueKind`] for a dot-delimited config key.
+pub fn config_key_kind(key: &str) -> Option<ConfigValueKind> {
+    use ConfigValueKind::*;
+    match key {
+        "text" | "autocomplete" | "vision" | "voice" | "whisper" | "cli" | "action" | "image"
+        | "general" | "scraps" | "shortcuts" | "ocr" | "cfBridge" | "gitSync"
+        | "general.cloudConsent" | "general.toolbarLayout" | "general.contextMenuLayout"
+        | "voice.refine" | "voice.realtime" | "voice.batch" => Some(Object),
+
+        "text.baseUrl" | "text.model" | "text.apiKey" | "text.systemPrompt" => Some(String),
+
+        "autocomplete.enabled" => Some(Bool),
+        "autocomplete.baseUrl" | "autocomplete.model" | "autocomplete.apiKey" => Some(String),
+        "autocomplete.delayMs" | "autocomplete.maxTokens" => Some(Int),
+
+        "vision.baseUrl" | "vision.model" | "vision.apiKey" | "vision.prompt" => Some(String),
+
+        "voice.model" | "voice.apiStyle" | "voice.baseUrl" | "voice.apiKey" | "voice.mode"
+        | "voice.prompt" => Some(String),
+        "voice.languageCodes" | "voice.customVocabulary" => Some(StringArray),
+        "voice.silence_timeout_sec" | "voice.barSilenceSec" => Some(Number),
+        "voice.includeSystemAudio" => Some(Bool),
+        "voice.refine.enabled" => Some(Bool),
+        "voice.refine.model" => Some(String),
+        "voice.refine.timeoutSec" => Some(Number),
+        "voice.realtime.apiStyle" | "voice.realtime.baseUrl" | "voice.realtime.model"
+        | "voice.realtime.apiKey" => Some(String),
+        "voice.batch.apiStyle" | "voice.batch.baseUrl" | "voice.batch.model"
+        | "voice.batch.apiKey" => Some(String),
+
+        "whisper.threads" => Some(Int),
+        "whisper.model" | "whisper.modelPath" | "whisper.language" | "whisper.binaryPath" => {
+            Some(String)
+        }
+
+        "cli.model" | "cli.baseUrl" | "cli.apiKey" | "cli.systemPrompt" | "cli.resultPlacement" => {
+            Some(String)
+        }
+        "cli.openResultInNewTab" | "cli.openErrorInNewTab" => Some(Bool),
+
+        "action.enabled" => Some(Bool),
+        "action.baseUrl" | "action.model" | "action.apiKey" => Some(String),
+
+        "image.model" | "image.aspectRatio" | "image.resolution" => Some(String),
+
+        "general.language"
+        | "general.theme"
+        | "general.mermaidTone"
+        | "general.diagramDetail"
+        | "general.diagramStyle"
+        | "general.defaultNoteDir"
+        | "general.rewriteHistoryDir"
+        | "general.commentStyle" => Some(String),
+        "general.autoSave"
+        | "general.barVoice"
+        | "general.pasteImageOcr"
+        | "general.pasteHtmlAsMarkdown"
+        | "general.restoreSession"
+        | "general.trayResident"
+        | "general.trimWebViewWhenHidden"
+        | "general.webViewInProcessGpu"
+        | "general.splitViewOnStartup"
+        | "general.activityApps"
+        | "general.activityEdits"
+        | "general.telemetry"
+        | "general.checkUpdates"
+        | "general.imeGuardian"
+        | "general.imeGuardianRetype"
+        | "general.imeGuardianReverse"
+        | "general.aiCorrection"
+        | "general.cursorAura"
+        | "general.tabBarTop"
+        | "general.tabDock"
+        | "general.tabDockFollowOs"
+        | "general.rewriteHistoryLink"
+        | "general.welcomeShown"
+        | "general.aiChoiceMade" => Some(Bool),
+        "general.tabStripWidth"
+        | "general.tabDockStrength"
+        | "general.tabHideDelayMs"
+        | "general.tabHideDurationMs" => Some(Int),
+        "general.toolbarLayout.order"
+        | "general.toolbarLayout.hidden"
+        | "general.contextMenuLayout.order"
+        | "general.contextMenuLayout.hidden" => Some(StringArray),
+
+        "scraps.scrapDir" | "scrap_dir" => Some(String),
+        "scraps.maxPipeSizeMB" | "max_pipe_size_mb" => Some(Int),
+
+        _ => {
+            if let Some(rest) = key.strip_prefix("general.cloudConsent.") {
+                if !rest.is_empty() && !rest.contains('.') {
+                    return Some(String);
+                }
+            }
+            if let Some(rest) = key.strip_prefix("shortcuts.") {
+                if !rest.is_empty() && !rest.contains('.') {
+                    return Some(String);
+                }
+            }
+            None
+        }
+    }
+}
+
+fn split_config_key(key: &str) -> Result<Vec<&str>, String> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return Err("invalid config key: empty key".to_string());
+    }
+    let parts: Vec<&str> = trimmed.split('.').collect();
+    if parts.iter().any(|s| s.is_empty()) {
+        return Err(format!("invalid config key: {key}"));
+    }
+    Ok(parts)
+}
+
+/// Retrieves a nested value from `root` by dot-delimited `key`.
+pub fn get_config_value(root: &serde_json::Value, key: &str) -> Result<serde_json::Value, String> {
+    let parts = split_config_key(key)?;
+    let mut cur = root;
+    for part in parts {
+        match cur.get(part) {
+            Some(next) => cur = next,
+            None => return Ok(serde_json::Value::Null),
+        }
+    }
+    Ok(cur.clone())
+}
+
+/// Validates `key` and `value` against the config schema and updates `root` at the nested path.
+pub fn set_config_value(
+    root: &mut serde_json::Value,
+    key: &str,
+    value: serde_json::Value,
+) -> Result<(), String> {
+    let parts = split_config_key(key)?;
+    let kind = config_key_kind(key.trim()).ok_or_else(|| format!("unknown config key: {key}"))?;
+    if !kind.matches(&value) {
+        return Err(format!(
+            "invalid value type for {key}: expected {}",
+            kind.label()
+        ));
+    }
+    if !root.is_object() {
+        *root = serde_json::Value::Object(serde_json::Map::new());
+    }
+    let mut cur = root.as_object_mut().expect("root is object");
+    for part in &parts[..parts.len() - 1] {
+        cur = ensure_object(cur, part);
+    }
+    cur.insert((*parts.last().expect("non-empty parts")).to_string(), value);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -386,5 +611,57 @@ mod tests {
         assert_eq!(resolved["general"]["language"], "ja");
         assert_eq!(resolved["scraps"]["maxPipeSizeMB"], 10);
         assert_eq!(store.load_raw().expect("raw unchanged"), r#"{"general":{"language":"ja"}}"#);
+    }
+
+    #[test]
+    fn nested_config_get_and_set_validates_schema_and_updates_in_place() {
+        let mut root = serde_json::json!({
+            "general": { "language": "ja", "cursorAura": true },
+            "voice": { "refine": { "timeoutSec": 5 } }
+        });
+
+        assert_eq!(
+            get_config_value(&root, "general.language").unwrap(),
+            serde_json::json!("ja")
+        );
+        assert_eq!(
+            get_config_value(&root, "voice.refine.timeoutSec").unwrap(),
+            serde_json::json!(5)
+        );
+        assert_eq!(
+            get_config_value(&root, "general.nonexistent").unwrap(),
+            serde_json::Value::Null
+        );
+
+        set_config_value(&mut root, "general.cursorAura", serde_json::json!(false)).unwrap();
+        assert_eq!(root["general"]["cursorAura"], serde_json::json!(false));
+        assert!(root.get("general.cursorAura").is_none());
+
+        set_config_value(
+            &mut root,
+            "voice.customVocabulary",
+            serde_json::json!(["syki", "WebView2"]),
+        )
+        .unwrap();
+        assert_eq!(
+            root["voice"]["customVocabulary"],
+            serde_json::json!(["syki", "WebView2"])
+        );
+
+        assert!(set_config_value(&mut root, "nosuch.key", serde_json::json!(1)).is_err());
+        assert!(set_config_value(&mut root, "scraps.maxPipeSizeMB", serde_json::json!("abc")).is_err());
+        assert!(set_config_value(&mut root, "general.cursorAura", serde_json::json!("false")).is_err());
+    }
+
+    #[test]
+    fn max_pipe_size_bytes_respects_config_and_clamps() {
+        let dir = tempdir().expect("tempdir");
+        let store = JsonConfigStore::new(dir.path().join("config.json"));
+        assert_eq!(store.max_pipe_size_bytes(), 10 * 1024 * 1024);
+
+        store
+            .save_raw(r#"{"scraps":{"maxPipeSizeMB":25}}"#)
+            .expect("save");
+        assert_eq!(store.max_pipe_size_bytes(), 25 * 1024 * 1024);
     }
 }

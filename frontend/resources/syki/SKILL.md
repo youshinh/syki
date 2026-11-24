@@ -29,7 +29,7 @@ Windows-native (Rust + WebView2) fast-boot memo & workflow platform. Core stays 
 - Never access `chrome.webview` or `window.backend` directly.
 - Never load external `http://` / `https://` resources or CDNs (CSP + 403 blocked).
 - Never inject raw DOM into `toolbar`/`statusbar` (use `ui.registerAction`); custom UI belongs in `ui.mountPanel` Shadow DOM.
-- Never hardcode raw hex colors in CSS/JS (use `tokens.css` vars). Never declare unknown `permissions`.
+- Never hardcode raw hex/rgb colors (`#hex` / `rgb()`) in CSS/JS (emits `plugin check` warning; use `tokens.css` vars). Never declare unknown `permissions`.
 
 ## 5. External Agent Control (CLI / JSON-RPC)
 - Pipe stdin to daily scrap: `<cmd> | syki-cli`
@@ -40,7 +40,7 @@ Windows-native (Rust + WebView2) fast-boot memo & workflow platform. Core stays 
 ## 6. Mandatory Completion Gate (Before Handing Off Any Plugin)
 ```powershell
 syki-cli plugin check <path/to/plugin.js>   # must exit 0, "ok": true, "errors": []
-node --check <path/to/plugin.js>            # must exit 0
+node --input-type=module --check < <path/to/plugin.js>  # must exit 0
 ```
 
 ## 7. Quick Reset / Recovery (Non-Destructive First)

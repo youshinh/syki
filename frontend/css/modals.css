@@ -1,4 +1,9 @@
 /* Domain-split modal & overlay rules (extracted from style.css) */
+.modal.hidden,
+.modal-overlay.hidden {
+  content-visibility: hidden;
+  contain: layout style paint;
+}
 
 /* --- Settings package (export / import) dialog: js/config_pack.js --- */
 #pack-modal .modal-card {

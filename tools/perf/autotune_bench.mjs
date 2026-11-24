@@ -201,12 +201,13 @@ async function runBrowserBench(paramsPath, params) {
     await s.ev('new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(function () { r(1); }); }); })');
     const bulkInsertMs = round2(performance.now() - b0);
 
-    // 3. Deterministic Voice Input benchmark (VAD pause overshoot + anchor roundtrip)
+    // 3. Deterministic Voice Input benchmark (first-speech latency + VAD pause overshoot + anchor roundtrip)
     const sampleIntervalMs = Number(params?.voice?.sampleIntervalMs || 200);
     const barSampleMs = Number(params?.voice?.barSampleMs || 100);
     const barMinVoicedMs = Number(params?.voice?.barMinVoicedMs || 200);
+    const streamBufferSize = Number(params?.voice?.streamBufferSize || 2048);
 
-    const voiceResult = await s.ev(`(function (sampleMs, barSampleMs, minVoicedMs) {
+    const voiceResult = await s.ev(`(function (sampleMs, barSampleMs, minVoicedMs, streamBufSize) {
       // A) BarVoice VAD pause detection overshoot (speech stops at t=1200ms, silence threshold=1500ms -> ideal stop at 2700ms)
       var overshoots = [];
       var tCompute0 = performance.now();
@@ -243,12 +244,46 @@ async function runBrowserBench(paramsPath, params) {
       // C) Effective worst-case silence detection jitter from VoiceInput sampleIntervalMs
       var avgOvershoot = overshoots.length ? overshoots.reduce(function (a, b) { return a + b; }, 0) / overshoots.length : barSampleMs;
       var effectiveVadDelayMs = avgOvershoot + (sampleMs * 0.5);
+
+      // D) Voice first-response (初速): VAD speech-onset detection + 16kHz stream first-chunk + PCM base64 encode
+      var firstSpeechDetectMs = minVoicedMs + (barSampleMs * 0.5);
+      var streamChunkMs = (streamBufSize / 16000) * 1000;
+      var pcmInput = new Float32Array(streamBufSize);
+      for (var pi = 0; pi < streamBufSize; pi++) pcmInput[pi] = Math.sin(pi * 0.05) * 0.4;
+      var tPcm0 = performance.now();
+      for (var pr = 0; pr < 10; pr++) {
+        var pcm16 = new Int16Array(streamBufSize);
+        for (var pj = 0; pj < streamBufSize; pj++) {
+          var sv = Math.max(-1, Math.min(1, pcmInput[pj]));
+          pcm16[pj] = sv < 0 ? sv * 0x8000 : sv * 0x7fff;
+        }
+        var u8 = new Uint8Array(pcm16.buffer);
+        btoa(String.fromCharCode.apply(null, u8));
+      }
+      var pcmEncodeMs = (performance.now() - tPcm0) / 10;
+
       return {
         vadOvershootMs: effectiveVadDelayMs,
         vadComputeMs: vadComputeMs,
-        anchorRoundtripMs: anchorRoundtripMs
+        anchorRoundtripMs: anchorRoundtripMs,
+        firstSpeechDetectMs: firstSpeechDetectMs,
+        streamChunkMs: streamChunkMs + pcmEncodeMs,
+        pcmEncodeMs: pcmEncodeMs
       };
-    })(${sampleIntervalMs}, ${barSampleMs}, ${barMinVoicedMs})`);
+    })(${sampleIntervalMs}, ${barSampleMs}, ${barMinVoicedMs}, ${streamBufferSize})`);
+
+    // 3b. Note search / find processing latency on 1500-line note
+    const findMs = await s.ev(`(function () {
+      var ed = document.getElementById('editor');
+      var txt = ed ? ed.value : '';
+      var t0 = performance.now();
+      var total = 0;
+      for (var i = 0; i < 10; i++) {
+        var m = txt.match(/syki|autotune|Line/g);
+        if (m) total += m.length;
+      }
+      return (performance.now() - t0) / 10 + (total < 0 ? 1 : 0);
+    })()`);
 
     // 4. Processing metrics via CDP Performance + Heap
     const [{ metrics }, heap] = await Promise.all([
@@ -271,14 +306,18 @@ async function runBrowserBench(paramsPath, params) {
       voice: {
         vadOvershootMs: round2(voiceResult.vadOvershootMs),
         vadComputeMs: round2(voiceResult.vadComputeMs),
-        anchorRoundtripMs: round2(voiceResult.anchorRoundtripMs)
+        anchorRoundtripMs: round2(voiceResult.anchorRoundtripMs),
+        firstSpeechDetectMs: round2(voiceResult.firstSpeechDetectMs),
+        streamChunkMs: round2(voiceResult.streamChunkMs),
+        pcmEncodeMs: round2(voiceResult.pcmEncodeMs)
       },
       processing: {
         scriptMs: round2((mmap.ScriptDuration || 0) * 1000),
         layoutMs: round2((mmap.LayoutDuration || 0) * 1000),
         taskMs: round2((mmap.TaskDuration || 0) * 1000),
         heapMb: round2((heap.usedSize || mmap.JSHeapUsedSize || 0) / (1024 * 1024)),
-        nodes: Math.round(mmap.Nodes || 0)
+        nodes: Math.round(mmap.Nodes || 0),
+        findMs: round2(findMs)
       }
     };
   } finally {
@@ -301,13 +340,16 @@ function computeScores(native, browser) {
     (browser.keyboard.heartbeatMaxMs / 40) * 0.25 +
     (browser.keyboard.bulkInsertMs / 80) * 0.20;
 
+  const firstRespMs = (browser.voice.firstSpeechDetectMs || 160) + (browser.voice.streamChunkMs || 128);
   const voiceScore =
-    (browser.voice.vadOvershootMs / 150) * 0.55 +
-    (browser.voice.anchorRoundtripMs / 30) * 0.45;
+    (firstRespMs / 320) * 0.45 +
+    (browser.voice.vadOvershootMs / 150) * 0.35 +
+    (browser.voice.anchorRoundtripMs / 30) * 0.20;
 
   const processingScore =
-    ((browser.processing.scriptMs + browser.processing.layoutMs) / 500) * 0.60 +
-    (browser.processing.heapMb / 60) * 0.40;
+    ((browser.processing.scriptMs + browser.processing.layoutMs) / 500) * 0.50 +
+    (browser.processing.heapMb / 60) * 0.35 +
+    ((browser.processing.findMs || 5) / 10) * 0.15;
 
   const composite =
     startupScore * 0.35 +

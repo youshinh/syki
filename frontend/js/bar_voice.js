@@ -23,7 +23,7 @@
   const SILENCE_SEC = 1.5;
   const NO_SPEECH_SEC = 6;
   const MAX_SEC = 60;
-  const MIN_VOICED_MS = (__perfVoice.barMinVoicedMs >= 120 && __perfVoice.barMinVoicedMs <= 280)
+  const MIN_VOICED_MS = (__perfVoice.barMinVoicedMs >= 80 && __perfVoice.barMinVoicedMs <= 280)
     ? __perfVoice.barMinVoicedMs
     : 200; // a click or a knock is not the first word
   const SAMPLE_MS = (__perfVoice.barSampleMs >= 50 && __perfVoice.barSampleMs <= 150)

@@ -159,8 +159,9 @@
           if (!background) port.showTab(existing.id);
           return { id: existing.id, title: existing.title || '', path: existing.path || '', existing: true };
         }
+        const fallbackTitle = spec.path ? String(spec.path).split(/[\\/]/).filter(Boolean).pop() : undefined;
         const tab = port.createTab(
-          spec.title || undefined,
+          spec.title || fallbackTitle || undefined,
           typeof spec.content === 'string' ? lfText(spec.content) : undefined,
           spec.path || '',
           spec.encoding || undefined,
@@ -172,10 +173,18 @@
         return { id: tab.id, title: tab.title || '', path: tab.path || '', existing: false };
       },
 
-      closeTab: function (tabId) {
+      closeTab: function (tabId, opts) {
         const state = port.getViewState();
-        port.closeTab(tabId || state.activeTabId);
-        return true;
+        const targetId = tabId || state.activeTabId;
+        if (!targetId || !port.getTab(targetId)) {
+          rpcFail('not_found', 'no such tab: ' + (tabId || ''));
+        }
+        const force = !!(opts && opts.force);
+        if (typeof port.closeTabForRpc === 'function') {
+          return port.closeTabForRpc(targetId, false, force);
+        }
+        port.closeTab(targetId);
+        return { closed: true };
       },
 
       closeTabChecked: function (tabId, ifSaved) {

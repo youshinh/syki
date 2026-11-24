@@ -272,6 +272,37 @@ pub fn query_llm_sync_with_timeout(
             .ok_or_else(|| "Anthropic response missing content[0].text".to_string());
     }
 
+    if (base.contains("googleapis.com") && !base.contains("/openai")) || provider == "gemini" {
+        let root = base
+            .trim_end_matches('/')
+            .strip_suffix("/v1beta")
+            .unwrap_or(base.trim_end_matches('/'));
+        let clean_model = model.trim_start_matches("models/");
+        let url = format!("{root}/v1beta/models/{clean_model}:generateContent?key={api_key}");
+        let mut body = json!({
+            "contents": [{
+                "role": "user",
+                "parts": [{ "text": prompt }]
+            }]
+        });
+        let mut gen_cfg = json!({});
+        if let Some(t) = cfg.temperature {
+            gen_cfg["temperature"] = json!(t);
+        }
+        if let Some(m) = cfg.max_tokens {
+            gen_cfg["maxOutputTokens"] = json!(m);
+        }
+        if !gen_cfg.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+            body["generationConfig"] = gen_cfg;
+        }
+        let val = send_json_post(agent.post(&url), &body)?;
+        return val
+            .pointer("/candidates/0/content/parts/0/text")
+            .and_then(|v| v.as_str())
+            .map(strip_think_tags)
+            .ok_or_else(|| "Gemini response missing candidates[0].content.parts[0].text".to_string());
+    }
+
     // OpenAI-compatible (`/chat/completions`, works for OpenAI, Gemini OpenAI-compat, LM Studio, Strata)
     let url = resolve_openai_chat_url(&base);
     let mut body = json!({
@@ -471,30 +502,92 @@ pub fn generate_image_async(
 ) {
     std::thread::spawn(move || {
         let cfg = LlmConfig::from_json_str(&config_json);
+        let raw_cfg: Value = serde_json::from_str(&config_json).unwrap_or_else(|_| json!({}));
         let base = cfg.resolved_base_url();
         let api_key = cfg.resolved_api_key();
-        let url = format!("{base}/images/generations");
-        let body = json!({
-            "model": if cfg.model.trim().is_empty() { "gpt-image-1" } else { cfg.model.trim() },
-            "prompt": prompt,
-            "n": 1,
-            "response_format": "b64_json"
-        });
-        let mut req = http_agent().post(&url);
-        if !api_key.is_empty() {
-            req = req.set("Authorization", &format!("Bearer {api_key}"));
-        }
-        let (result, error) = match send_json_post(req, &body) {
-            Ok(val) => {
-                if let Some(b64) = val.pointer("/data/0/b64_json").and_then(|v| v.as_str()) {
-                    (format!("data:image/png;base64,{b64}"), String::new())
-                } else if let Some(u) = val.pointer("/data/0/url").and_then(|v| v.as_str()) {
-                    (u.to_string(), String::new())
-                } else {
-                    (String::new(), "image response missing b64_json/url".to_string())
-                }
+        let model = if cfg.model.trim().is_empty() {
+            "gemini-3.1-flash-lite-image"
+        } else {
+            cfg.model.trim()
+        };
+        let is_gemini = model.starts_with("gemini")
+            || base.contains("googleapis.com")
+            || cfg.resolved_provider() == "gemini";
+
+        let (result, error) = if is_gemini {
+            let root = if base.contains("googleapis.com") {
+                base.trim_end_matches('/')
+                    .strip_suffix("/v1beta")
+                    .unwrap_or(base.trim_end_matches('/'))
+            } else {
+                "https://generativelanguage.googleapis.com"
+            };
+            let clean_model = model.trim_start_matches("models/");
+            let url = format!("{root}/v1beta/models/{clean_model}:generateContent?key={api_key}");
+            let mut gen_cfg = json!({
+                "responseModalities": ["IMAGE", "TEXT"]
+            });
+            if let Some(ar) = raw_cfg
+                .get("aspectRatio")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                gen_cfg["imageConfig"] = json!({ "aspectRatio": ar });
             }
-            Err(e) => (String::new(), format!("image generation failed: {e}")),
+            let body = json!({
+                "contents": [{ "role": "user", "parts": [{ "text": prompt }] }],
+                "generationConfig": gen_cfg
+            });
+            match send_json_post(http_agent().post(&url), &body) {
+                Ok(val) => {
+                    let found = val
+                        .pointer("/candidates/0/content/parts")
+                        .and_then(|p| p.as_array())
+                        .and_then(|parts| {
+                            parts.iter().find_map(|part| {
+                                let inline =
+                                    part.get("inlineData").or_else(|| part.get("inline_data"))?;
+                                let data = inline.get("data")?.as_str()?;
+                                let mime = inline
+                                    .get("mimeType")
+                                    .or_else(|| inline.get("mime_type"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("image/png");
+                                Some(format!("data:{mime};base64,{data}"))
+                            })
+                        });
+                    match found {
+                        Some(data_url) => (data_url, String::new()),
+                        None => (String::new(), "Gemini image response missing inlineData".to_string()),
+                    }
+                }
+                Err(e) => (String::new(), format!("image generation failed: {e}")),
+            }
+        } else {
+            let url = format!("{base}/images/generations");
+            let body = json!({
+                "model": model,
+                "prompt": prompt,
+                "n": 1,
+                "response_format": "b64_json"
+            });
+            let mut req = http_agent().post(&url);
+            if !api_key.is_empty() {
+                req = req.set("Authorization", &format!("Bearer {api_key}"));
+            }
+            match send_json_post(req, &body) {
+                Ok(val) => {
+                    if let Some(b64) = val.pointer("/data/0/b64_json").and_then(|v| v.as_str()) {
+                        (format!("data:image/png;base64,{b64}"), String::new())
+                    } else if let Some(u) = val.pointer("/data/0/url").and_then(|v| v.as_str()) {
+                        (u.to_string(), String::new())
+                    } else {
+                        (String::new(), "image response missing b64_json/url".to_string())
+                    }
+                }
+                Err(e) => (String::new(), format!("image generation failed: {e}")),
+            }
         };
         if let Some(tx) = sender {
             tx(RpcEvent {

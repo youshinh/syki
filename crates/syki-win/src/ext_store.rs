@@ -87,6 +87,56 @@ impl ExtRoots {
         None
     }
 
+    /// Discovers installed plugins (`plugins/<id>/plugin.js`) in portable_dir (precedence)
+    /// and data_dir, returning deterministic preload descriptors.
+    pub fn list_plugins(&self) -> Vec<serde_json::Value> {
+        if self.safe_mode {
+            return Vec::new();
+        }
+        let mut seen = std::collections::BTreeMap::<String, bool>::new();
+        let mut scan_root = |root: &Path, is_portable: bool| {
+            let plugins_dir = root.join("plugins");
+            let Ok(entries) = std::fs::read_dir(plugins_dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let Some(id) = entry.file_name().to_str().map(str::to_string) else {
+                    continue;
+                };
+                if id.is_empty()
+                    || id == "."
+                    || id == ".."
+                    || !id
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                {
+                    continue;
+                }
+                if path.join("plugin.js").is_file() {
+                    seen.entry(id).or_insert(is_portable);
+                }
+            }
+        };
+        if let Some(ref portable) = self.portable_dir {
+            scan_root(portable, true);
+        }
+        scan_root(&self.data_dir, false);
+        seen.into_iter()
+            .map(|(id, is_portable)| {
+                serde_json::json!({
+                    "id": id,
+                    "name": id,
+                    "url": format!("/__ext/r/1/plugins/{id}/plugin.js"),
+                    "isPortable": is_portable
+                })
+            })
+            .collect()
+    }
+
     /// Lightweight preload metadata for `window.__sykiPreload.ext`.
     pub fn preload_ext_flags(&self) -> serde_json::Value {
         if self.safe_mode {
@@ -94,18 +144,21 @@ impl ExtRoots {
                 "hasUserCss": false,
                 "hasPlugins": false,
                 "safeMode": true,
-                "isPortableCss": false
+                "isPortableCss": false,
+                "plugins": []
             });
         }
         let resolved_css = self.resolve_user_css();
         let has_user_css = resolved_css.is_some();
         let is_portable_css = resolved_css.is_some_and(|f| f.is_portable);
-        let has_plugins = self.has_plugins_dir();
+        let plugins = self.list_plugins();
+        let has_plugins = self.has_plugins_dir() || !plugins.is_empty();
         serde_json::json!({
             "hasUserCss": has_user_css,
             "hasPlugins": has_plugins,
             "safeMode": false,
-            "isPortableCss": is_portable_css
+            "isPortableCss": is_portable_css,
+            "plugins": plugins
         })
     }
 
@@ -513,5 +566,41 @@ mod tests {
         assert!(!is_immutable_virtual_asset(200, "__ext/plugins/p1/main.js"));
         assert!(!is_immutable_virtual_asset(404, "js/app.js"));
         assert!(!is_immutable_virtual_asset(200, "data/readme.txt"));
+    }
+
+    #[test]
+    fn list_plugins_discovers_portable_first_and_respects_safe_mode() {
+        let tmp = TempRoots::new("list_plugins");
+        std::fs::create_dir_all(tmp.portable.join("plugins").join("alpha")).unwrap();
+        std::fs::write(
+            tmp.portable.join("plugins").join("alpha").join("plugin.js"),
+            "export default { id: 'alpha', apiVersion: 1, init() {} };",
+        )
+        .unwrap();
+        std::fs::create_dir_all(tmp.data.join("plugins").join("alpha")).unwrap();
+        std::fs::write(
+            tmp.data.join("plugins").join("alpha").join("plugin.js"),
+            "// shadowed",
+        )
+        .unwrap();
+        std::fs::create_dir_all(tmp.data.join("plugins").join("beta")).unwrap();
+        std::fs::write(
+            tmp.data.join("plugins").join("beta").join("plugin.js"),
+            "export default { id: 'beta', apiVersion: 1, init() {} };",
+        )
+        .unwrap();
+        // Folder without plugin.js is ignored
+        std::fs::create_dir_all(tmp.data.join("plugins").join("empty-dir")).unwrap();
+
+        let roots = ExtRoots::new(Some(tmp.portable.clone()), tmp.data.clone(), false);
+        let list = roots.list_plugins();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0]["id"], "alpha");
+        assert_eq!(list[0]["isPortable"], true);
+        assert_eq!(list[1]["id"], "beta");
+        assert_eq!(list[1]["isPortable"], false);
+
+        let safe = ExtRoots::new(Some(tmp.portable.clone()), tmp.data.clone(), true);
+        assert!(safe.list_plugins().is_empty());
     }
 }

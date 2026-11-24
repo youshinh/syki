@@ -49,11 +49,20 @@ impl ScrapStore {
             other => other,
         };
         let body = content.trim_end_matches(['\r', '\n']);
+        let longest_backtick_run = body
+            .split(|c| c != '`')
+            .map(str::len)
+            .max()
+            .unwrap_or(0);
+        let fence_len = std::cmp::max(3, longest_backtick_run + 1);
+        let fence = "`".repeat(fence_len);
         format!(
-            "---\n## [{}] {}\n```text\n{}\n```\n",
+            "---\n## [{}] {}\n{}text\n{}\n{}\n",
             now.format("%H:%M:%S"),
             heading,
-            body
+            fence,
+            body,
+            fence
         )
     }
 
@@ -132,5 +141,19 @@ mod tests {
         assert!(body.contains("] echo\n```text\nfirst line\n```"));
         assert!(body.contains("\n\n---\n"));
         assert!(body.contains("] CLI Pipe\n```text\nsecond line\n```"));
+    }
+
+    #[test]
+    fn format_scrap_entry_uses_dynamic_backtick_fence() {
+        let now = Local::now();
+
+        let normal = ScrapStore::format_scrap_entry("hello world", "echo", now);
+        assert!(normal.contains("\n```text\nhello world\n```\n"));
+
+        let with_three = ScrapStore::format_scrap_entry("before\n```rs\nfn main() {}\n```\nafter", "cat", now);
+        assert!(with_three.contains("\n````text\nbefore\n```rs\nfn main() {}\n```\nafter\n````\n"));
+
+        let with_four = ScrapStore::format_scrap_entry("````md\nnested\n````", "", now);
+        assert!(with_four.contains("] CLI Pipe\n`````text\n````md\nnested\n````\n`````\n"));
     }
 }
