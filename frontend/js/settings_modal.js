@@ -262,6 +262,9 @@
       setVal('cfg-auto-api-key', (config.autocomplete && config.autocomplete.apiKey) || '');
       setVal('cfg-auto-delay', (config.autocomplete && config.autocomplete.delayMs) || 500);
       setVal('cfg-auto-tokens', (config.autocomplete && config.autocomplete.maxTokens) || 30);
+      setVal('cfg-action-base-url', (config.action && config.action.baseUrl) || '');
+      setVal('cfg-action-model', (config.action && config.action.model) || 'gemini-decision-1');
+      setVal('cfg-action-api-key', (config.action && config.action.apiKey) || '');
 
       const visModel = (config.vision && config.vision.model) || 'gemini-flash-lite-latest';
       const visBaseUrl = (config.vision && config.vision.baseUrl) || inferBaseUrlForModel(visModel, { kind: 'llm' }) || '';
