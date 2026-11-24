@@ -271,18 +271,45 @@ fn live_all_api_inquiries_gemini_and_local_llm() {
         "aspectRatio": "1:1"
     })
     .to_string();
+    let note_path = root.join("note.md").to_string_lossy().to_string();
     let img_r = state.dispatch(&rpc_req(
         "img-gem",
         "generateImageAsync",
-        json!(["img-gem", "a simple minimalist blue circle", img_cfg]),
+        json!(["img-gem", "a simple minimalist blue circle", img_cfg, note_path]),
     ));
     assert!(img_r.ok);
     let img_ev = wait_event(&rx, "img-gem", 60);
     let img_err = img_ev.payload["error"].as_str().unwrap_or("");
     let img_res = img_ev.payload["result"].as_str().unwrap_or("");
     assert!(img_err.is_empty(), "generateImageAsync failed: {img_err}");
-    assert!(img_res.starts_with("data:image/"), "expected data:image/... URL");
-    println!("PASS: generateImageAsync (Gemini) -> {} bytes data URL", img_res.len());
+    assert!(
+        img_res.starts_with("![Generated Image](") && img_res.ends_with(')'),
+        "expected Markdown image link, got: {img_res}"
+    );
+    let assets_count = std::fs::read_dir(root.join("assets"))
+        .map(|d| d.count())
+        .unwrap_or(0);
+    assert!(assets_count >= 1, "expected saved image file in assets/");
+    println!("PASS: generateImageAsync (Gemini) -> {img_res} (assets={assets_count})");
+
+    // 12. fetchModels RPC (Gemini + key-missing guard for Anthropic/Gemini)
+    let fm_r = state.dispatch(&rpc_req(
+        "fm-gem",
+        "fetchModels",
+        json!(["https://generativelanguage.googleapis.com/v1beta/openai", api_key]),
+    ));
+    assert!(fm_r.ok, "fetchModels (Gemini) failed: {:?}", fm_r.error);
+    let fm_models = fm_r.result.unwrap()["models"].as_array().cloned().unwrap_or_default();
+    assert!(!fm_models.is_empty(), "expected >= 1 Gemini model");
+    println!("PASS: fetchModels (Gemini) -> {} models", fm_models.len());
+
+    let fm_ant_err = state.dispatch(&rpc_req(
+        "fm-ant-nokey",
+        "fetchModels",
+        json!(["https://api.anthropic.com", ""]),
+    ));
+    assert!(!fm_ant_err.ok, "expected error when Anthropic key is empty");
+    println!("PASS: fetchModels (Anthropic empty key guard)");
 
     let _ = std::fs::remove_dir_all(root);
 }

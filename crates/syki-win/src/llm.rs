@@ -2,6 +2,7 @@
 //! and Vision AI OCR (`F23`, AI-only — zero WinRT) (#12).
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -494,10 +495,57 @@ pub fn query_vision_async(
     });
 }
 
+fn ext_for_image_mime(mime: &str) -> &'static str {
+    match mime.trim().to_ascii_lowercase().as_str() {
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        _ => "png",
+    }
+}
+
+fn save_generated_image_markdown(
+    data_dir: &Path,
+    note_path: &str,
+    mime: &str,
+    b64_data: &str,
+) -> Result<String, String> {
+    let trimmed_note = note_path.trim();
+    let base_dir = if trimmed_note.is_empty() {
+        String::new()
+    } else {
+        Path::new(trimmed_note)
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default()
+    };
+    let asset = crate::assets_store::save_asset(
+        data_dir,
+        &base_dir,
+        ext_for_image_mime(mime),
+        b64_data,
+    )?;
+    let target = if !asset.rel_path.is_empty() {
+        asset.rel_path
+    } else {
+        asset.file_url
+    };
+    let safe = target
+        .replace('\\', "/")
+        .replace('%', "%25")
+        .replace(' ', "%20")
+        .replace('(', "%28")
+        .replace(')', "%29");
+    Ok(format!("![Generated Image]({safe})"))
+}
+
 pub fn generate_image_async(
     req_id: String,
     prompt: String,
     config_json: String,
+    note_path: String,
+    data_dir: PathBuf,
     sender: Option<EventSender>,
 ) {
     std::thread::spawn(move || {
@@ -554,11 +602,16 @@ pub fn generate_image_async(
                                     .or_else(|| inline.get("mime_type"))
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("image/png");
-                                Some(format!("data:{mime};base64,{data}"))
+                                Some((mime.to_string(), data.to_string()))
                             })
                         });
                     match found {
-                        Some(data_url) => (data_url, String::new()),
+                        Some((mime, data)) => {
+                            match save_generated_image_markdown(&data_dir, &note_path, &mime, &data) {
+                                Ok(md) => (md, String::new()),
+                                Err(e) => (String::new(), format!("failed to save generated image: {e}")),
+                            }
+                        }
                         None => (String::new(), "Gemini image response missing inlineData".to_string()),
                     }
                 }
@@ -579,9 +632,12 @@ pub fn generate_image_async(
             match send_json_post(req, &body) {
                 Ok(val) => {
                     if let Some(b64) = val.pointer("/data/0/b64_json").and_then(|v| v.as_str()) {
-                        (format!("data:image/png;base64,{b64}"), String::new())
+                        match save_generated_image_markdown(&data_dir, &note_path, "image/png", b64) {
+                            Ok(md) => (md, String::new()),
+                            Err(e) => (String::new(), format!("failed to save generated image: {e}")),
+                        }
                     } else if let Some(u) = val.pointer("/data/0/url").and_then(|v| v.as_str()) {
-                        (u.to_string(), String::new())
+                        (format!("![Generated Image]({u})"), String::new())
                     } else {
                         (String::new(), "image response missing b64_json/url".to_string())
                     }
@@ -1341,6 +1397,113 @@ pub fn query_decision_async(
     });
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelsProviderKind {
+    Google,
+    Anthropic,
+    Ollama,
+    OpenAiCompat,
+}
+
+fn ends_with_version_segment(base: &str) -> bool {
+    let Some(pos) = base.rfind('/') else {
+        return false;
+    };
+    let tail = &base[pos + 1..];
+    tail.starts_with('v') && tail.len() > 1 && tail[1..].bytes().all(|b| b.is_ascii_digit())
+}
+
+pub fn resolve_models_list_url(base_url: &str) -> Result<(String, ModelsProviderKind), String> {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        return Err("baseUrl must start with http:// or https://".to_string());
+    }
+    if trimmed.contains("generativelanguage.googleapis.com") {
+        return Ok((
+            "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000".to_string(),
+            ModelsProviderKind::Google,
+        ));
+    }
+    if trimmed.contains("api.anthropic.com") {
+        let url = if trimmed.ends_with("/models") {
+            format!("{trimmed}?limit=1000")
+        } else if ends_with_version_segment(trimmed) {
+            format!("{trimmed}/models?limit=1000")
+        } else {
+            format!("{trimmed}/v1/models?limit=1000")
+        };
+        return Ok((url, ModelsProviderKind::Anthropic));
+    }
+    if let Some(port_idx) = trimmed.find(":11434") {
+        let after = &trimmed[port_idx + 6..];
+        if after.is_empty() || after.starts_with('/') {
+            let root = trimmed
+                .strip_suffix("/v1")
+                .or_else(|| trimmed.strip_suffix("/api"))
+                .unwrap_or(trimmed);
+            return Ok((format!("{root}/api/tags"), ModelsProviderKind::Ollama));
+        }
+    }
+    let url = if trimmed.ends_with("/models") {
+        trimmed.to_string()
+    } else if ends_with_version_segment(trimmed) {
+        format!("{trimmed}/models")
+    } else {
+        format!("{trimmed}/v1/models")
+    };
+    Ok((url, ModelsProviderKind::OpenAiCompat))
+}
+
+pub fn fetch_models_sync(base_url: &str, api_key: &str) -> Result<Value, String> {
+    let (url, kind) = resolve_models_list_url(base_url)?;
+    let key = api_key.trim();
+    let agent = http_agent_with_timeout(Duration::from_secs(15));
+    let mut req = agent.get(&url);
+
+    match kind {
+        ModelsProviderKind::Google => {
+            if key.is_empty() {
+                return Err("API key is required for Gemini".to_string());
+            }
+            req = req.set("x-goog-api-key", key);
+        }
+        ModelsProviderKind::Anthropic => {
+            if key.is_empty() {
+                return Err("API key is required for Anthropic".to_string());
+            }
+            req = req
+                .set("x-api-key", key)
+                .set("anthropic-version", "2023-06-01");
+        }
+        ModelsProviderKind::OpenAiCompat => {
+            if !key.is_empty() {
+                req = req.set("Authorization", &format!("Bearer {key}"));
+            }
+        }
+        ModelsProviderKind::Ollama => {}
+    }
+
+    match req.call() {
+        Ok(resp) => {
+            let body = resp
+                .into_string()
+                .map_err(|e| format!("Failed to read models response: {e}"))?;
+            serde_json::from_str::<Value>(&body)
+                .map_err(|e| format!("Invalid JSON in models response: {e}"))
+        }
+        Err(ureq::Error::Status(code, resp)) => {
+            let body = resp.into_string().unwrap_or_default();
+            let snippet = body.trim().chars().take(200).collect::<String>();
+            if snippet.is_empty() {
+                Err(format!("HTTP {code}"))
+            } else {
+                Err(format!("HTTP {code}: {snippet}"))
+            }
+        }
+        Err(ureq::Error::Transport(t)) => Err(format!("Network error: {t}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1869,5 +2032,81 @@ mod tests {
         assert!(r3.ok, "r3 failed: {:?}", r3);
         assert_eq!(r3.choice_id, "critical_alert");
         println!("LIVE OK: r1={:?}, r2={:?}, r3={:?}", r1, r2, r3);
+    }
+
+    #[test]
+    fn resolve_models_list_url_supports_all_providers() {
+        assert_eq!(
+            resolve_models_list_url("https://generativelanguage.googleapis.com/v1beta/openai").unwrap(),
+            (
+                "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000".to_string(),
+                ModelsProviderKind::Google
+            )
+        );
+        assert_eq!(
+            resolve_models_list_url("https://api.anthropic.com").unwrap(),
+            (
+                "https://api.anthropic.com/v1/models?limit=1000".to_string(),
+                ModelsProviderKind::Anthropic
+            )
+        );
+        assert_eq!(
+            resolve_models_list_url("https://api.anthropic.com/v1/").unwrap(),
+            (
+                "https://api.anthropic.com/v1/models?limit=1000".to_string(),
+                ModelsProviderKind::Anthropic
+            )
+        );
+        assert_eq!(
+            resolve_models_list_url("https://api.openai.com/v1").unwrap(),
+            (
+                "https://api.openai.com/v1/models".to_string(),
+                ModelsProviderKind::OpenAiCompat
+            )
+        );
+        assert_eq!(
+            resolve_models_list_url("https://openrouter.ai/api/v1").unwrap(),
+            (
+                "https://openrouter.ai/api/v1/models".to_string(),
+                ModelsProviderKind::OpenAiCompat
+            )
+        );
+        assert_eq!(
+            resolve_models_list_url("http://127.0.0.1:11434/v1").unwrap(),
+            (
+                "http://127.0.0.1:11434/api/tags".to_string(),
+                ModelsProviderKind::Ollama
+            )
+        );
+        assert_eq!(
+            resolve_models_list_url("http://127.0.0.1:8080").unwrap(),
+            (
+                "http://127.0.0.1:8080/v1/models".to_string(),
+                ModelsProviderKind::OpenAiCompat
+            )
+        );
+        assert!(resolve_models_list_url("ftp://example.com").is_err());
+    }
+
+    #[test]
+    fn save_generated_image_markdown_writes_asset_and_returns_link() {
+        let tmp = std::env::temp_dir().join(format!("syki_img_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let note_path = tmp.join("note.md");
+        let b64_1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+        let md = save_generated_image_markdown(
+            &tmp,
+            &note_path.to_string_lossy(),
+            "image/png",
+            b64_1x1,
+        )
+        .expect("save_generated_image_markdown");
+        assert!(md.starts_with("![Generated Image](./assets/"), "got: {md}");
+        assert!(md.ends_with(".png)"), "got: {md}");
+        let assets_dir = tmp.join("assets");
+        let count = std::fs::read_dir(&assets_dir).unwrap().count();
+        assert_eq!(count, 1);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

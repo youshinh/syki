@@ -6,7 +6,7 @@
   - `Attached`（通常表示）→ `SuspendedLowMem`（最小化時低メモリ）→ `Detached`（トレイ待機時 WebView2 破棄で **RAM 3〜5 MB**）。
   - ホットキーまたは `syki-cli` / JSON-RPC 呼び出しで即座に再アタッチ（`< 15ms` 復帰）。
   - プラグインや LLM の非同期ジョブ実行中は `ActiveTaskGuard` が自動でデタッチを抑止し、処理の途中破棄を防ぐ。
-- **データ互換**: 既存の `scraps/*.md`、`config.json`、`semindex/`、`ipc-session.json` と完全互換。
+- **データ互換**: 既存の `scraps/*.md`（既定は `~/Documents/syki-sok/scraps`、`SYKI_DATA_DIR` 指定時は `<SYKI_DATA_DIR>/scraps`）、`config.json`、`semindex/`、`ipc-session.json` と完全互換。
 
 ---
 
@@ -27,7 +27,7 @@
 | `F12` | **画像生成＆インフォグラフィック** | OpenAI 互換 / Gemini 画像生成モデルで図解・画像をローカルアセット保存＆自動挿入 |
 | `F13` | **ローカル意味検索 (`semindex`)** | `memmap2` + SIMD コサイン類似度検索で過去スクラップを高速 RAG 検索 |
 | `F18` | **組み込み PTY ターミナル** | `portable-pty` (ConPTY) + `xterm.js` + Git Worktree 作成ヘルパー |
-| `F21` | **ローカル音声入力 (STT)** | `speech.cpp` + `Haas-ja` デフォルト（または OpenAI 互換 STT）。純 Rust WAV 変換 |
+| `F21` | **ローカル音声入力 (STT) & WAV ドロップ文字起こし** | `speech.cpp` + `Haas-ja` デフォルト（または OpenAI 互換 / Gemini STT）。純 Rust WAV 変換。WAV ファイルのウィンドウドロップでも自動文字起こし＆ノート追記 |
 | `F22` | **会議録音** | WASAPI ループバック（相手音声）＋マイクのデュアル録音＆ミックス文字起こし |
 | `F23` | **画像貼付＆AI OCR** | 貼付／ドロップ画像を Vision LLM で OCR・構造化テキスト化（`syki-cli ocr run <image>` / `ocr <image>` 対応） |
 

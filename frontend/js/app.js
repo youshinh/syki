@@ -13673,6 +13673,7 @@ OUTPUT FORMAT:
       'cfg-vision-api-key',
       'cfg-image-api-key',
       'cfg-auto-api-key',
+      'cfg-action-api-key',
       'cfg-semantic-api-key'
     ];
 
@@ -13940,6 +13941,7 @@ OUTPUT FORMAT:
     debouncedUpdateLLMProviderDetection();
   });
   bindModelBaseUrlAutoFill('cfg-auto-model', 'cfg-auto-base-url', 'llm');
+  bindModelBaseUrlAutoFill('cfg-action-model', 'cfg-action-base-url', 'action');
   bindModelBaseUrlAutoFill('cfg-vision-model', 'cfg-vision-base-url', 'llm');
   bindModelBaseUrlAutoFill('cfg-semantic-model', 'cfg-semantic-base-url', 'embed');
 
@@ -14184,6 +14186,14 @@ OUTPUT FORMAT:
     if (saveAutoTokensEl) {
       config.autocomplete.maxTokens = clampNumber(saveAutoTokensEl.value, 10, 100, 30);
     }
+
+    if (!config.action) config.action = {};
+    const saveActionBaseEl = document.getElementById('cfg-action-base-url');
+    if (saveActionBaseEl) config.action.baseUrl = saveActionBaseEl.value.trim();
+    const saveActionModelEl = document.getElementById('cfg-action-model');
+    if (saveActionModelEl) config.action.model = saveActionModelEl.value.trim() || 'gemini-decision-1';
+    const saveActionKeyEl = document.getElementById('cfg-action-api-key');
+    if (saveActionKeyEl) config.action.apiKey = saveActionKeyEl.value.trim();
 
     config.vision.baseUrl = document.getElementById('cfg-vision-base-url').value.trim() || 'https://generativelanguage.googleapis.com';
     config.vision.model = document.getElementById('cfg-vision-model').value.trim() || 'gemini-flash-lite-latest';
@@ -15063,18 +15073,25 @@ OUTPUT FORMAT:
   }
 
   // The two places a dragged file can go, drawn over the window while it is dragged (js/drop_zones.js): open, and insert a link.
-  const dropZones = window.DropZones ? window.DropZones.create({
-    document: document,
-    tr: (key, params) => t(key, params),
-    canLink: () => { const ed = dropLinkEditor(); return !!(ed && ed.offsetParent !== null); }
-  }) : null;
+  let dropZonesInstance = null;
+  function getDropZones() {
+    if (!dropZonesInstance && window.DropZones) {
+      dropZonesInstance = window.DropZones.create({
+        document: document,
+        tr: (key, params) => t(key, params),
+        canLink: () => { const ed = dropLinkEditor(); return !!(ed && ed.offsetParent !== null); }
+      });
+    }
+    return dropZonesInstance;
+  }
 
   window.addEventListener('dragover', (e) => {
-    if (dropZones && window.DropZones.hasFiles(e.dataTransfer)) {
+    const dz = getDropZones();
+    if (dz && window.DropZones.hasFiles(e.dataTransfer)) {
       e.preventDefault();
       e.stopPropagation();
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
-      dropZones.onDragOver(e);
+      dz.onDragOver(e);
       return;
     }
     const editor = editorUnderPointer(e);
@@ -15094,7 +15111,8 @@ OUTPUT FORMAT:
   });
   window.addEventListener('dragend', (e) => {
     if (window.FileAnchor) window.FileAnchor.handleDragLeave(e);
-    if (dropZones) dropZones.hide();
+    const dz = getDropZones();
+    if (dz) dz.hide();
   });
 
   // A file dropped on the tab bar or the header opens as a note only when it is text: a picture, a PDF or an archive became a tab of
@@ -15269,8 +15287,9 @@ OUTPUT FORMAT:
   window.addEventListener('drop', async (e) => {
     // The zone the file was dropped on, when the zones were shown ('link' | 'open'); without them the old rule: on the text it is a
     // link, anywhere else the file opens.
-    const zone = dropZones ? dropZones.zoneOf(e) : '';
-    if (dropZones) dropZones.hide();
+    const dz = getDropZones();
+    const zone = dz ? dz.zoneOf(e) : '';
+    if (dz) dz.hide();
     const editor = zone === 'link' ? dropLinkEditor() : (zone === 'open' ? null : editorUnderPointer(e));
     // The files are taken now: a drop's data cannot be read after the first await.
     const dropped = e.dataTransfer && e.dataTransfer.files ? Array.from(e.dataTransfer.files) : [];
@@ -16902,7 +16921,51 @@ OUTPUT FORMAT:
         return bar;
       }
 
+      const pendingDecisionRequests = new Map();
+      window.__onLLMDecisionResult = (reqId, choiceId, reason, by, ok) => {
+        const settle = pendingDecisionRequests.get(reqId);
+        if (!settle) return;
+        pendingDecisionRequests.delete(reqId);
+        settle({ choiceId: String(choiceId || ''), reason: String(reason || ''), by: String(by || ''), ok: !!ok });
+      };
+
       const deps = {
+        queryDecision: async ({ input, choices, fallback, prompt, timeoutMs }) => {
+          if (!window.backend || typeof window.backend.queryDecisionAsync !== 'function') {
+            return { choiceId: String(fallback || ''), reason: 'backend unavailable', by: 'fallback', ok: false };
+          }
+          const reqId = genReqId('dec_');
+          const actionCfg = JSON.stringify((config && config.action) || {});
+          const defaultCfg = JSON.stringify((config && config.text) || {});
+          return new Promise((resolve) => {
+            const ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : 15000;
+            const timer = setTimeout(() => {
+              if (pendingDecisionRequests.delete(reqId)) {
+                resolve({ choiceId: String(fallback || ''), reason: 'timeout', by: 'timeout', ok: false });
+              }
+            }, ms + 2000);
+            pendingDecisionRequests.set(reqId, (res) => {
+              clearTimeout(timer);
+              resolve(res);
+            });
+            try {
+              window.backend.queryDecisionAsync(
+                reqId,
+                actionCfg,
+                defaultCfg,
+                String(input || ''),
+                Array.isArray(choices) ? choices : [],
+                String(fallback || ''),
+                String(prompt || ''),
+                ms
+              );
+            } catch (err) {
+              clearTimeout(timer);
+              pendingDecisionRequests.delete(reqId);
+              resolve({ choiceId: String(fallback || ''), reason: String((err && err.message) || err), by: 'error', ok: false });
+            }
+          });
+        },
         locale: (config && config.general && config.general.language === 'en') ? 'en' : 'ja',
         getText: () => (window.__sykiRPC ? window.__sykiRPC.getBuffer().text : ''),
         setText: (text) => { if (window.__sykiRPC) window.__sykiRPC.writeText(text, 'set'); },

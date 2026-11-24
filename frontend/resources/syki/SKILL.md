@@ -32,10 +32,12 @@ Windows-native (Rust + WebView2) fast-boot memo & workflow platform. Core stays 
 - Never hardcode raw hex/rgb colors (`#hex` / `rgb()`) in CSS/JS (emits `plugin check` warning; use `tokens.css` vars). Never declare unknown `permissions`.
 
 ## 5. External Agent Control (CLI / JSON-RPC)
+- If `syki-cli` is not on `PATH`, run `<repo>\target\release\syki-cli.exe` (or `<exe_dir>\syki-cli.exe`).
 - Pipe stdin to daily scrap: `<cmd> | syki-cli`
 - Invoke `exposeRpc: true` plugin command headlessly (auto-reattaches from 3–5MB `Detached` tray without stealing focus):
   `syki-cli plugin run <cmd-id> --args '{"k":"v"}'` (add `--show` to focus window)
 - Dev hot-reload & health: `syki-cli plugin reload <id>` / `syki-cli plugin status [id]` / `syki-cli plugin list`
+- Official sample plugins in `examples/plugins/` (e.g. `gemini-media/plugin.js` for PDF/Video/YouTube analysis, diarized transcription, and TTS via `gemini-api` CLI).
 
 ## 6. Mandatory Completion Gate (Before Handing Off Any Plugin)
 ```powershell

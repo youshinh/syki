@@ -11,12 +11,12 @@
 | `syki-cli info` | 稼働インスタンスの `dataDir` / `instanceId` / IPC 状態を JSON 出力 |
 | `syki-cli buffer get|set|append` | アクティブエディタのテキスト取得・設定・追記 |
 | `syki-cli tab ...` | タブ一覧・新規作成・切替・PDF 出力（`syki-cli tab pdf`） |
-| `syki-cli ui ...` | ウィンドウ表示・前面化・UI 制御 |
+| `syki-cli ui ...` | ウィンドウ表示・前面化・UI 制御（`activate`, `new-tab`, `open <path>`, `state`, `set <json>`, `panel <name>` ※`find\|replace\|scraps_search\|settings\|shortcuts\|all_tabs\|command_palette\|about`） |
 | `syki-cli scrap dir|append|search` | スクラップ保存先取得・追記・検索 |
-| `syki-cli ocr run <image>` | Vision LLM による画像 AI OCR 実行（`ocr <image>` エイリアス可） |
+| `syki-cli ocr run <image>` | Vision LLM による画像 AI OCR 実行（`ocr <image>` エイリアス可、`queued: true` を返却） |
 | `syki-cli speech status` | ローカル STT 状態確認 |
 | `syki-cli pty list|presets` | 組み込み ConPTY ターミナル一覧・プリセット取得 |
-| `syki-cli config ...` | `config.json` の参照・更新 |
+| `syki-cli config get [key] / set <key> <val>` | `config.json` の参照・更新（`set` は許可済み安全キーのみ。`llm.apiKey` 等の設定は設定 UI または `config.json` を直接編集） |
 | `syki-cli plugin ...` | プラグインの静的検査・一覧・状態確認・リロード・コマンド実行 |
 | `<cmd> \| syki-cli` | 標準出力を日次スクラップへ直接パイプ投入（最大 10MB） |
 

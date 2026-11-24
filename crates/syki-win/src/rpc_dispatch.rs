@@ -782,6 +782,15 @@ impl CoreState {
 
             "detectLLMProvider" => RpcResponse::ok(&req.id, llm::detect_llm_provider()),
 
+            "fetchModels" => {
+                let base_url = param_str(&req.params, 0, "baseUrl").unwrap_or_default();
+                let api_key = param_str(&req.params, 1, "apiKey").unwrap_or_default();
+                match llm::fetch_models_sync(&base_url, &api_key) {
+                    Ok(val) => RpcResponse::ok(&req.id, val),
+                    Err(err) => RpcResponse::err(&req.id, err),
+                }
+            }
+
             "queryLLMAsync" => {
                 let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
                 let prompt = param_str(&req.params, 1, "prompt").unwrap_or_default();
@@ -983,8 +992,10 @@ impl CoreState {
                 let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
                 let prompt = param_str(&req.params, 1, "prompt").unwrap_or_default();
                 let config_json = param_str(&req.params, 2, "config").unwrap_or_default();
+                let note_path = param_str(&req.params, 3, "notePath").unwrap_or_default();
+                let data_dir = self.env.data_dir.clone();
                 let sender = self.event_sender.lock().expect("event_sender mutex").clone();
-                llm::generate_image_async(req_id, prompt, config_json, sender);
+                llm::generate_image_async(req_id, prompt, config_json, note_path, data_dir, sender);
                 RpcResponse::ok(&req.id, json!(true))
             }
 

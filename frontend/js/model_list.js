@@ -9,30 +9,44 @@
 
   const GOOGLE_HOST = 'generativelanguage.googleapis.com';
   const GOOGLE_BASE = 'https://' + GOOGLE_HOST;
+  const ANTHROPIC_HOST = 'api.anthropic.com';
 
   function isGoogle(baseUrl) {
     return String(baseUrl || '').includes(GOOGLE_HOST);
+  }
+  function isAnthropic(baseUrl) {
+    return String(baseUrl || '').includes(ANTHROPIC_HOST);
   }
   function isOllama(baseUrl) {
     return /:11434(\/|$)/.test(String(baseUrl || ''));
   }
 
   // The URL that lists the models of baseUrl. Gemini wants the host alone (a base URL of the settings may end in /v1beta), Ollama has
-  // /api/tags, and an OpenAI-compatible server has <base>/v1/models (or <base>/models when the base already ends in /v1).
+  // /api/tags, Anthropic has /v1/models?limit=1000, and an OpenAI-compatible server has <base>/v1/models (or <base>/models when the base already ends in /v1).
   function listUrl(baseUrl, apiKey) {
     const base = String(baseUrl || '').trim().replace(/\/+$/, '');
     if (isGoogle(base)) {
       return `${GOOGLE_BASE}/v1beta/models?pageSize=1000${apiKey ? `&key=${encodeURIComponent(apiKey)}` : ''}`;
+    }
+    if (isAnthropic(base)) {
+      if (base.endsWith('/models')) return `${base}?limit=1000`;
+      return /\/v\d+$/.test(base) ? `${base}/models?limit=1000` : `${base}/v1/models?limit=1000`;
     }
     if (isOllama(base)) return base.replace(/\/(v1|api)$/, '') + '/api/tags';
     if (base.endsWith('/models')) return base;
     return /\/v\d+$/.test(base) ? `${base}/models` : `${base}/v1/models`;
   }
 
-  // [{ id, label, methods }] from the answer of any of the three kinds of server.
+  // [{ id, label, methods }] from the answer of any of the supported servers.
   function parse(data) {
     if (!data || typeof data !== 'object') return [];
-    if (Array.isArray(data.data)) return data.data.map(m => ({ id: String(m.id || ''), label: '', methods: [] })).filter(m => m.id);
+    if (Array.isArray(data.data)) {
+      return data.data.map(m => {
+        const id = String(m.id || '');
+        const label = m.display_name ? `${m.display_name} (${id})` : '';
+        return { id, label, methods: [] };
+      }).filter(m => m.id);
+    }
     if (!Array.isArray(data.models)) return [];
     return data.models.map(m => {
       const id = String(m.name || m.id || '').replace(/^models\//, '');
@@ -43,9 +57,9 @@
     }).filter(m => m.id);
   }
 
-  const IMAGE_RE = /image|imagen|banana/i;
+  const IMAGE_RE = /image|imagen|banana|dall-e/i;
   const EMBED_RE = /embed|bge|e5-|minilm/i;
-  const NOT_TEXT_RE = /image|imagen|banana|embed|tts|transcribe|native-audio|live|veo|lyria|aqa/i;
+  const NOT_TEXT_RE = /image|imagen|banana|dall-e|embed|tts|transcribe|whisper|moderation|sora|realtime|native-audio|live|veo|lyria|aqa/i;
 
   // Whether model m fits the field kind: 'text' (chat and vision), 'voice', 'image' or 'embed'. Gemini says what a model supports; the other
   // servers do not, so their names decide.
@@ -65,9 +79,18 @@
   }
 
   async function fetchModels(baseUrl, apiKey, fetchImpl) {
+    if (!fetchImpl && global.backend && typeof global.backend.fetchModels === 'function') {
+      const data = await global.backend.fetchModels(baseUrl, apiKey || '');
+      return parse(data);
+    }
     const doFetch = fetchImpl || global.fetch;
     const headers = {};
-    if (apiKey && !isGoogle(baseUrl)) headers.Authorization = `Bearer ${apiKey}`;
+    if (apiKey && isAnthropic(baseUrl)) {
+      headers['x-api-key'] = apiKey;
+      headers['anthropic-version'] = '2023-06-01';
+    } else if (apiKey && !isGoogle(baseUrl)) {
+      headers.Authorization = `Bearer ${apiKey}`;
+    }
     const res = await doFetch(listUrl(baseUrl, apiKey), { headers: headers });
     if (!res.ok) throw new Error(`HTTP ${res.status}${res.statusText ? ': ' + res.statusText : ''}`);
     return parse(await res.json());
@@ -105,7 +128,7 @@
     if (!dl) return 0;
     const ep = field.endpoint() || {};
     if (!ep.baseUrl) throw new Error('no base URL');
-    if (isGoogle(ep.baseUrl) && !ep.apiKey) throw new Error('no API key');
+    if ((isGoogle(ep.baseUrl) || isAnthropic(ep.baseUrl)) && !ep.apiKey) throw new Error('no API key');
     fallbackOf(dl);
     const models = filterFor(field.kind, await fetchModels(ep.baseUrl, ep.apiKey));
     fill(dl, models);

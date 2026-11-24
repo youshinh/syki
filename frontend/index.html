@@ -1253,6 +1253,36 @@
               </div>
             </details>
 
+            <!-- Decision Model (syki.flow.decide) -->
+            <div class="settings-section-header" style="margin-top: 18px;">
+              <h4 data-i18n="sectionDecisionModel">Decision Model (syki.flow.decide)</h4>
+            </div>
+            <details class="ai-override-box">
+              <summary><span data-i18n="aiOverrideSummary">Connection &amp; model override</span><span class="ai-override-badge"></span></summary>
+              <div class="ai-override-body">
+                <div class="form-group">
+                  <label for="cfg-action-base-url" data-i18n="apiBaseUrlLabel">API Base URL:</label>
+                  <input type="text" id="cfg-action-base-url" placeholder="https://generativelanguage.googleapis.com (blank = inherit text model)">
+                </div>
+                <div class="form-group">
+                  <label for="cfg-action-model" data-i18n="modelNameLabel">Model Name:</label>
+                  <input type="text" id="cfg-action-model" list="action-model-suggestions" placeholder="gemini-decision-1">
+                  <datalist id="action-model-suggestions">
+                    <option value="gemini-decision-1">Gemini Decision 1 (Google / 0-output-token)</option>
+                    <option value="jev-latest">JEV Latest (TypeSafe)</option>
+                    <option value="gpt-6-luna">GPT-6 Luna (OpenAI Decisions)</option>
+                    <option value="gemini-flash-lite-latest">Gemini Flash Lite (Google Cloud)</option>
+                    <option value="qwen2.5:latest">Qwen 2.5 (Ollama / Local)</option>
+                  </datalist>
+                  <small data-i18n="actionModelHint">Blank = gemini-decision-1. Decision models: gemini-decision-1 (Google), jev-latest (TypeSafe) or gpt-6-luna (OpenAI Decisions API).</small>
+                </div>
+                <div class="form-group">
+                  <label for="cfg-action-api-key" data-i18n="apiKeyLabel">API Key (for cloud APIs):</label>
+                  <input type="password" id="cfg-action-api-key" placeholder="sk-... or AIzaSy... (leave empty to reuse key)">
+                </div>
+              </div>
+            </details>
+
             <!-- Vision OCR & Analysis -->
             <div class="settings-section-header" style="margin-top: 18px;">
               <h4 data-i18n="sectionVisionOCR">Image OCR & Vision</h4>

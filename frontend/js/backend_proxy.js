@@ -65,6 +65,7 @@
 
     // F04/F05/F11/F12/F23(AI-OCR) Inference, assets & CLI shell pipe
     'detectLLMProvider',
+    'fetchModels',
     'queryLLMAsync',
     'queryDecisionAsync',
     'cancelLLMRequest',

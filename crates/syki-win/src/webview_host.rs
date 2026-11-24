@@ -14,7 +14,7 @@ use syki_core::rpc::{RpcEvent, RpcRequest, RpcResponse};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2, ICoreWebView2Controller,
     ICoreWebView2Controller2, ICoreWebView2Environment, ICoreWebView2EnvironmentOptions,
-    ICoreWebView2_19, ICoreWebView2_3, COREWEBVIEW2_COLOR,
+    ICoreWebView2Settings3, ICoreWebView2_19, ICoreWebView2_3, COREWEBVIEW2_COLOR,
     COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
     COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
 };
@@ -23,7 +23,7 @@ use webview2_com::{
     CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
     TrySuspendCompletedHandler, WebMessageReceivedEventHandler, WebResourceRequestedEventHandler,
 };
-use windows::core::{PCWSTR, PWSTR};
+use windows::core::{Interface, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
     COLORREF, E_POINTER, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM,
 };
@@ -557,6 +557,9 @@ fn attach_webview_controller(
             let settings = webview.Settings()?;
             settings.SetAreDefaultContextMenusEnabled(false)?;
             settings.SetAreDevToolsEnabled(false)?;
+            if let Ok(settings3) = settings.cast::<ICoreWebView2Settings3>() {
+                let _ = settings3.SetAreBrowserAcceleratorKeysEnabled(false);
+            }
         }
     }
 
