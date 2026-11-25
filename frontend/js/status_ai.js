@@ -70,11 +70,8 @@
   // The three helpers as the popover shows them. Read defensively: an old config file lacks whole groups.
   function optionStates(cfg) {
     const c = cfg || {};
-    const suggestOn = !(c.action && c.action.enabled === false);
     return {
       prediction: !!(c.autocomplete && c.autocomplete.enabled),
-      suggestions: suggestOn,
-      suggestionsManual: suggestOn && !!(c.action && c.action.manualOnly),
       voice: !(c.voice && c.voice.refine && c.voice.refine.enabled === false)
     };
   }
@@ -234,14 +231,10 @@
 
       const body = el('div', 'status-ai-body');
       const prediction = makeSwitch('stat-autocomplete');
-      const suggestions = makeSwitch('stat-action');
-      const manual = makeSwitch('stat-action-manual', 'status-ai-sub');
       const voice = makeSwitch('stat-voice-refine');
       const error = el('div', 'status-ai-error-line hidden');
       error.setAttribute('role', 'status');
       body.appendChild(prediction.btn);
-      body.appendChild(suggestions.btn);
-      body.appendChild(manual.btn);
       body.appendChild(voice.btn);
       body.appendChild(error);
 
@@ -270,8 +263,6 @@
         });
       };
       bind(prediction.btn, actions.prediction);
-      bind(suggestions.btn, actions.suggestions);
-      bind(manual.btn, actions.suggestionsManual);
       bind(voice.btn, actions.voice);
       settings.addEventListener('click', function () {
         close({ focus: false });
@@ -280,7 +271,7 @@
       pop.addEventListener('keydown', onPopKey);
       pop.addEventListener('focusout', onFocusOut);
 
-      parts = { label: label, chip: chip, prediction: prediction, suggestions: suggestions, manual: manual, voice: voice, error: error, settings: settings, hintText: hintText };
+      parts = { label: label, chip: chip, prediction: prediction, voice: voice, error: error, settings: settings, hintText: hintText };
     }
 
     function drawSwitch(row, on, name, hintText) {
@@ -299,10 +290,6 @@
       if (st.kind === 'unset') setText(parts.chip, t('askSetupNeeded'));
       else setText(parts.chip, t(st.kind === 'local' ? 'aiPopModelLocal' : 'aiPopModelCloud', { model: st.model }));
       drawSwitch(parts.prediction, opts.prediction, t('aiOptPrediction'), t('aiOptPredictionHint'));
-      drawSwitch(parts.suggestions, opts.suggestions, t('aiOptSuggestions'), t('aiOptSuggestionsHint'));
-      drawSwitch(parts.manual, opts.suggestionsManual, t('aiOptSuggestionsManual', { key: deps.getManualKey ? deps.getManualKey() : 'Ctrl+J' }), '');
-      parts.manual.btn.classList.toggle('hidden', !opts.suggestions);
-      parts.manual.hint.classList.add('hidden');
       drawSwitch(parts.voice, opts.voice, t('aiOptVoice'), t('aiOptVoiceHint'));
       if (predict.state === 'error') {
         setText(parts.error, t('aiPopPredictError', { error: predict.message || '' }));

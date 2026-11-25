@@ -16,15 +16,13 @@ export default {
     assert.equal(await shown(s, 'status-ai-pop'), false, 'the popover is closed at first');
     assert.equal(await s.ev("document.getElementById('stat-ai').getAttribute('aria-expanded')"), 'false');
 
-    t.step('click opens the popover with three switches');
+    t.step('click opens the popover with two switches');
     await click(s, 'stat-ai');
     await waitShown(s, 'status-ai-pop');
     assert.equal(await s.ev("document.getElementById('stat-ai').getAttribute('aria-expanded')"), 'true');
-    assert.equal(await s.ev("document.querySelectorAll('#status-ai-pop [role=switch]').length"), 4, 'prediction, suggestions, its manual sub-switch, voice');
+    assert.equal(await s.ev("document.querySelectorAll('#status-ai-pop [role=switch]').length"), 2, 'prediction and voice');
     assert.equal(await aria(s, 'stat-autocomplete'), 'true', 'text prediction starts on (the demo config)');
-    assert.equal(await aria(s, 'stat-action'), 'true');
-    assert.equal(await shown(s, 'stat-action-manual'), true, 'the "only when I press the key" sub-switch shows while Suggestions is on');
-    assert.equal(await aria(s, 'stat-action-manual'), 'false');
+    assert.equal(await aria(s, 'stat-voice-refine'), 'true');
     await waitFocus(s, 'stat-autocomplete');
 
     t.step('a switch flips the setting and saves it');
@@ -35,14 +33,10 @@ export default {
     assert.equal((await lastSavedConfig(s)).autocomplete.enabled, false, 'and the saved settings too');
     assert.ok((await s.state()).toasts.length > 0, 'a message told what changed');
 
-    t.step('Suggestions off hides the sub-switch');
-    await click(s, 'stat-action');
-    await s.waitFor("document.getElementById('stat-action').getAttribute('aria-checked') === 'false'");
-    assert.equal(await shown(s, 'stat-action-manual'), false, 'the sub-switch is gone');
-    assert.equal((await liveConfig(s)).action.enabled, false);
-    await click(s, 'stat-action'); // back on
-    await s.waitFor("document.getElementById('stat-action').getAttribute('aria-checked') === 'true'");
-    assert.equal(await shown(s, 'stat-action-manual'), true);
+    t.step('Voice tidy-up switch flips the setting');
+    await click(s, 'stat-voice-refine');
+    await s.waitFor("document.getElementById('stat-voice-refine').getAttribute('aria-checked') === 'false'");
+    assert.equal((await liveConfig(s)).voice.refine.enabled, false);
 
     t.step('Escape closes it and the focus goes back to the item');
     await s.key('Escape');

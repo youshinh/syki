@@ -6451,11 +6451,8 @@
       t,
       getConfig: () => config,
       isConfigured: () => isLlmConfigured(false),
-      getManualKey: suggestionsKeyLabel,
       actions: {
         prediction: toggleAutocomplete,
-        suggestions: toggleSuggestions,
-        suggestionsManual: toggleSuggestionsManual,
         voice: toggleVoiceRefine,
         openSettings: () => {
           openSettings();
