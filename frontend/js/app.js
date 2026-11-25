@@ -2,6 +2,10 @@
 (function () {
   'use strict';
 
+  if (window.chrome && window.chrome.webview && typeof window.chrome.webview.postMessage === 'function') {
+    try { window.chrome.webview.postMessage({ type: '__perf_trace', phase: 'js_exec_start' }); } catch (_) {}
+  }
+
   // Code-level startup pacing parameters (non-user-facing tuning knobs for boot responsiveness).
   const __perfStartup = (typeof window !== 'undefined' && window.__sykiPreload && window.__sykiPreload.perf && window.__sykiPreload.perf.startup) || {};
   const BOOT_POLICY = Object.freeze(Object.assign({
@@ -14680,10 +14684,6 @@ OUTPUT FORMAT:
     if (typeof window !== 'undefined') window.__sykiApplyLangRan = false;
     applyLanguage({ deferHiddenModals: true });
     applyChromeLayout(); // synchronous, before the first paint: no flash of hidden icons
-    if (typeof window === 'undefined' || !window.__sykiApplyLangRan) {
-      updateShortcutLabels();
-      updateActionStatus();
-    }
   }
 
   // The scrap settings that only the older flat keys of config.json decide (scrap_dir, git_sync_enabled, ...), as `scraps.*` names.
@@ -15578,6 +15578,9 @@ OUTPUT FORMAT:
 
   // App Startup Entrypoint (Zero-Latency Instant Paint)
   function initApp() {
+    if (window.chrome && window.chrome.webview && typeof window.chrome.webview.postMessage === 'function') {
+      try { window.chrome.webview.postMessage({ type: '__perf_trace', phase: 'init_app_start' }); } catch (_) {}
+    }
     loadLocalConfigSync();
 
     // 1. Instant Synchronous First Paint:
@@ -15655,6 +15658,9 @@ OUTPUT FORMAT:
       if (deferredModalI18nPending) {
         deferredModalI18nPending = false;
         applyLanguage();
+      } else if (typeof window === 'undefined' || !window.__sykiApplyLangRan) {
+        updateShortcutLabels();
+        updateActionStatus();
       }
     };
     if (typeof requestAnimationFrame === 'function') {

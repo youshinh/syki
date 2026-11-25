@@ -582,6 +582,7 @@ fn attach_webview_controller(
 
     let env_for_res = environment.clone();
     let dyn_for_res = state.dynamic_handler.clone();
+    let startup_t0_for_res = state.startup_t0;
     let mut res_token: i64 = 0;
     unsafe {
         webview.add_WebResourceRequested(
@@ -610,6 +611,11 @@ fn attach_webview_controller(
                     .split('?')
                     .next()
                     .unwrap_or("");
+                if rel_path.is_empty() || rel_path == "index.html" {
+                    write_perf_trace_event("html_req", startup_t0_for_res.elapsed().as_secs_f64() * 1000.0);
+                } else if rel_path == "__boot_bundle.js" {
+                    write_perf_trace_event("js_req", startup_t0_for_res.elapsed().as_secs_f64() * 1000.0);
+                }
                 let headers = build_response_headers(status, mime, rel_path);
                 let reason_w = CoTaskMemPWSTR::from(reason_phrase_for(status));
                 let headers_w = CoTaskMemPWSTR::from(headers.as_str());
@@ -669,12 +675,16 @@ fn attach_webview_controller(
                 let mut raw_pwstr = PWSTR::null();
                 if args.WebMessageAsJson(&mut raw_pwstr).is_ok() {
                     let raw_json = CoTaskMemPWSTR::from(raw_pwstr).to_string();
-                    if raw_json.contains("\"__perf_trace\"") && raw_json.contains("\"app_ready\"") {
-                        write_perf_trace_event(
-                            "app_ready",
-                            startup_t0_for_msg.elapsed().as_secs_f64() * 1000.0,
-                        );
-                        return Ok(());
+                    if raw_json.contains("\"__perf_trace\"") {
+                        for phase in ["js_exec_start", "init_app_start", "app_ready"] {
+                            if raw_json.contains(phase) {
+                                write_perf_trace_event(
+                                    phase,
+                                    startup_t0_for_msg.elapsed().as_secs_f64() * 1000.0,
+                                );
+                                return Ok(());
+                            }
+                        }
                     }
                     if let Ok(tx) = rpc_tx.lock() {
                         let _ = tx.send(raw_json);

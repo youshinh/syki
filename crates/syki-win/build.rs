@@ -249,10 +249,11 @@ fn build_bundled_assets(frontend_root: &Path) -> Option<(Vec<u8>, Vec<u8>, Vec<u
     };
     let boot_bundle_js = format!("{deferred_hint}{bundled_js}");
     let bundle_hash = fnv1a_hex(boot_bundle_js.as_bytes());
-    let script_tag = format!("<script src=\"/__boot_bundle.js?v={bundle_hash}\"></script>\n");
+    let script_tag = format!("<meta charset=\"UTF-8\">\n<script defer src=\"/__boot_bundle.js?v={bundle_hash}\"></script>\n");
     let final_html = out_html
+        .replace("<meta charset=\"UTF-8\">\n", &script_tag)
         .replace("  <!--SYKI_BUNDLED_CSS-->\n", &style_tag)
-        .replace("  <!--SYKI_BUNDLED_JS-->\n", &script_tag);
+        .replace("  <!--SYKI_BUNDLED_JS-->\n", "");
     Some((
         final_html.into_bytes(),
         boot_bundle_js.into_bytes(),
