@@ -19,13 +19,12 @@
 (function (global) {
   'use strict';
 
-  const REPO = 'https://github.com/youshinh/syki-sok';
+  const REPO = 'https://github.com/youshinh/syki';
   const LINKS = Object.freeze({
     repo: REPO,
     releases: REPO + '/releases',
     issues: REPO + '/issues',
-    license: REPO + '/blob/main/LICENSE',
-    manual: 'https://youshinh.github.io/syki-sok/'
+    license: REPO + '/blob/main/LICENSE'
   });
 
   // ---- pure helpers (exported for Node tests) -----------------------------------------------
@@ -248,7 +247,6 @@
     const links = make('div', 'about-links');
     links.appendChild(link(host, LINKS.repo, host.t('aboutLinkGitHub')));
     links.appendChild(link(host, LINKS.releases, host.t('aboutLinkReleases')));
-    links.appendChild(link(host, LINKS.manual, host.t('aboutLinkManual')));
     links.appendChild(link(host, LINKS.issues, host.t('aboutLinkIssues')));
     links.appendChild(link(host, LINKS.license, host.t('aboutLinkLicense')));
     license.appendChild(links);

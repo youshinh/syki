@@ -168,11 +168,11 @@ const button = (label) => body().find((n) => n.tagName === 'BUTTON' && n.textCon
 
 // ================================ pure helpers ========================================================
 test('releaseNotesUrl: a version becomes its release page; anything odd falls back to the list of releases', () => {
-  assert.strictEqual(AD.releaseNotesUrl('1.11.0'), 'https://github.com/youshinh/syki-sok/releases/tag/v1.11.0');
-  assert.strictEqual(AD.releaseNotesUrl('v1.11.0'), 'https://github.com/youshinh/syki-sok/releases/tag/v1.11.0');
-  assert.strictEqual(AD.releaseNotesUrl('2.0.0-rc.1'), 'https://github.com/youshinh/syki-sok/releases/tag/v2.0.0-rc.1');
+  assert.strictEqual(AD.releaseNotesUrl('1.11.0'), 'https://github.com/youshinh/syki/releases/tag/v1.11.0');
+  assert.strictEqual(AD.releaseNotesUrl('v1.11.0'), 'https://github.com/youshinh/syki/releases/tag/v1.11.0');
+  assert.strictEqual(AD.releaseNotesUrl('2.0.0-rc.1'), 'https://github.com/youshinh/syki/releases/tag/v2.0.0-rc.1');
   for (const bad of ['', null, undefined, '../../evil', '1.0/../x', 'x y', '1.0\n2', 'javascript:alert(1)', 'a'.repeat(80), '<script>']) {
-    assert.strictEqual(AD.releaseNotesUrl(bad), 'https://github.com/youshinh/syki-sok/releases', 'not used in a URL: ' + JSON.stringify(bad));
+    assert.strictEqual(AD.releaseNotesUrl(bad), 'https://github.com/youshinh/syki/releases', 'not used in a URL: ' + JSON.stringify(bad));
   }
 });
 
@@ -241,8 +241,8 @@ test('open: builds the version, updates, folders, license, links and the signing
   assert.ok(t.includes(EN.aboutSignNone), 'Windows: not code-signed');
   const links = body().findAll((n) => n.hasClass('about-link')).map((n) => n.getAttribute('href'));
   assert.deepStrictEqual(links, [
-    'https://github.com/youshinh/syki-sok', 'https://github.com/youshinh/syki-sok/releases', 'https://youshinh.github.io/syki-sok/',
-    'https://github.com/youshinh/syki-sok/issues', 'https://github.com/youshinh/syki-sok/blob/main/LICENSE'
+    'https://github.com/youshinh/syki', 'https://github.com/youshinh/syki/releases',
+    'https://github.com/youshinh/syki/issues', 'https://github.com/youshinh/syki/blob/main/LICENSE'
   ]);
   assert.strictEqual(body().find((n) => n.hasClass('about-icon')).getAttribute('alt'), '', 'the icon is decoration');
   assert.strictEqual(body().find((n) => n.id === 'about-update-status').getAttribute('role'), 'status', 'a check result is announced');
@@ -325,7 +325,7 @@ test('Check now: shows "Checking...", then the answer; a newer version brings th
   assert.strictEqual(button(EN.aboutCheckNow).getAttribute('aria-disabled'), 'false');
   assert.ok(body().find((n) => n.id === 'about-update-status').hasClass('is-newer'));
   button(EN.aboutReleaseNotes).click();
-  assert.deepStrictEqual(calls.external, ['https://github.com/youshinh/syki-sok/releases/tag/v1.11.0']);
+  assert.deepStrictEqual(calls.external, ['https://github.com/youshinh/syki/releases/tag/v1.11.0']);
   host.checkNow = async () => { state.status = 'error'; };
   button(EN.aboutCheckNow).click();
   await settle();
@@ -452,7 +452,7 @@ test('links open through the host (never navigate the app window)', async () => 
   const a = body().find((n) => n.hasClass('about-link'));
   const ev = a.fire('click');
   assert.ok(ev.defaultPrevented, 'the click does not navigate');
-  assert.deepStrictEqual(calls.external, ['https://github.com/youshinh/syki-sok']);
+  assert.deepStrictEqual(calls.external, ['https://github.com/youshinh/syki']);
   AD.close();
 });
 

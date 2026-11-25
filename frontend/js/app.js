@@ -776,7 +776,6 @@
   const helpMenuUpdate = document.getElementById('help-menu-update');
   const helpMenuUpdateText = document.getElementById('help-menu-update-text');
   const btnHelpMenuNotes = document.getElementById('help-menu-notes');
-  const btnHelpMenuManual = document.getElementById('help-menu-manual');
   const btnHelpMenuAbout = document.getElementById('help-menu-about');
 
   const paneGeneral = document.getElementById('pane-general');
@@ -9928,13 +9927,6 @@ OUTPUT FORMAT:
         action: () => { openSettings(); switchSettingsTab('general'); }
       },
       {
-        id: 'cmd_help',
-        title: t('cmdPaletteHelp'),
-        desc: t('cmdPaletteHelpDesc'),
-        iconSvg: icon('<circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>'),
-        action: () => openHelpDocs()
-      },
-      {
         id: 'cmd_about',
         title: t('cmdPaletteAbout'),
         desc: t('cmdPaletteAboutDesc'),
@@ -15821,7 +15813,6 @@ OUTPUT FORMAT:
   // Nothing here runs at start-up except the one timer that asks GitHub for the latest release number, and only when
   // general.checkUpdates is not false. About syki::sok > Check now works whatever that setting says.
   const UPDATE_API_URL = 'https://api.github.com/repos/youshinh/syki/releases/latest';
-  const HELP_DOCS_URL = 'https://youshinh.github.io/syki-sok/';
   const UPDATE_CHECK_TIMEOUT_MS = 15000;
 
   // What the last check found. status: idle (never asked) | checking | current | newer | error. The dot on the Help button, the Help
@@ -15849,7 +15840,7 @@ OUTPUT FORMAT:
   }
 
   function releaseNotesUrlFor(version) {
-    return (window.AboutDialog && window.AboutDialog.releaseNotesUrl) ? window.AboutDialog.releaseNotesUrl(version) : 'https://github.com/youshinh/syki-sok/releases';
+    return (window.AboutDialog && window.AboutDialog.releaseNotesUrl) ? window.AboutDialog.releaseNotesUrl(version) : 'https://github.com/youshinh/syki/releases';
   }
 
   // The dot on the Help button: shown for a newer version the person has not looked at yet (opening the Help menu counts as looking).
@@ -15951,15 +15942,11 @@ OUTPUT FORMAT:
     }
   }
 
-  function openHelpDocs() {
-    openExternalUrl(HELP_DOCS_URL);
-  }
-
   // About syki::sok (about_dialog.js). The host hands the module everything it needs, so it stays free of app.js state.
   function openAboutDialog() {
     closeHelpMenu(false);
     if (!window.AboutDialog) {
-      openHelpDocs();
+      openExternalUrl('https://github.com/youshinh/syki/releases');
       return null;
     }
     return window.AboutDialog.open({
@@ -16013,7 +16000,7 @@ OUTPUT FORMAT:
     // does what it always did.
     const rect = (helpMenu && btnHelp && typeof btnHelp.getBoundingClientRect === 'function') ? btnHelp.getBoundingClientRect() : null;
     if (!rect || (!rect.width && !rect.height)) {
-      openHelpDocs();
+      openAboutDialog();
       return;
     }
     if (isHelpMenuOpen()) {
@@ -16061,11 +16048,10 @@ OUTPUT FORMAT:
     };
     document.addEventListener('mousedown', helpMenuHandlers.down, true);
     document.addEventListener('keydown', helpMenuHandlers.key, true);
-    const first = known ? btnHelpMenuNotes : btnHelpMenuManual;
+    const first = known ? btnHelpMenuNotes : btnHelpMenuAbout;
     if (first && typeof first.focus === 'function') first.focus();
   }
 
-  if (btnHelpMenuManual) btnHelpMenuManual.onclick = () => { closeHelpMenu(false); openHelpDocs(); };
   if (btnHelpMenuAbout) btnHelpMenuAbout.onclick = () => { openAboutDialog(); };
   if (btnHelpMenuNotes) {
     btnHelpMenuNotes.onclick = () => {
