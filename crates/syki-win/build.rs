@@ -149,9 +149,26 @@ const DEFERRED_BOOT_JS: &[&str] = &[
     "js/secret_strip.js",
     "js/first_run.js",
     "js/editor_zoom.js",
+    "js/ime_guardian.js",
+    "js/disk_sync.js",
+    "js/bulk_insert.js",
+    "js/a11y.js",
+    "js/note_hash.js",
+    "js/go_text.js",
+    "js/ext_theme_sync.js",
+    "js/voice_profiles.js",
 ];
 
-fn build_bundled_assets(frontend_root: &Path) -> Option<(Vec<u8>, Vec<u8>)> {
+fn fnv1a_hex(bytes: &[u8]) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{h:016x}")
+}
+
+fn build_bundled_assets(frontend_root: &Path) -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
     let index_path = frontend_root.join("index.html");
     let raw_html = fs::read_to_string(&index_path).ok()?;
 
@@ -230,11 +247,17 @@ fn build_bundled_assets(frontend_root: &Path) -> Option<(Vec<u8>, Vec<u8>)> {
     } else {
         "window.__bootDeferredURL=\"/__boot_deferred.js\";\n"
     };
-    let script_tag = format!("<script>\n{deferred_hint}{bundled_js}</script>\n");
+    let boot_bundle_js = format!("{deferred_hint}{bundled_js}");
+    let bundle_hash = fnv1a_hex(boot_bundle_js.as_bytes());
+    let script_tag = format!("<script src=\"/__boot_bundle.js?v={bundle_hash}\"></script>\n");
     let final_html = out_html
         .replace("  <!--SYKI_BUNDLED_CSS-->\n", &style_tag)
         .replace("  <!--SYKI_BUNDLED_JS-->\n", &script_tag);
-    Some((final_html.into_bytes(), deferred_js.into_bytes()))
+    Some((
+        final_html.into_bytes(),
+        boot_bundle_js.into_bytes(),
+        deferred_js.into_bytes(),
+    ))
 }
 
 fn collect_files(root: &Path, dir: &Path, out: &mut Vec<(String, &'static str, String)>) {
@@ -278,7 +301,14 @@ fn main() {
     let mut entries = Vec::new();
     collect_files(&frontend_root, &frontend_root, &mut entries);
     let bundled = build_bundled_assets(&frontend_root);
-    if let Some((_, ref deferred_bytes)) = bundled {
+    if let Some((_, ref boot_bytes, ref deferred_bytes)) = bundled {
+        if !boot_bytes.is_empty() {
+            entries.push((
+                "/__boot_bundle.js".to_string(),
+                "application/javascript; charset=utf-8",
+                String::new(),
+            ));
+        }
         if !deferred_bytes.is_empty() {
             entries.push((
                 "/__boot_deferred.js".to_string(),
@@ -328,14 +358,21 @@ fn main() {
     for (url_path, mime, abs_path) in entries {
         assert!(!abs_path.contains('"'), "unexpected quote in path: {abs_path}");
         if url_path == "/index.html" {
-            if let Some((ref html_bytes, _)) = bundled {
+            if let Some((ref html_bytes, _, _)) = bundled {
                 emit_asset(next_idx, &url_path, mime, html_bytes, None);
                 next_idx += 1;
                 continue;
             }
         }
+        if url_path == "/__boot_bundle.js" {
+            if let Some((_, ref boot_bytes, _)) = bundled {
+                emit_asset(next_idx, &url_path, mime, boot_bytes, None);
+                next_idx += 1;
+                continue;
+            }
+        }
         if url_path == "/__boot_deferred.js" {
-            if let Some((_, ref deferred_bytes)) = bundled {
+            if let Some((_, _, ref deferred_bytes)) = bundled {
                 emit_asset(next_idx, &url_path, mime, deferred_bytes, None);
                 next_idx += 1;
                 continue;

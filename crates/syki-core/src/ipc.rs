@@ -201,6 +201,7 @@ pub struct IpcPipeServer {
     pipe_name: String,
     session_path: PathBuf,
     stop: Arc<AtomicBool>,
+    finished: Arc<AtomicBool>,
     join: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -222,6 +223,8 @@ impl IpcPipeServer {
 
         let stop = Arc::new(AtomicBool::new(false));
         let stop_bg = Arc::clone(&stop);
+        let finished = Arc::new(AtomicBool::new(false));
+        let finished_bg = Arc::clone(&finished);
         let pipe_bg = pipe_name.clone();
         let handler = Arc::new(handler);
 
@@ -243,6 +246,12 @@ impl IpcPipeServer {
                 if raw_handle == INVALID_HANDLE_VALUE || raw_handle.is_invalid() {
                     std::thread::sleep(Duration::from_millis(50));
                     continue;
+                }
+                if stop_bg.load(Ordering::Acquire) {
+                    unsafe {
+                        let _ = CloseHandle(raw_handle);
+                    }
+                    break;
                 }
 
                 let connected = unsafe {
@@ -289,12 +298,14 @@ impl IpcPipeServer {
                 }
                 // `file` owns `raw_handle` and closes it on drop.
             }
+            finished_bg.store(true, Ordering::Release);
         });
 
         Ok(Self {
             pipe_name,
             session_path,
             stop,
+            finished,
             join: Some(join),
         })
     }
@@ -307,8 +318,18 @@ impl IpcPipeServer {
         if self.stop.swap(true, Ordering::AcqRel) {
             return;
         }
-        // Unblock ConnectNamedPipe by briefly connecting if waiting.
-        let _ = OpenOptions::new().read(true).write(true).open(&self.pipe_name);
+        // Unblock ConnectNamedPipe by briefly connecting if waiting (retry if the thread
+        // was between the `stop` check and `ConnectNamedPipe`).
+        for _ in 0..40 {
+            if self.finished.load(Ordering::Acquire) {
+                break;
+            }
+            let _ = OpenOptions::new().read(true).write(true).open(&self.pipe_name);
+            if self.finished.load(Ordering::Acquire) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
         if let Some(handle) = self.join.take() {
             let _ = handle.join();
         }

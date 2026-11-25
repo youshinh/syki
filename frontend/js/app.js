@@ -2902,7 +2902,7 @@
   function renderLineGutter(el, lines, rows) {
     let gutter = lineGutters.get(el);
     if (!gutter) {
-      gutter = { blocks: [], lines: 0, wrapped: false, texts: [], digits: 0 };
+      gutter = { blocks: [], lines: 0, wrapped: false, texts: [], digits: 0, lastRows: null };
       lineGutters.set(el, gutter);
       el.textContent = '';
     }
@@ -2916,6 +2916,7 @@
       if (el.id === 'line-numbers' && typeof noteHeaderGutterDigits === 'function') noteHeaderGutterDigits(digits);
     }
     if (rows) {
+      if (gutter.wrapped && gutter.lines === lines && gutter.lastRows === rows) return;
       const blockCount = Math.ceil(lines / GUTTER_BLOCK_LINES);
       while (gutter.blocks.length > blockCount) { el.removeChild(gutter.blocks.pop()); gutter.texts.pop(); }
       for (let b = 0; b < blockCount; b++) {
@@ -2932,10 +2933,11 @@
       }
       gutter.lines = lines;
       gutter.wrapped = true;
+      gutter.lastRows = rows;
       return;
     }
     // Back to plain numbering after a wrapped layout: every block has to be rewritten.
-    if (gutter.wrapped) { gutter.lines = 0; gutter.wrapped = false; gutter.texts = []; }
+    if (gutter.wrapped) { gutter.lines = 0; gutter.wrapped = false; gutter.texts = []; gutter.lastRows = null; }
     if (lines === gutter.lines) return;
 
     const blockCount = Math.ceil(lines / GUTTER_BLOCK_LINES);
@@ -6610,8 +6612,10 @@
 
   editorEl.addEventListener('input', () => {
     if (isComposing) return; // Native IME composition runs at full speed without JS interference
-    activePane = 'primary';
-    updatePaneFocusClasses();
+    if (activePane !== 'primary') {
+      activePane = 'primary';
+      updatePaneFocusClasses();
+    }
     if (isAcceptingGhost) {
       onEditorInput(editorEl, getTab(activeTabId), true);
     } else {
@@ -15600,8 +15604,10 @@ OUTPUT FORMAT:
       try {
         editorEl.setSelectionRange(endPos, endPos);
       } catch (_) {}
-      editorEl.scrollTop = editorEl.scrollHeight;
-      if (lineNumbersEl) lineNumbersEl.scrollTop = editorEl.scrollTop;
+      if (onlyIfIdle && endPos > 0) {
+        editorEl.scrollTop = editorEl.scrollHeight;
+        if (lineNumbersEl) lineNumbersEl.scrollTop = editorEl.scrollTop;
+      }
       const curTab = getTab(activeTabId);
       if (curTab) curTab.cursorPos = endPos;
       scheduleUpdateStatusBar();
@@ -15633,6 +15639,9 @@ OUTPUT FORMAT:
       const earlyChars = window.__earlyKeys.join('');
       window.__earlyKeys = [];
       insertTextWithUndo(earlyChars, editorEl);
+    }
+    if (window.chrome && window.chrome.webview && typeof window.chrome.webview.postMessage === 'function') {
+      try { window.chrome.webview.postMessage({ type: '__perf_trace', phase: 'app_ready' }); } catch (_) {}
     }
 
     // Defer non-critical chrome listeners (resizers, tab dock, draggable panels, cursor aura,

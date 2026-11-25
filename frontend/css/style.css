@@ -24,7 +24,7 @@ body.dark-theme {
 
   background-color: var(--bg-main);
   color: var(--text-main);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Hiragino Sans", "Hiragino Kaku Gothic ProN", sans-serif;
+  font-family: "Segoe UI", "Yu Gothic UI", "Meiryo", sans-serif;
   font-size: 14px;
   height: 100%;
   overflow: hidden;
@@ -1087,7 +1087,7 @@ body[data-view="side"] .pane-header {
   position: relative;
   width: 44px;
   text-align: right;
-  font-family: var(--editor-font-user, "Cascadia Code", "Consolas", "Fira Code", "SF Mono", "Menlo", "Hiragino Sans", "Hiragino Kaku Gothic ProN", monospace);
+  font-family: var(--editor-font-user, "Consolas", "BIZ UDGothic", "Meiryo", "Cascadia Code", monospace);
   font-size: 13px;
   line-height: 1.6;
   white-space: pre;
@@ -1114,7 +1114,7 @@ body[data-view="side"] .pane-header {
   border: none;
   outline: none;
   resize: none;
-  font-family: var(--editor-font-user, "Cascadia Code", "Consolas", "Fira Code", "Meiryo", "SF Mono", "Menlo", "Hiragino Sans", "Hiragino Kaku Gothic ProN", monospace);
+  font-family: var(--editor-font-user, "Consolas", "BIZ UDGothic", "Meiryo", "Cascadia Code", monospace);
   font-size: 14px;
   line-height: 1.6;
   tab-size: 4;
@@ -1123,6 +1123,7 @@ body[data-view="side"] .pane-header {
   user-select: text !important;
   -webkit-user-select: text !important;
   z-index: 2;
+  contain: strict;
 }
 
 #editor-secondary::placeholder {
@@ -1192,12 +1193,17 @@ body[data-view="pair"] .secondary-editor-pane {
   position: relative;
   width: 44px;
   text-align: right;
-  font-family: var(--editor-font-user, "Cascadia Code", "Consolas", "Fira Code", "SF Mono", "Menlo", "Hiragino Sans", "Hiragino Kaku Gothic ProN", monospace);
+  font-family: var(--editor-font-user, "Consolas", "BIZ UDGothic", "Meiryo", "Cascadia Code", monospace);
   font-size: 13px;
   line-height: 1.6;
   white-space: pre;
   user-select: none;
   overflow: hidden;
+  contain: layout style paint;
+}
+#line-numbers > div:not(.result-accent) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 22400px;
 }
 
 /* The bars of result blocks (updateResultAccent in app.js): one overlay per gutter, made only when the note has a
@@ -1275,7 +1281,7 @@ body[data-view="pair"] .secondary-editor-pane {
   box-sizing: border-box;
   color: transparent;
   pointer-events: none;
-  font-family: var(--editor-font-user, "Cascadia Code", "Consolas", "Fira Code", "Meiryo", "SF Mono", "Menlo", "Hiragino Sans", "Hiragino Kaku Gothic ProN", monospace);
+  font-family: var(--editor-font-user, "Consolas", "BIZ UDGothic", "Meiryo", "Cascadia Code", monospace);
   font-size: 14px;
   line-height: 1.6;
   tab-size: 4;
@@ -1308,7 +1314,7 @@ body[data-view="pair"] .secondary-editor-pane {
   border: none;
   outline: none;
   resize: none;
-  font-family: var(--editor-font-user, "Cascadia Code", "Consolas", "Fira Code", "Meiryo", "SF Mono", "Menlo", "Hiragino Sans", "Hiragino Kaku Gothic ProN", monospace);
+  font-family: var(--editor-font-user, "Consolas", "BIZ UDGothic", "Meiryo", "Cascadia Code", monospace);
   font-size: 14px;
   line-height: 1.6;
   tab-size: 4;
@@ -1317,6 +1323,7 @@ body[data-view="pair"] .secondary-editor-pane {
   user-select: text !important;
   -webkit-user-select: text !important;
   z-index: 2;
+  contain: strict;
 }
 
 #editor::placeholder {
@@ -1736,6 +1743,7 @@ span.katex-error {
   font-size: 12px;
   padding: 0 10px;
   overflow: hidden;
+  contain: layout style;
 }
 
 .status-left, .status-center, .status-right {
@@ -4677,7 +4685,7 @@ details.settings-section:not([open]) > summary .settings-section-header { margin
   max-width: 360px;
   padding: 6px;
   pointer-events: none; /* Non-intrusive, never intercepts typing */
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Sans", "Hiragino Kaku Gothic ProN", sans-serif;
+  font-family: "Segoe UI", "Yu Gothic UI", "Meiryo", sans-serif;
   user-select: none;
   animation: slotFadeIn 0.1s ease-out;
 }
@@ -4699,7 +4707,7 @@ details.settings-section:not([open]) > summary .settings-section-header { margin
   padding: 3px 10px;
   font-size: 11px;
   font-weight: 600;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Sans", "Hiragino Kaku Gothic ProN", sans-serif;
+  font-family: "Segoe UI", "Yu Gothic UI", "Meiryo", sans-serif;
   cursor: pointer;
   box-shadow: var(--shadow-button);
   animation: slotFadeIn 0.1s ease-out;

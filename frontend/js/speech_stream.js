@@ -3,7 +3,7 @@
   'use strict';
 
   const __perfVoice = (typeof window !== 'undefined' && window.__sykiPreload && window.__sykiPreload.perf && window.__sykiPreload.perf.voice) || {};
-  const VALID_STREAM_BUFFERS = [1024, 2048, 4096];
+  const VALID_STREAM_BUFFERS = [512, 1024, 2048, 4096];
   const DEFAULT_STREAM_BUFFER_SIZE = VALID_STREAM_BUFFERS.includes(__perfVoice.streamBufferSize)
     ? __perfVoice.streamBufferSize
     : 1024;

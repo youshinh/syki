@@ -292,6 +292,7 @@ struct WindowState {
     detach_commit_ms: u32,
     detach_guard: Option<DetachGuard>,
     event_sender: Rc<RefCell<Option<EventSender>>>,
+    startup_t0: std::time::Instant,
 }
 
 const DEFAULT_BROWSER_ARGS: &str =
@@ -657,6 +658,7 @@ fn attach_webview_controller(
         });
     }
     let rpc_tx = Arc::new(Mutex::new(rpc_tx));
+    let startup_t0_for_msg = state.startup_t0;
     let mut msg_token: i64 = 0;
     unsafe {
         webview.add_WebMessageReceived(
@@ -667,6 +669,13 @@ fn attach_webview_controller(
                 let mut raw_pwstr = PWSTR::null();
                 if args.WebMessageAsJson(&mut raw_pwstr).is_ok() {
                     let raw_json = CoTaskMemPWSTR::from(raw_pwstr).to_string();
+                    if raw_json.contains("\"__perf_trace\"") && raw_json.contains("\"app_ready\"") {
+                        write_perf_trace_event(
+                            "app_ready",
+                            startup_t0_for_msg.elapsed().as_secs_f64() * 1000.0,
+                        );
+                        return Ok(());
+                    }
                     if let Ok(tx) = rpc_tx.lock() {
                         let _ = tx.send(raw_json);
                     }
@@ -1159,6 +1168,7 @@ pub fn run_webview_host_with_handle(
         detach_commit_ms,
         detach_guard: None,
         event_sender: Rc::clone(&event_sender_slot),
+        startup_t0,
     });
     let state_ptr = Box::into_raw(boxed_state);
     unsafe {

@@ -73,18 +73,14 @@ pub fn decode_asset_bytes(asset: EmbeddedAsset) -> Vec<u8> {
     }
 }
 
-/// Pre-decompresses `/index.html` and `/__boot_deferred.js` on a background thread
+/// Pre-decompresses `/index.html`, `/__boot_bundle.js`, and `/__boot_deferred.js` on a background thread
 /// so they are already in memory when WebView2 finishes initializing.
 pub fn prewarm_boot_assets() {
     std::thread::spawn(|| {
         for path in [
             "/index.html",
+            "/__boot_bundle.js",
             "/__boot_deferred.js",
-            "/js/app.js",
-            "/js/i18n.js",
-            "/css/tokens.css",
-            "/css/style.css",
-            "/css/chrome.css",
         ] {
             if let Some(asset) = resolve_static_asset(path) {
                 let _ = decode_asset_bytes(asset);

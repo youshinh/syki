@@ -2,12 +2,12 @@
   "version": 1,
   "params": {
     "startup": {
-      "deferredScriptDelayMs": 60,
-      "backgroundSyncDelayMs": 60,
-      "pluginBootDelayMs": 120
+      "deferredScriptDelayMs": 20,
+      "backgroundSyncDelayMs": 120,
+      "pluginBootDelayMs": 200
     },
     "webview": {
-      "browserArgs": "--disable-background-networking --disable-component-update --no-pings --disable-sync --no-first-run --disable-default-apps --disable-background-timer-throttling --disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints,AutofillServerCommunication",
+      "browserArgs": "--disable-background-networking --disable-component-update --no-pings --disable-sync --no-first-run --disable-default-apps --no-proxy-server --disable-background-timer-throttling --disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints,AutofillServerCommunication,msSmartScreenProtection,CalculateNativeWinOcclusion",
       "idleDetachMs": 270000,
       "detachCommitMs": 200
     },
@@ -16,18 +16,18 @@
       "previewResponsiveCharLimit": 250000,
       "charMirrorFullLimit": 150000,
       "bulkInsertWorkLimit": 16000,
-      "linkMarkDebounceMs": 250,
+      "linkMarkDebounceMs": 350,
       "linkHoverDebounceMs": 300,
       "linkMarkMaxChars": 150000,
-      "lineNumbersThrottleMs": 40,
-      "statusBarThrottleMs": 40,
-      "imeSyncDebounceMs": 0
+      "lineNumbersThrottleMs": 100,
+      "statusBarThrottleMs": 100,
+      "imeSyncDebounceMs": 60
     },
     "voice": {
-      "sampleIntervalMs": 75,
-      "barSampleMs": 50,
-      "barMinVoicedMs": 80,
-      "streamBufferSize": 1024
+      "sampleIntervalMs": 50,
+      "barSampleMs": 40,
+      "barMinVoicedMs": 60,
+      "streamBufferSize": 512
     }
   },
   "bounds": {
@@ -49,12 +49,12 @@
     "webview.browserArgs": {
       "choices": [
         "--disable-background-networking --disable-component-update --no-pings",
-        "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run",
-        "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run --disable-default-apps --disable-background-timer-throttling",
-        "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run --disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter",
-        "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run --disable-default-apps --disable-client-side-phishing-detection --disable-domain-reliability",
-        "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run --disable-features=Translate,MediaRouter,OptimizationHints,AutofillServerCommunication",
-        "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run --disable-default-apps --disable-background-timer-throttling --disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints,AutofillServerCommunication --in-process-gpu"
+        "--disable-background-networking --disable-component-update --no-pings --disable-sync --no-first-run",
+        "--disable-background-networking --disable-component-update --no-pings --disable-sync --no-first-run --disable-default-apps --disable-background-timer-throttling",
+        "--disable-background-networking --disable-component-update --no-pings --disable-sync --no-first-run --disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter",
+        "--disable-background-networking --disable-component-update --no-pings --disable-sync --no-first-run --disable-default-apps --disable-client-side-phishing-detection --disable-domain-reliability",
+        "--disable-background-networking --disable-component-update --no-pings --disable-sync --no-first-run --disable-features=Translate,MediaRouter,OptimizationHints,AutofillServerCommunication",
+        "--disable-background-networking --disable-component-update --no-pings --disable-sync --no-first-run --disable-default-apps --no-proxy-server --disable-background-timer-throttling --disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints,AutofillServerCommunication,msSmartScreenProtection,CalculateNativeWinOcclusion"
       ]
     },
     "webview.idleDetachMs": {
@@ -123,17 +123,17 @@
       "step": 25
     },
     "voice.barSampleMs": {
-      "min": 50,
+      "min": 40,
       "max": 150,
-      "step": 25
+      "step": 10
     },
     "voice.barMinVoicedMs": {
-      "min": 80,
+      "min": 60,
       "max": 280,
       "step": 20
     },
     "voice.streamBufferSize": {
-      "choices": [1024, 2048, 4096]
+      "choices": [512, 1024, 2048, 4096]
     }
   }
 }

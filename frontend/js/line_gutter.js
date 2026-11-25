@@ -76,12 +76,12 @@
 
   // ---- measuring -------------------------------------------------------------------------------
 
-  const states = new WeakMap(); // editor -> { mirror, cache, sig }
+  const states = new WeakMap(); // editor -> { mirror, cache, sig, mirrorSig, lastText, lastWidth, lastFontSize, lastRows }
 
   function stateOf(editor) {
     let st = states.get(editor);
     if (!st) {
-      st = { mirror: null, cache: new Map(), sig: '' };
+      st = { mirror: null, cache: new Map(), sig: '', mirrorSig: '', lastText: null, lastWidth: -1, lastFontSize: '', lastRows: null };
       states.set(editor, st);
     }
     return st;
@@ -107,18 +107,21 @@
   function measure(editor, st, cs, width, lineHeight, missing, rows) {
     if (!st.mirror) st.mirror = makeMirror();
     const m = st.mirror;
-    const s = m.style;
-    s.width = width + 'px';
-    s.fontFamily = cs.fontFamily;
-    s.fontSize = cs.fontSize;
-    s.fontWeight = cs.fontWeight;
-    s.lineHeight = cs.lineHeight;
-    s.letterSpacing = cs.letterSpacing;
-    s.padding = cs.padding;
-    s.tabSize = cs.tabSize;
-    s.whiteSpace = cs.whiteSpace;
-    s.wordBreak = cs.wordBreak;
-    s.overflowWrap = cs.overflowWrap;
+    if (st.mirrorSig !== st.sig) {
+      const s = m.style;
+      s.width = width + 'px';
+      s.fontFamily = cs.fontFamily;
+      s.fontSize = cs.fontSize;
+      s.fontWeight = cs.fontWeight;
+      s.lineHeight = cs.lineHeight;
+      s.letterSpacing = cs.letterSpacing;
+      s.padding = cs.padding;
+      s.tabSize = cs.tabSize;
+      s.whiteSpace = cs.whiteSpace;
+      s.wordBreak = cs.wordBreak;
+      s.overflowWrap = cs.overflowWrap;
+      st.mirrorSig = st.sig;
+    }
     m.textContent = '';
     const frag = global.document.createDocumentFragment();
     for (let k = 0; k < missing.length; k++) {
@@ -142,18 +145,34 @@
   function rowsFor(editor) {
     if (!editor || !global.document || typeof global.getComputedStyle !== 'function') return null;
     const text = editor.value;
-    if (typeof text !== 'string' || text.length === 0 || text.length > MAX_CHARS) return null;
     const width = editor.clientWidth;
+    const fontSizeInline = (editor.style && editor.style.fontSize) || '';
+    const st = stateOf(editor);
+    if (typeof text !== 'string' || text.length === 0 || text.length > MAX_CHARS) {
+      st.lastText = text;
+      st.lastWidth = width;
+      st.lastFontSize = fontSizeInline;
+      st.lastRows = null;
+      return null;
+    }
     if (!(width > 0)) return null;
+    if (st.lastText === text && st.lastWidth === width && st.lastFontSize === fontSizeInline) {
+      return st.lastRows;
+    }
     const cs = global.getComputedStyle(editor);
     const fontSize = parseFloat(cs.fontSize) || 14;
     const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
     const tabSize = parseInt(cs.tabSize, 10) || 4;
     const scan = findLongLines(text, wrapUnits(width - padX, fontSize), tabSize);
-    if (scan.long.length === 0) return null;
+    if (scan.long.length === 0) {
+      st.lastText = text;
+      st.lastWidth = width;
+      st.lastFontSize = fontSizeInline;
+      st.lastRows = null;
+      return null;
+    }
 
     const lineHeight = parseFloat(cs.lineHeight) || fontSize * 1.6;
-    const st = stateOf(editor);
     const sig = [cs.fontFamily, cs.fontSize, cs.fontWeight, cs.lineHeight, cs.letterSpacing, cs.tabSize,
       cs.padding, cs.whiteSpace, cs.wordBreak, cs.overflowWrap, width].join('|');
     if (st.sig !== sig || st.cache.size > MAX_CACHE) {
@@ -168,7 +187,19 @@
       else missing.push(scan.long[k]);
     }
     if (missing.length) measure(editor, st, cs, width, lineHeight, missing, rows);
-    return rows;
+    let result = rows;
+    if (st.lastRows && st.lastRows.length === rows.length) {
+      let same = true;
+      for (let i = 0; i < rows.length; i++) {
+        if (st.lastRows[i] !== rows[i]) { same = false; break; }
+      }
+      if (same) result = st.lastRows;
+    }
+    st.lastText = text;
+    st.lastWidth = width;
+    st.lastFontSize = fontSizeInline;
+    st.lastRows = result;
+    return result;
   }
 
   global.LineGutter = { rowsFor: rowsFor, gutterBlockText: gutterBlockText };

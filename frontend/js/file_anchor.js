@@ -466,10 +466,11 @@
     const el = global.document.createElement('div');
     el.className = 'fanchor-layer';
     el.setAttribute('aria-hidden', 'true');
+    if (el.style) el.style.contain = 'layout style paint';
     const inner = global.document.createElement('div');
     el.appendChild(inner);
     parent.insertBefore(el, editor);
-    const layer = { el: el, inner: inner, links: [], spans: [], text: null, hot: null };
+    const layer = { el: el, inner: inner, links: [], spans: [], text: null, hot: null, metricsSig: '' };
     layers.set(editor, layer);
     if (!hoverListenersBound) bindHoverListeners();
     // The textarea's scrollbar comes and goes (a note growing past the window, a resize, a split pane
@@ -506,6 +507,9 @@
   function copyMetrics(editor, layer) {
     let cs;
     try { cs = global.getComputedStyle(editor); } catch (e) { return; }
+    const sig = [cs.fontFamily, cs.fontSize, cs.fontWeight, cs.lineHeight, cs.letterSpacing, cs.padding, cs.tabSize, cs.whiteSpace, cs.wordBreak, cs.overflowWrap].join('|');
+    if (layer.metricsSig === sig) return;
+    layer.metricsSig = sig;
     const st = layer.el.style;
     st.fontFamily = cs.fontFamily;
     st.fontSize = cs.fontSize;
