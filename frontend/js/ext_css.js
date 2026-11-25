@@ -19,6 +19,38 @@
     link.href = href;
   }
 
+  function mirrorRootVarsToBody(doc, link) {
+    try {
+      if (!doc || !doc.head || !link || !link.sheet || !link.sheet.cssRules) return;
+      const vars = [];
+      const rules = link.sheet.cssRules;
+      for (let i = 0; i < rules.length; i++) {
+        const rule = rules[i];
+        if (!rule || !rule.selectorText || !rule.style) continue;
+        if (!/(?:^|,)\s*:root(?:\s|,|$)/i.test(rule.selectorText)) continue;
+        for (let j = 0; j < rule.style.length; j++) {
+          const prop = rule.style[j];
+          if (prop && prop.startsWith('--')) {
+            const val = rule.style.getPropertyValue(prop);
+            if (val) vars.push(prop + ':' + val + ';');
+          }
+        }
+      }
+      const styleId = LINK_ID + '-vars';
+      let styleEl = typeof doc.getElementById === 'function' ? doc.getElementById(styleId) : null;
+      if (vars.length === 0) {
+        if (styleEl && styleEl.parentNode) styleEl.parentNode.removeChild(styleEl);
+        return;
+      }
+      if (!styleEl) {
+        styleEl = doc.createElement('style');
+        styleEl.id = styleId;
+        doc.head.appendChild(styleEl);
+      }
+      styleEl.textContent = 'body{' + vars.join('') + '}';
+    } catch (_) {}
+  }
+
   function createLink(doc, href) {
     const link = doc.createElement('link');
     link.id = LINK_ID;
@@ -26,6 +58,9 @@
     if (typeof link.setAttribute === 'function') {
       link.setAttribute('id', LINK_ID);
       link.setAttribute('rel', 'stylesheet');
+    }
+    if (typeof link.addEventListener === 'function') {
+      link.addEventListener('load', () => mirrorRootVarsToBody(doc, link));
     }
     setHref(link, href);
     return link;

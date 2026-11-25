@@ -714,6 +714,10 @@
 
       try {
         const mod = await importer(url);
+        const modName = (mod && mod.default && typeof mod.default.name === 'string' && mod.default.name.trim())
+          ? mod.default.name.trim()
+          : ((mod && typeof mod.name === 'string' && mod.name.trim()) ? mod.name.trim() : '');
+        if (modName) rec.name = modName;
         const initFn = resolveInitFn(mod);
         if (!initFn) {
           throw new Error('Plugin module does not export an init(api) function');
@@ -779,6 +783,26 @@
       }
     }
 
+    function remove(pluginId) {
+      const id = String(pluginId);
+      const scope = activeScopes.get(id);
+      if (scope) {
+        try { scope.dispose(); } catch (_) {}
+        activeScopes.delete(id);
+      }
+      records.delete(id);
+      entriesById.delete(id);
+    }
+
+    function prune(validIds) {
+      const keep = new Set(Array.isArray(validIds) ? validIds.map(String) : []);
+      for (const id of Array.from(records.keys())) {
+        if (!keep.has(id)) {
+          remove(id);
+        }
+      }
+    }
+
     function disposeAll() {
       for (const scope of activeScopes.values()) {
         try { scope.dispose(); } catch (_) {}
@@ -814,6 +838,8 @@
       loadAll,
       reload,
       unload,
+      remove,
+      prune,
       disposeAll,
       getStatus,
       getScope,

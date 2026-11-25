@@ -515,6 +515,7 @@ fn attach_webview_controller(
     environment: &ICoreWebView2Environment,
     state: &WindowState,
     visible: bool,
+    preload_override: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let controller = {
         let (tx, rx) = mpsc::channel();
@@ -676,7 +677,7 @@ fn attach_webview_controller(
         )?;
     }
 
-    let preload_script = build_preload_script(&state.data_dir);
+    let preload_script = preload_override.unwrap_or_else(|| build_preload_script(&state.data_dir));
     let preload_w = CoTaskMemPWSTR::from(preload_script.as_str());
     let origin_w = CoTaskMemPWSTR::from(state.virtual_origin);
     unsafe {
@@ -746,7 +747,7 @@ extern "system" fn host_wnd_proc(
                 state.canvas.borrow_mut().wake();
                 if state.webview.borrow().is_none() {
                     if let Some(env) = state.environment.borrow().as_ref() {
-                        let _ = attach_webview_controller(hwnd, env, state, true);
+                        let _ = attach_webview_controller(hwnd, env, state, true, None);
                     }
                 } else {
                     if let Some(wv) = state.webview.borrow().as_ref() {
@@ -787,7 +788,7 @@ extern "system" fn host_wnd_proc(
                 if state.webview.borrow().is_none() {
                     state.canvas.borrow_mut().wake();
                     if let Some(env) = state.environment.borrow().as_ref() {
-                        let _ = attach_webview_controller(hwnd, env, state, false);
+                        let _ = attach_webview_controller(hwnd, env, state, false, None);
                     }
                 } else if let Some(wv) = state.webview.borrow().as_ref() {
                     set_webview_memory_low(wv, false);
@@ -1181,6 +1182,14 @@ pub fn run_webview_host_with_handle(
 
     let user_data_str = config.user_data_dir.to_string_lossy().into_owned();
     let browser_args_for_env = browser_args;
+    let preload_rx = {
+        let preload_dir = unsafe { &*state_ptr }.data_dir.clone();
+        let (ptx, prx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = ptx.send(build_preload_script(&preload_dir));
+        });
+        prx
+    };
     let environment = {
         let (tx, rx) = mpsc::channel();
         let user_data_for_env = user_data_str;
@@ -1211,7 +1220,8 @@ pub fn run_webview_host_with_handle(
 
     *env_slot.borrow_mut() = Some(environment.clone());
     let state_ref = unsafe { &*state_ptr };
-    attach_webview_controller(hwnd, &environment, state_ref, true)?;
+    let prebuilt_preload = preload_rx.recv().ok();
+    attach_webview_controller(hwnd, &environment, state_ref, true, prebuilt_preload)?;
     write_perf_trace_event("controller_ready", startup_t0.elapsed().as_secs_f64() * 1000.0);
 
     if let Some(cb) = on_ready {

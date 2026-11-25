@@ -85,8 +85,16 @@ where
 }
 
 fn second_requests_help(argv: &[String]) -> bool {
-    argv.get(1).map(String::as_str) == Some("--help")
+    let first = argv.first().map(String::as_str).unwrap_or("");
+    if argv.get(1).map(String::as_str) == Some("--help")
         || argv.get(1).map(String::as_str) == Some("-h")
+    {
+        return true;
+    }
+    if !matches!(first, "scrap" | "buffer") {
+        return argv.iter().skip(1).any(|a| a == "--help" || a == "-h");
+    }
+    false
 }
 
 fn print_top_level_help() {
@@ -552,6 +560,12 @@ fn dispatch_subcommand(cmd: &str, args: &[String]) -> Result<(), String> {
                 format!("{other}.{sub}")
             };
             let rest: Vec<String> = args.iter().skip(1).cloned().collect();
+            if other == "tab" && sub == "pdf" {
+                let out_path = rest.first().map(String::as_str).unwrap_or("").trim();
+                if out_path.is_empty() || out_path.starts_with('-') {
+                    return Err("usage: syki-cli tab pdf <outputPath> (output path cannot start with '-')".to_string());
+                }
+            }
             let res = try_send_ipc(&env, "", &method, json!({ "args": rest }), String::new(), String::new())?;
             println!("{res}");
             Ok(())
@@ -814,5 +828,19 @@ mod tests {
         assert!(res.truncated);
         assert!(res.text.starts_with("あああ"));
         assert!(res.text.contains("[truncated: input exceeded maxPipeSizeMB"));
+    }
+
+    #[test]
+    fn tab_pdf_help_shows_usage_and_dash_path_is_rejected() {
+        assert_eq!(
+            parse_cli_action(["tab", "pdf", "--help"]),
+            CliAction::SubcommandHelp("tab")
+        );
+        assert_eq!(
+            parse_cli_action(["tab", "pdf", "-h"]),
+            CliAction::SubcommandHelp("tab")
+        );
+        let err = dispatch_subcommand("tab", &["pdf".to_string(), "--out".to_string()]).unwrap_err();
+        assert!(err.contains("cannot start with '-'"));
     }
 }

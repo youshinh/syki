@@ -77,7 +77,15 @@ pub fn decode_asset_bytes(asset: EmbeddedAsset) -> Vec<u8> {
 /// so they are already in memory when WebView2 finishes initializing.
 pub fn prewarm_boot_assets() {
     std::thread::spawn(|| {
-        for path in ["/index.html", "/__boot_deferred.js"] {
+        for path in [
+            "/index.html",
+            "/__boot_deferred.js",
+            "/js/app.js",
+            "/js/i18n.js",
+            "/css/tokens.css",
+            "/css/style.css",
+            "/css/chrome.css",
+        ] {
             if let Some(asset) = resolve_static_asset(path) {
                 let _ = decode_asset_bytes(asset);
             }

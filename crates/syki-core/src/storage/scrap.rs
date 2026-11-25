@@ -48,7 +48,8 @@ impl ScrapStore {
             "" => "CLI Pipe",
             other => other,
         };
-        let body = content.trim_end_matches(['\r', '\n']);
+        let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
+        let body = normalized.trim_end_matches('\n');
         let longest_backtick_run = body
             .split(|c| c != '`')
             .map(str::len)

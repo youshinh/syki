@@ -275,7 +275,7 @@ impl ExtRoots {
 }
 
 pub fn content_security_policy() -> &'static str {
-    "default-src 'self' https://app.syki.local; script-src 'self' https://app.syki.local 'unsafe-inline'; style-src 'self' https://app.syki.local 'unsafe-inline'; img-src 'self' https://app.syki.local data: blob:; font-src 'self' https://app.syki.local data:; connect-src 'self' https://app.syki.local; object-src 'none'; base-uri 'self';"
+    "default-src 'self' https://app.syki.local; script-src 'self' https://app.syki.local 'unsafe-inline'; style-src 'self' https://app.syki.local 'unsafe-inline'; img-src 'self' https://app.syki.local data: blob:; font-src 'self' https://app.syki.local data:; connect-src 'self' https://app.syki.local; object-src 'self' https://app.syki.local; frame-src 'self' https://app.syki.local; base-uri 'self';"
 }
 
 pub fn is_immutable_virtual_asset(status: u16, rel_path: &str) -> bool {

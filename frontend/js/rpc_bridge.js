@@ -146,8 +146,14 @@
       },
 
       newTab: function (title, content, path) {
-        port.createTab(title, content, path);
-        return true;
+        const tab = port.createTab(title, content, path);
+        return {
+          tabId: tab ? tab.id : '',
+          id: tab ? tab.id : '',
+          title: (tab && tab.title) || '',
+          path: (tab && tab.path) || '',
+          newTab: true
+        };
       },
 
       openTab: function (spec) {

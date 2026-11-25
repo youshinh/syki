@@ -4167,8 +4167,10 @@
       }
     }
 
-    // 5. Render Markdown
-    let html = mdInstance.render(rawText);
+    // 5. Render Markdown (with footnote extraction)
+    const fnExtracted = extractMarkdownFootnotes(rawText);
+    let html = mdInstance.render(fnExtracted.text);
+    html = injectMarkdownFootnotes(html, fnExtracted.footnotes);
 
     if (mathPlaceholders.length > 0) {
       // 6. Strip <p> tags wrapping standalone block math expressions
@@ -4215,7 +4217,13 @@
               svg = (await window.mermaid.render(id, drawn)).svg;
             } catch (firstErr) {
               removeMermaidLeftovers(id);
-              throw firstErr;
+              const sanitized = sanitizeMermaidSubgraphs(drawn);
+              if (sanitized !== drawn) {
+                drawn = sanitized;
+                svg = (await window.mermaid.render(id + '-retry', drawn)).svg;
+              } else {
+                throw firstErr;
+              }
             }
             container.dataset.mermaidSrc = drawn;
             container.innerHTML = svg;
@@ -4227,7 +4235,14 @@
             });
           } catch (err) {
             removeMermaidLeftovers(id);
-            container.innerHTML = '<div class="mermaid-error" style="color:var(--coral);">' + escapeHtml(t('mermaidError')) + escapeHtml(err.message) + '</div>';
+            removeMermaidLeftovers(id + '-retry');
+            const hint = '例: subgraph id["名前"] のように引用符で囲むと描画できます。';
+            container.innerHTML =
+              '<div class="mermaid-error" style="color:var(--coral);">' +
+              escapeHtml(t('mermaidError')) + escapeHtml(err.message) +
+              '<div style="margin-top:4px;font-size:12px;color:var(--text-muted);">' + escapeHtml(hint) + '</div>' +
+              '<pre style="margin-top:6px;white-space:pre-wrap;"><code>' + escapeHtml(diagramCode) + '</code></pre>' +
+              '</div>';
           }
         });
       });
@@ -4296,6 +4311,71 @@
         el.innerHTML = updatedHtml;
       }
     });
+  }
+
+  function sanitizeMermaidSubgraphs(src) {
+    let idx = 0;
+    return String(src || '').replace(/^(\s*subgraph\s+)(.+)$/gm, (full, prefix, rest) => {
+      const title = rest.trim();
+      if (!title || title.startsWith('"') || /\[.*\]/.test(title)) return full;
+      if (!/[（）()「」【】]/.test(title)) return full;
+      idx += 1;
+      const escaped = title.replace(/"/g, '\\"');
+      return `${prefix}sg_${idx}["${escaped}"]`;
+    });
+  }
+
+  function extractMarkdownFootnotes(src) {
+    const lines = String(src || '').split('\n');
+    const defs = new Map();
+    const kept = [];
+    let inFence = false;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (/^\s*(?:```|~~~)/.test(line)) {
+        inFence = !inFence;
+        kept.push(line);
+        continue;
+      }
+      if (!inFence) {
+        const m = /^\[\^([^\s\]]+)\]:\s*(.*)$/.exec(line);
+        if (m) {
+          defs.set(m[1], m[2]);
+          continue;
+        }
+      }
+      kept.push(line);
+    }
+    if (defs.size === 0) return { text: src, footnotes: [] };
+    const order = [];
+    const indexById = new Map();
+    const outLines = kept.map((line) => {
+      if (/^\s*(?:```|~~~)/.test(line)) return line;
+      return line.replace(/\[\^([^\s\]]+)\]/g, (full, id) => {
+        if (!defs.has(id)) return full;
+        if (!indexById.has(id)) {
+          order.push({ id, body: defs.get(id) });
+          indexById.set(id, order.length);
+        }
+        return `SYKIFNREF${indexById.get(id)}XYZ`;
+      });
+    });
+    return { text: outLines.join('\n'), footnotes: order };
+  }
+
+  function injectMarkdownFootnotes(html, footnotes) {
+    if (!footnotes || footnotes.length === 0) return html;
+    let out = html.replace(/SYKIFNREF(\d+)XYZ/g, (_, num) => {
+      return `<sup class="footnote-ref"><a href="#fn-${num}" id="fnref-${num}">[${num}]</a></sup>`;
+    });
+    const items = footnotes.map((fn, i) => {
+      const n = i + 1;
+      const bodyHtml = mdInstance && typeof mdInstance.renderInline === 'function'
+        ? mdInstance.renderInline(fn.body)
+        : escapeHtml(fn.body);
+      return `<li id="fn-${n}">${bodyHtml} <a href="#fnref-${n}" class="footnote-backref">\u21A9</a></li>`;
+    }).join('');
+    return out + `<section class="footnotes"><hr class="footnotes-sep"><ol class="footnotes-list">${items}</ol></section>`;
   }
 
   async function renderPreview() {
@@ -16907,6 +16987,21 @@ OUTPUT FORMAT:
         return bar;
       }
 
+      function ensurePluginStatusBar() {
+        let bar = document.getElementById('syki-plugin-status-actions');
+        if (bar) return bar;
+        const sb = document.getElementById('status-bar');
+        if (!sb) return null;
+        bar = document.createElement('span');
+        bar.id = 'syki-plugin-status-actions';
+        bar.className = 'syki-plugin-status-actions';
+        bar.style.display = 'inline-flex';
+        bar.style.alignItems = 'center';
+        bar.style.gap = '4px';
+        sb.appendChild(bar);
+        return bar;
+      }
+
       const pendingDecisionRequests = new Map();
       window.__onLLMDecisionResult = (reqId, choiceId, reason, by, ok) => {
         const settle = pendingDecisionRequests.get(reqId);
@@ -16973,10 +17068,11 @@ OUTPUT FORMAT:
           };
         },
         registerAction: (spec) => {
-          const bar = ensurePluginActionBar();
+          const isStatusbar = !!(spec && spec.slot === 'statusbar');
+          const bar = isStatusbar ? ensurePluginStatusBar() : ensurePluginActionBar();
           const btn = document.createElement('button');
           btn.type = 'button';
-          btn.className = 'toolbar-btn syki-plugin-btn';
+          btn.className = isStatusbar ? 'toolbar-btn syki-plugin-btn syki-plugin-status-btn' : 'toolbar-btn syki-plugin-btn';
           if (spec && spec.id) btn.dataset.pluginAction = String(spec.id);
           const labelSpan = document.createElement('span');
           labelSpan.textContent = (spec && spec.label) ? String(spec.label) : (spec && spec.id ? String(spec.id) : 'Plugin');
@@ -17061,9 +17157,31 @@ OUTPUT FORMAT:
           const { platform } = await ensurePluginPlatform();
           return await platform.pluginManager.reload(pluginId, Date.now());
         },
+        async remove(pluginId) {
+          if (!pluginPlatformState) return;
+          const { platform } = pluginPlatformState;
+          if (platform && platform.pluginManager && typeof platform.pluginManager.remove === 'function') {
+            platform.pluginManager.remove(pluginId);
+          }
+        },
+        async prune(validIds) {
+          if (!pluginPlatformState) return;
+          const { platform } = pluginPlatformState;
+          if (platform && platform.pluginManager && typeof platform.pluginManager.prune === 'function') {
+            platform.pluginManager.prune(validIds);
+          }
+        },
         async run(commandId, args) {
-          const { registeredCommands } = await ensurePluginPlatform();
-          const fn = registeredCommands.get(String(commandId));
+          const { platform, registeredCommands } = await ensurePluginPlatform();
+          const id = String(commandId);
+          if (platform && platform.syki && platform.syki.sys && typeof platform.syki.sys.runCommand === 'function') {
+            try {
+              return await platform.syki.sys.runCommand(id, args, { viaRpc: true });
+            } catch (err) {
+              if (!err || err.code !== 'COMMAND_NOT_FOUND') throw err;
+            }
+          }
+          const fn = registeredCommands.get(id);
           if (typeof fn !== 'function') {
             throw new Error('unknown plugin command: ' + commandId);
           }
@@ -17082,8 +17200,40 @@ OUTPUT FORMAT:
     }
   }
 
+  function syncQcThemeCacheIfNeeded() {
+    const preloadExt = window.__sykiPreload && window.__sykiPreload.ext;
+    if (!preloadExt || !preloadExt.hasUserCss || preloadExt.safeMode) return;
+    if (!window.backend || typeof window.backend.saveQcThemeCache !== 'function') return;
+    const saveFn = (snapshot) => {
+      try { Promise.resolve(window.backend.saveQcThemeCache(JSON.stringify(snapshot))).catch(() => {}); } catch (_) {}
+    };
+    if (window.ExtThemeSync && typeof window.ExtThemeSync.syncQcThemeIfNeeded === 'function') {
+      window.ExtThemeSync.syncQcThemeIfNeeded(window, saveFn);
+      return;
+    }
+    try {
+      const style = window.getComputedStyle(document.body || document.documentElement);
+      const pick = (v) => style.getPropertyValue(v).trim();
+      const snapshot = {
+        isDark: !document.body.classList.contains('look-paper'),
+        bg: pick('--bg-modal'),
+        field: pick('--bg-field'),
+        border: pick('--border-color'),
+        btn: pick('--bg-btn'),
+        btnSave: pick('--accent-color'),
+        text: pick('--text-main'),
+        textOnSave: pick('--text-on-accent'),
+        hint: pick('--text-muted'),
+      };
+      saveFn(snapshot);
+    } catch (_) {}
+  }
+
   initApp();
   initPluginPlatform();
+  if (window.__sykiPreload && window.__sykiPreload.ext && window.__sykiPreload.ext.hasUserCss && !window.__sykiPreload.ext.safeMode) {
+    setTimeout(syncQcThemeCacheIfNeeded, BOOT_POLICY.deferredScriptDelayMs + 50);
+  }
   if (window.FileAnchor && typeof window.FileAnchor.init === 'function') {
     window.FileAnchor.init();
   }

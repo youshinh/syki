@@ -118,6 +118,20 @@ body[data-print-pane="secondary"] #workspace #secondary-pane #secondary-preview-
 :is(#preview-pane, #secondary-preview-pane) li {
   orphans: 3;
   widows: 3;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+:is(#preview-pane, #secondary-preview-pane) h1,
+:is(#preview-pane, #secondary-preview-pane) h2,
+:is(#preview-pane, #secondary-preview-pane) h3,
+:is(#preview-pane, #secondary-preview-pane) h4,
+:is(#preview-pane, #secondary-preview-pane) h5,
+:is(#preview-pane, #secondary-preview-pane) h6,
+:is(#preview-pane, #secondary-preview-pane) blockquote,
+:is(#preview-pane, #secondary-preview-pane) a {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 /* A line that introduces a picture or a diagram ("Figure 1:") stays on the page of the picture, which is moved whole to the next page
@@ -225,7 +239,9 @@ body[data-print-pane="secondary"] #workspace #secondary-pane #secondary-preview-
   max-height: 86vh;
 }
 
-:is(#preview-pane, #secondary-preview-pane) .mermaid-tone-btn {
+:is(#preview-pane, #secondary-preview-pane) .mermaid-tone-btn,
+:is(#preview-pane, #secondary-preview-pane) .mermaid-card button,
+:is(#preview-pane, #secondary-preview-pane) .mermaid-card-actions {
   display: none !important;
 }
 

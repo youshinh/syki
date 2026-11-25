@@ -85,11 +85,21 @@ fn handle_ipc_envelope(
     }
     if action == "new-tab" || method == "ui.new_tab" {
         handle.activate_window();
-        (handle.event_sender)(RpcEvent {
-            topic: "host:openFile".to_string(),
-            payload: json!({ "newTab": true, "isScrap": false }),
-        });
-        return IpcReply::ok(req.id, json!({ "newTab": true }));
+        return match eval_syki_rpc(handle, "window.__sykiRPC.newTab('', '')") {
+            Ok(mut v) => {
+                if let Some(obj) = v.as_object_mut() {
+                    obj.entry("newTab").or_insert(json!(true));
+                }
+                IpcReply::ok(req.id, v)
+            }
+            Err(_) => {
+                (handle.event_sender)(RpcEvent {
+                    topic: "host:openFile".to_string(),
+                    payload: json!({ "newTab": true, "isScrap": false }),
+                });
+                IpcReply::ok(req.id, json!({ "newTab": true }))
+            }
+        }
     }
     if action == "open" || method == "ui.open" {
         let path_str = if !req.path.is_empty() {
@@ -144,19 +154,10 @@ fn handle_ipc_envelope(
         let scrap_dir = cfg.scrap_dir();
         match ScrapStore::append_formatted(&scrap_dir, &text, "") {
             Ok(scrap_path) => {
-                if let Ok(loaded) = NoteFileStore::read_note(&scrap_path) {
-                    handle.activate_window();
-                    (handle.event_sender)(RpcEvent {
-                        topic: "host:openFile".to_string(),
-                        payload: json!({
-                            "path": loaded.path.to_string_lossy(),
-                            "title": loaded.path.file_name().and_then(|n| n.to_str()).unwrap_or("scrap.md"),
-                            "content": loaded.content,
-                            "encoding": loaded.encoding_name,
-                            "sig": cyrb53_utf16_sig(&loaded.content)
-                        }),
-                    });
-                }
+                (handle.event_sender)(RpcEvent {
+                    topic: "scrap:appended".to_string(),
+                    payload: json!({ "path": scrap_path.to_string_lossy() }),
+                });
                 IpcReply::ok(req.id, json!({ "path": scrap_path.to_string_lossy() }))
             }
             Err(e) => IpcReply::err(req.id, format!("scrap append failed: {e}")),
@@ -356,6 +357,17 @@ fn handle_ipc_envelope(
         }
         IpcReply::ok(req.id, json!({ "queued": true, "path": img_path }))
     } else if method == METHOD_PLUGIN_LIST {
+        let roots = syki_win::ext_store::ExtRoots::new(
+            syki_win::ext_store::portable_dir_from_exe(),
+            env.data_dir.clone(),
+            syki_win::ext_store::safe_mode_from_args(),
+        );
+        let disk_ids: Vec<String> = roots
+            .list_plugins()
+            .into_iter()
+            .filter_map(|p| p.get("id").and_then(|v| v.as_str()).map(str::to_string))
+            .collect();
+        let _ = eval_syki_plugins(handle, &format!("window.__sykiPlugins.prune({})", json!(disk_ids)));
         match eval_syki_plugins(handle, "window.__sykiPlugins.list()") {
             Ok(v) => IpcReply::ok(req.id, v),
             Err(e) => IpcReply::err(req.id, e),
@@ -376,6 +388,19 @@ fn handle_ipc_envelope(
         else {
             return IpcReply::err(req.id, "missing plugin_id");
         };
+        let roots = syki_win::ext_store::ExtRoots::new(
+            syki_win::ext_store::portable_dir_from_exe(),
+            env.data_dir.clone(),
+            syki_win::ext_store::safe_mode_from_args(),
+        );
+        let exists_on_disk = roots
+            .list_plugins()
+            .iter()
+            .any(|p| p.get("id").and_then(|v| v.as_str()) == Some(plugin_id));
+        if !exists_on_disk {
+            let _ = eval_syki_plugins(handle, &format!("window.__sykiPlugins.remove({})", json!(plugin_id)));
+            return IpcReply::err(req.id, format!("plugin not found: {plugin_id}"));
+        }
         let js_call = format!("window.__sykiPlugins.reload({})", json!(plugin_id));
         match eval_syki_plugins(handle, &js_call) {
             Ok(v) => IpcReply::ok(req.id, v),

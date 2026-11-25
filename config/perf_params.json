@@ -2,12 +2,12 @@
   "version": 1,
   "params": {
     "startup": {
-      "deferredScriptDelayMs": 120,
-      "backgroundSyncDelayMs": 120,
+      "deferredScriptDelayMs": 60,
+      "backgroundSyncDelayMs": 60,
       "pluginBootDelayMs": 120
     },
     "webview": {
-      "browserArgs": "--disable-background-networking --disable-component-update --no-pings --disable-extensions --disable-sync --no-first-run --disable-default-apps --disable-background-timer-throttling --disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints,AutofillServerCommunication",
+      "browserArgs": "--disable-background-networking --disable-component-update --no-pings --disable-sync --no-first-run --disable-default-apps --disable-background-timer-throttling --disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints,AutofillServerCommunication",
       "idleDetachMs": 270000,
       "detachCommitMs": 200
     },
