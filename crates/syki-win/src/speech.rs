@@ -4,6 +4,7 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
@@ -18,6 +19,11 @@ use crate::rpc_dispatch::EventSender;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 static INSTALL_CANCELLED: AtomicBool = AtomicBool::new(false);
+static LOCAL_STT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn local_stt_lock() -> &'static Mutex<()> {
+    LOCAL_STT_LOCK.get_or_init(|| Mutex::new(()))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -861,6 +867,7 @@ pub fn transcribe_local_with_config(
     if !engine.is_file() || !model_path.is_file() {
         return Err("local speech engine/model not installed".to_string());
     }
+    let _stt_guard = local_stt_lock().lock().unwrap_or_else(|e| e.into_inner());
 
     let (input_path, cleanup_wav) = ensure_wav_input_if_needed(audio_path);
     let lang = cfg
@@ -938,15 +945,61 @@ pub fn transcribe_local_with_config(
     }
 }
 
-pub fn transcribe_wav_file(data_dir: &Path, audio_path: &Path, language: &str) -> Result<String, String> {
-    let mut whisper_val = std::fs::read_to_string(data_dir.join("config.json"))
+fn normalize_voice_engine(raw: &str) -> &'static str {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "whisper-local" | "speech-local" | "local" => "whisper-local",
+        _ => "gemini",
+    }
+}
+
+pub fn resolve_voice_profile_config(data_dir: &Path, profile: &str, language: &str) -> Value {
+    let root = std::fs::read_to_string(data_dir.join("config.json"))
         .ok()
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-        .and_then(|root| {
-            root.pointer("/voice/realtime/whisper")
-                .or_else(|| root.pointer("/voice/whisper"))
-                .cloned()
-        })
+        .unwrap_or_else(|| json!({}));
+    let voice = root.get("voice").and_then(|v| v.as_object());
+    let vision = root.get("vision").and_then(|v| v.as_object());
+    let is_batch = profile == "batch";
+    let prof_key = if is_batch { "batch" } else { "realtime" };
+    let prof = voice
+        .and_then(|v| v.get(prof_key))
+        .and_then(|v| v.as_object());
+
+    let str_field = |obj: Option<&serde_json::Map<String, Value>>, key: &str| -> String {
+        obj.and_then(|m| m.get(key))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("")
+            .to_string()
+    };
+
+    let raw_engine = if is_batch {
+        let pe = str_field(prof, "engine");
+        if !pe.is_empty() { pe } else { str_field(voice, "engine") }
+    } else {
+        str_field(prof, "engine")
+    };
+    let engine = normalize_voice_engine(&raw_engine);
+
+    let model = {
+        let pm = str_field(prof, "model");
+        if !pm.is_empty() { pm } else { str_field(voice, "model") }
+    };
+    let api_style = {
+        let ps = str_field(prof, "apiStyle");
+        if !ps.is_empty() {
+            ps
+        } else {
+            let vs = str_field(voice, "apiStyle");
+            if !vs.is_empty() { vs } else { "auto".to_string() }
+        }
+    };
+    let mut whisper_val = prof
+        .and_then(|p| p.get("whisper"))
+        .filter(|v| v.is_object())
+        .cloned()
+        .or_else(|| voice.and_then(|v| v.get("whisper")).filter(|v| v.is_object()).cloned())
         .unwrap_or_else(|| json!({}));
     if let Some(obj) = whisper_val.as_object_mut() {
         let lang_empty = obj
@@ -955,13 +1008,59 @@ pub fn transcribe_wav_file(data_dir: &Path, audio_path: &Path, language: &str) -
             .map(|s| s.trim().is_empty())
             .unwrap_or(true);
         if lang_empty && !language.trim().is_empty() {
-            obj.insert("language".to_string(), json!(language));
+            obj.insert("language".to_string(), json!(language.trim()));
         }
-    } else {
-        whisper_val = json!({ "language": language });
     }
-    let cfg = json!({ "whisper": whisper_val });
-    transcribe_local_with_config(data_dir, audio_path, &cfg)
+
+    let base_url = {
+        let vb = str_field(voice, "baseUrl");
+        if !vb.is_empty() { vb } else { str_field(vision, "baseUrl") }
+    };
+    let api_key = str_field(voice, "apiKey");
+    let prompt = str_field(voice, "prompt");
+    let mode = str_field(voice, "mode");
+
+    let mut out = json!({
+        "engine": engine,
+        "apiStyle": api_style,
+        "whisper": whisper_val,
+    });
+    if let Some(m) = out.as_object_mut() {
+        if !model.is_empty() {
+            m.insert("model".to_string(), json!(model));
+        }
+        if !base_url.is_empty() {
+            m.insert("baseUrl".to_string(), json!(base_url));
+        }
+        if !api_key.is_empty() {
+            m.insert("apiKey".to_string(), json!(api_key));
+        }
+        if !prompt.is_empty() {
+            m.insert("prompt".to_string(), json!(prompt));
+        }
+        if !mode.is_empty() {
+            m.insert("mode".to_string(), json!(mode));
+        }
+        if let Some(lc) = voice.and_then(|v| v.get("languageCodes")) {
+            m.insert("languageCodes".to_string(), lc.clone());
+        }
+        if let Some(cv) = voice.and_then(|v| v.get("customVocabulary")) {
+            m.insert("customVocabulary".to_string(), cv.clone());
+        }
+    }
+    out
+}
+
+pub fn is_local_profile_configured(data_dir: &Path, profile: &str) -> bool {
+    resolve_voice_profile_config(data_dir, profile, "")
+        .get("engine")
+        .and_then(|v| v.as_str())
+        == Some("whisper-local")
+}
+
+pub fn transcribe_wav_file(data_dir: &Path, audio_path: &Path, language: &str) -> Result<String, String> {
+    let cfg = resolve_voice_profile_config(data_dir, "realtime", language);
+    transcribe_cached_file_with_config(data_dir, audio_path, &cfg.to_string(), false)
 }
 
 fn sniff_audio_mime(bytes: &[u8], path: Option<&Path>) -> &'static str {
@@ -991,21 +1090,23 @@ fn strip_v1beta_suffix(base: &str) -> String {
 }
 
 fn read_fallback_gemini_key(data_dir: &Path) -> String {
-    let Ok(raw) = std::fs::read_to_string(data_dir.join("config.json")) else {
-        return String::new();
-    };
-    let Ok(val) = serde_json::from_str::<Value>(&raw) else {
-        return String::new();
-    };
-    for ptr in ["/voice/apiKey", "/vision/apiKey", "/text/apiKey"] {
-        if let Some(k) = val.pointer(ptr).and_then(|v| v.as_str()) {
-            let trimmed = k.trim();
-            if !trimmed.is_empty() {
-                return trimmed.to_string();
+    if let Ok(raw) = std::fs::read_to_string(data_dir.join("config.json")) {
+        if let Ok(val) = serde_json::from_str::<Value>(&raw) {
+            for ptr in ["/voice/apiKey", "/vision/apiKey", "/text/apiKey", "/llm/apiKey"] {
+                if let Some(k) = val.pointer(ptr).and_then(|v| v.as_str()) {
+                    let trimmed = k.trim();
+                    if !trimmed.is_empty() {
+                        return trimmed.to_string();
+                    }
+                }
             }
         }
     }
-    String::new()
+    std::env::var("GEMINI_API_KEY")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default()
 }
 
 fn post_gemini_json(
@@ -1365,7 +1466,8 @@ pub fn transcribe_dropped_audio_async(
             .get("apiKey")
             .and_then(|v| v.as_str())
             .map(|s| !s.trim().is_empty())
-            .unwrap_or(false);
+            .unwrap_or(false)
+            || !read_fallback_gemini_key(&data_dir).is_empty();
         let use_local = engine == "whisper-local" || (engine.is_empty() && !has_cloud_key);
 
         let res = if use_local {
@@ -1462,5 +1564,68 @@ mod tests {
         assert!(!is_audio_media("photo.png", "image/png"));
         assert_eq!(infer_audio_mime("meeting.wav", ""), "audio/wav");
         assert_eq!(infer_audio_mime("meeting.wav", "audio/wav"), "audio/wav");
+    }
+
+    #[test]
+    fn resolve_voice_profile_config_respects_cloud_and_local_profiles() {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("syki_speech_prof_{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = json!({
+            "voice": {
+                "apiKey": "k-test",
+                "realtime": { "engine": "gemini", "model": "gemini-3.5-transcribe" },
+                "batch": { "engine": "whisper-local", "whisper": { "model": "haas-ja-medium" } }
+            }
+        });
+        std::fs::write(dir.join("config.json"), cfg.to_string()).unwrap();
+
+        let rt = resolve_voice_profile_config(&dir, "realtime", "ja");
+        assert_eq!(rt["engine"], "gemini");
+        assert_eq!(rt["model"], "gemini-3.5-transcribe");
+        assert!(!is_local_profile_configured(&dir, "realtime"));
+
+        let bt = resolve_voice_profile_config(&dir, "batch", "ja");
+        assert_eq!(bt["engine"], "whisper-local");
+        assert_eq!(bt["whisper"]["model"], "haas-ja-medium");
+        assert!(is_local_profile_configured(&dir, "batch"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn transcribe_wav_file_uses_cloud_path_when_gemini_selected() {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("syki_speech_wav_{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = json!({
+            "voice": {
+                "baseUrl": "http://127.0.0.1:1",
+                "apiKey": "dummy-key",
+                "realtime": { "engine": "gemini" }
+            }
+        });
+        std::fs::write(dir.join("config.json"), cfg.to_string()).unwrap();
+        let wav_path = dir.join("sample.wav");
+        std::fs::write(&wav_path, encode_wav_pcm16(&[0i16; 160], 16_000, 1)).unwrap();
+
+        let err = transcribe_wav_file(&dir, &wav_path, "ja").unwrap_err();
+        assert_ne!(err, "local speech engine/model not installed");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_stt_lock_serializes_concurrent_callers() {
+        let guard = local_stt_lock().lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let _g = local_stt_lock().lock().unwrap();
+            tx.send(true).unwrap();
+        });
+        assert!(rx.recv_timeout(std::time::Duration::from_millis(50)).is_err());
+        drop(guard);
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap(), true);
+        handle.join().unwrap();
     }
 }

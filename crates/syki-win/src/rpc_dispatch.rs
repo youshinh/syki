@@ -1315,8 +1315,9 @@ impl CoreState {
             },
             "stopMeetingRecordingAsync" => {
                 let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
+                let voice_cfg = param_str(&req.params, 1, "voiceConfigJson").unwrap_or_default();
                 let sender = self.event_sender.lock().expect("event_sender mutex").clone();
-                self.meeting.stop_async(self.env.data_dir.clone(), req_id, sender);
+                self.meeting.stop_async(self.env.data_dir.clone(), req_id, voice_cfg, sender);
                 RpcResponse::ok(&req.id, json!(true))
             }
             "abortMeetingRecording" => {

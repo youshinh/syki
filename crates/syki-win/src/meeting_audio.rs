@@ -234,7 +234,13 @@ impl MeetingRecorder {
         }
     }
 
-    pub fn stop_async(&self, data_dir: PathBuf, req_id: String, sender: Option<EventSender>) {
+    pub fn stop_async(
+        &self,
+        data_dir: PathBuf,
+        req_id: String,
+        voice_config_json: String,
+        sender: Option<EventSender>,
+    ) {
         let rec = self.active.lock().expect("recorder mutex").take();
         std::thread::spawn(move || {
             let Some(r) = rec else {
@@ -272,13 +278,17 @@ impl MeetingRecorder {
             let wav_path = cache_dir.join(format!("meeting-{stamp}.wav"));
             let _ = write_atomic_bytes(&wav_path, &wav);
 
-            let (text, error, cache_out) = match speech::transcribe_wav_file(&data_dir, &wav_path, "ja") {
-                Ok(t) => {
-                    let _ = std::fs::remove_file(&wav_path);
-                    (t, String::new(), String::new())
-                }
-                Err(e) => (String::new(), e, wav_path.to_string_lossy().into_owned()),
+            let trimmed_cfg = voice_config_json.trim();
+            let effective_cfg_json = if trimmed_cfg.is_empty() || trimmed_cfg == "{}" {
+                speech::resolve_voice_profile_config(&data_dir, "batch", "ja").to_string()
+            } else {
+                trimmed_cfg.to_string()
             };
+            let (text, error, cache_out) =
+                match speech::transcribe_cached_file_with_config(&data_dir, &wav_path, &effective_cfg_json, true) {
+                    Ok(t) => (t, String::new(), String::new()),
+                    Err(e) => (String::new(), e, wav_path.to_string_lossy().into_owned()),
+                };
             if let Some(tx) = sender {
                 tx(RpcEvent {
                     topic: "voice:result".to_string(),

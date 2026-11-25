@@ -871,7 +871,9 @@ unsafe extern "system" fn quick_capture_wnd_proc(
                             ctx.status_hint = "変換中...".to_string();
                             Some((mic, ctx.data_dir.clone(), HWND(ctx.edit_hwnd as *mut _)))
                         } else {
-                            speech::prefetch_model_async(ctx.data_dir.clone());
+                            if speech::is_local_profile_configured(&ctx.data_dir, "realtime") {
+                                speech::prefetch_model_async(ctx.data_dir.clone());
+                            }
                             ctx.mic = Some(start_mic_capture());
                             ctx.status_hint = "録音中...".to_string();
                             None

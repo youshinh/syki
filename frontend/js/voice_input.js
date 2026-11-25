@@ -850,7 +850,7 @@
 
     let stream;
     try {
-      if (global.backend && typeof global.backend.prefetchSpeechModel === 'function') {
+      if (localEngine && global.backend && typeof global.backend.prefetchSpeechModel === 'function') {
         Promise.resolve(global.backend.prefetchSpeechModel()).catch(() => {});
       }
       stream = await global.navigator.mediaDevices.getUserMedia({ audio: true });
