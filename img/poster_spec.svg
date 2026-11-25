@@ -66,7 +66,7 @@
   <g transform="translate(50, 0)">
     <g transform="translate(0, 166)">
       <text x="0" y="0" class="sans-action">INSTANT CAPTURE</text>
-      <text x="400" y="0" text-anchor="end" class="mono-key">~1 ms · STT · OCR</text>
+      <text x="400" y="0" text-anchor="end" class="mono-key">Win32 · STT · OCR</text>
       <line x1="0" y1="18" x2="400" y2="18" stroke="#141417" stroke-width="0.8"/>
     </g>
     <g transform="translate(0, 232)">
@@ -80,7 +80,7 @@
       <line x1="0" y1="18" x2="400" y2="18" stroke="#141417" stroke-width="0.8"/>
     </g>
     <g transform="translate(0, 364)">
-      <text x="0" y="0" class="sans-action">LOCAL-FIRST AI</text>
+      <text x="0" y="0" class="sans-action">LOCAL &amp; CLOUD AI</text>
       <text x="400" y="0" text-anchor="end" class="mono-key">Ctrl+L · Ctrl+K · Tab</text>
       <line x1="0" y1="18" x2="400" y2="18" stroke="#141417" stroke-width="0.8"/>
     </g>

@@ -19,7 +19,7 @@ An instant, featherweight Markdown scratchpad. &nbsp;[日本語](README.ja.md)
 ### Core Concept
 
 - **Membrane, not a vault.** Plain `.md`, zero lock-in.
-- **Dormant until summoned.** 3–5 MB idle, `< 15 ms` wake.
+- **Fast & light.** ~300 ms warm start, ~10 ms tray wake, ~1 MB detached idle.
 - **Fast core, lazy skin.** Rust core; extend via `user.css` & `plugins/`.
 
 ---
@@ -28,10 +28,10 @@ An instant, featherweight Markdown scratchpad. &nbsp;[日本語](README.ja.md)
 
 | # | Capability | Scope |
 | :--- | :--- | :--- |
-| **01** | **Instant Capture** | ~1 ms popup, screen grab, local STT / WASAPI, Vision OCR |
+| **01** | **Instant Capture** | Native Win32 popup, screen grab, WASAPI + Cloud/Local STT, Vision OCR |
 | **02** | **Markdown Studio** | Split tabs, IME Guardian, KaTeX / Mermaid, PDF, PTY |
 | **03** | **Hybrid Search** | Full-text + `mmap` SIMD semantic search |
-| **04** | **Local-First AI** | Inline rewrite, autocomplete, Vision OCR, image gen |
+| **04** | **Hybrid AI (Local / Cloud)** | Inline rewrite, autocomplete, Vision OCR, Gemini image gen |
 | **05** | **CLI & Plugins** | `syki-cli` pipes & RPC, `user.css`, `window.syki` plugins |
 
 ---
