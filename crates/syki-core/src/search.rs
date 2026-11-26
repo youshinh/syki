@@ -69,23 +69,36 @@ pub struct ScrapFilterOptions {
     pub undated: usize,
 }
 
+fn collect_md_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in rd.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !name.starts_with('.') && name != "node_modules" {
+                collect_md_recursive(&p, out);
+            }
+        } else if p.is_file()
+            && p.extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("md"))
+                .unwrap_or(false)
+        {
+            out.push(p);
+        }
+    }
+}
+
 fn collect_scrap_files(scrap_dir: &Path, filter: &ScrapFilter) -> Vec<PathBuf> {
     let resolved = ScrapStore::resolve_scrap_dir(scrap_dir);
-    let Ok(rd) = std::fs::read_dir(&resolved) else {
-        return Vec::new();
-    };
+    let mut raw_files = Vec::new();
+    collect_md_recursive(&resolved, &mut raw_files);
     let from = filter.from.trim();
     let to = filter.to.trim();
-    let mut files: Vec<PathBuf> = rd
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.is_file()
-                && p.extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| e.eq_ignore_ascii_case("md"))
-                    .unwrap_or(false)
-        })
+    let mut files: Vec<PathBuf> = raw_files
+        .into_iter()
         .filter(|p| {
             if from.is_empty() && to.is_empty() {
                 return true;

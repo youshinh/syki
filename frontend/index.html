@@ -1265,6 +1265,13 @@
             <div class="settings-section-header" style="margin-top: 18px;">
               <h4 data-i18n="sectionDecisionModel">Decision Model</h4>
             </div>
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input type="checkbox" id="cfg-action-intent-router" checked>
+                <span data-i18n="actionIntentRouterLabel">Auto-route AI bar &amp; voice input by intent (search / diagram / edit / agent)</span>
+              </label>
+              <small data-i18n="actionIntentRouterHint">Uses the Decision Model (~360ms, 0 output tokens) with screen state and recent history to jump straight to the right action.</small>
+            </div>
             <details class="ai-override-box">
               <summary><span data-i18n="aiOverrideSummary">Connection &amp; model override</span><span class="ai-override-badge"></span></summary>
               <div class="ai-override-body">
@@ -2002,6 +2009,7 @@
   <script src="js/voice_profiles.js?v=1.0.1"></script>
   <script src="js/voice_input.js?v=1.0.1"></script>
   <script src="js/bar_voice.js?v=1.0.1"></script>
+  <script src="js/intent_router.js?v=1.0.0"></script>
   <script src="js/speech_settings.js?v=1.0.1"></script>
   <script src="js/speech_stream.js?v=1.0.1"></script>
   <script src="js/semantic_settings.js?v=1.0.1"></script>

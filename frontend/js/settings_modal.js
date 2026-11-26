@@ -262,6 +262,7 @@
       setVal('cfg-auto-api-key', (config.autocomplete && config.autocomplete.apiKey) || '');
       setVal('cfg-auto-delay', (config.autocomplete && config.autocomplete.delayMs) || 500);
       setVal('cfg-auto-tokens', (config.autocomplete && config.autocomplete.maxTokens) || 30);
+      setChecked('cfg-action-intent-router', !(config.action && config.action.intentRouter === false));
       setVal('cfg-action-base-url', (config.action && config.action.baseUrl) || '');
       setVal('cfg-action-model', (config.action && config.action.model) || 'gemini-decision-1');
       setVal('cfg-action-api-key', (config.action && config.action.apiKey) || '');

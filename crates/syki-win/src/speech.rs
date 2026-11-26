@@ -1437,6 +1437,10 @@ fn transcribe_cloud_single(
     Ok(text.to_string())
 }
 
+fn is_no_speech_error(err: &str) -> bool {
+    err.contains("話し声が検出されませんでした") || err.contains("文字起こし結果が空でした")
+}
+
 pub fn transcribe_cached_file_with_config(
     data_dir: &Path,
     cache_path: &Path,
@@ -1473,7 +1477,9 @@ pub fn transcribe_cached_file_with_config(
         transcribe_cloud_bytes(data_dir, &bytes, mime, &cfg)
     };
 
-    if res.is_ok() && delete_on_success {
+    let should_delete = delete_on_success
+        && (res.is_ok() || res.as_ref().err().is_some_and(|e| is_no_speech_error(e)));
+    if should_delete {
         let _ = std::fs::remove_file(cache_path);
         let kept = cache_path.with_extension("kept");
         if kept.exists() {
@@ -1507,16 +1513,25 @@ pub fn transcribe_audio_async(
             match save_audio_to_cache(&data_dir, &audio_b64, &mime_type) {
                 Ok(p) => {
                     let r = transcribe_local_with_config(&data_dir, &p, &cfg);
-                    if r.is_ok() {
+                    let drop_cache = r.is_ok()
+                        || r.as_ref().err().is_some_and(|e| is_no_speech_error(e));
+                    if drop_cache {
                         let _ = std::fs::remove_file(&p);
                     }
-                    r.map_err(|e| (e, p.to_string_lossy().into_owned()))
+                    r.map_err(|e| {
+                        let cp = if is_no_speech_error(&e) {
+                            String::new()
+                        } else {
+                            p.to_string_lossy().into_owned()
+                        };
+                        (e, cp)
+                    })
                 }
                 Err(e) => Err((e, String::new())),
             }
         } else {
             transcribe_cloud(&data_dir, &audio_b64, &mime_type, &cfg).map_err(|e| {
-                let cp = if no_cache {
+                let cp = if no_cache || is_no_speech_error(&e) {
                     String::new()
                 } else {
                     save_audio_to_cache(&data_dir, &audio_b64, &mime_type)
@@ -1790,5 +1805,13 @@ mod tests {
         let small = encode_wav_pcm16(&[1, 2, 3, 4], 16_000, 1);
         assert!(split_wav_pcm_chunks(&small, 1024).is_none());
         assert!(split_wav_pcm_chunks(b"not a wav file", 4).is_none());
+    }
+
+    #[test]
+    fn is_no_speech_error_distinguishes_silence_from_network_errors() {
+        assert!(is_no_speech_error("話し声が検出されませんでした"));
+        assert!(is_no_speech_error("文字起こし結果が空でした"));
+        assert!(!is_no_speech_error("Gemini接続エラー: os error 10060"));
+        assert!(!is_no_speech_error("Gemini APIエラー (503): unavailable"));
     }
 }

@@ -558,24 +558,39 @@ impl CoreState {
             "searchScrapsSemantic" => {
                 let query = param_str(&req.params, 0, "query").unwrap_or_default();
                 let limit = param_u64(&req.params, 1, "limit").unwrap_or(20) as usize;
+                let filter_raw = param_str(&req.params, 2, "filter")
+                    .or_else(|| param_value(&req.params, 2, "filter").map(|v| v.to_string()))
+                    .unwrap_or_default();
+                let filter = ScrapFilter::parse(&filter_raw).unwrap_or_default();
                 let index_dir = self.env.data_dir.join("semindex");
-                if let Ok(idx) = MmapVectorIndex::open_mmap(&index_dir) {
+                let dir = self.config_store.scrap_dir();
+                let scrap_dir = ScrapStore::resolve_scrap_dir(&dir);
+
+                let idx_opt = match MmapVectorIndex::open_mmap(&index_dir) {
+                    Ok(idx) if !idx.is_empty() => Some(idx),
+                    _ => {
+                        let _ = build_local_semantic_index(&scrap_dir, &index_dir);
+                        MmapVectorIndex::open_mmap(&index_dir).ok().filter(|i| !i.is_empty())
+                    }
+                };
+                if let Some(idx) = idx_opt {
                     let q_vec = embed_local_hash(&query, idx.dim());
                     let hits = idx.search(&q_vec, limit);
-                    return RpcResponse::ok(
-                        &req.id,
-                        json!({
-                            "results": hits,
-                            "notes": [],
-                            "truncated": false,
-                            "semantic": true,
-                            "pending": 0,
-                            "leftOut": 0
-                        }),
-                    );
+                    if !hits.is_empty() {
+                        return RpcResponse::ok(
+                            &req.id,
+                            json!({
+                                "results": hits,
+                                "notes": [],
+                                "truncated": false,
+                                "semantic": true,
+                                "pending": 0,
+                                "leftOut": 0
+                            }),
+                        );
+                    }
                 }
-                let dir = self.config_store.scrap_dir();
-                let fallback = search_scraps_parallel(&dir, &query, limit, &ScrapFilter::default());
+                let fallback = search_scraps_parallel(&dir, &query, limit, &filter);
                 RpcResponse::ok(
                     &req.id,
                     json!({

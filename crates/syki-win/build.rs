@@ -161,6 +161,7 @@ const DEFERRED_BOOT_JS: &[&str] = &[
     "js/status_ai.js",
     "js/voice_input.js",
     "js/bar_voice.js",
+    "js/intent_router.js",
 ];
 
 fn fnv1a_hex(bytes: &[u8]) -> String {

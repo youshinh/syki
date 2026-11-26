@@ -1396,17 +1396,17 @@
       startBtn.className = 'btn-primary agent-launcher-btn primary';
       startBtn.textContent = t('agentLaunch', 'Start');
       startBtn.onclick = async () => {
-        if (adminChk.checked && backend && typeof backend.ptyLaunchElevated === 'function') {
-          try {
-            await backend.ptyLaunchElevated(selectedPreset || 'shell', selectedDir || '');
-            hideLauncher();
-          } catch (e) {
-            // Keep launcher open if UAC was cancelled or failed.
-          }
+        hideLauncher();
+        const presetId = selectedPreset || 'shell';
+        if (adminChk.checked) {
+          const found = DEFAULT_PRESETS.find((p) => p.id === presetId);
+          const pLabel = found ? found.label : presetId;
+          await startSession('admin:' + presetId, selectedDir || '', {
+            label: 'Admin ' + pLabel
+          });
           return;
         }
-        hideLauncher();
-        await startSession(selectedPreset, selectedDir);
+        await startSession(presetId, selectedDir);
       };
       actions.appendChild(startBtn);
 
@@ -3085,16 +3085,12 @@
         });
         bindAgentCtx('agent-ctx-admin-shell', async () => {
           hideMenus();
-          const { target } = resolveTarget();
+          const { ctrl, target } = resolveTarget();
           agentContextMenuTargetId = null;
-          const be = win.backend;
-          if (be && typeof be.ptyLaunchElevated === 'function') {
-            try {
-              await be.ptyLaunchElevated('shell', (target && target.dir) || '');
-              notifyMessage(t('agentElevatedLaunched', 'Opened Administrator PowerShell window'), 2500);
-            } catch (err) {
-              notifyMessage((err && err.message) || String(err), 3500);
-            }
+          if (ctrl && typeof ctrl.startSession === 'function') {
+            await ctrl.startSession('admin:shell', (target && target.dir) || '', {
+              label: 'Admin PowerShell'
+            });
           }
         });
         bindAgentCtx('agent-ctx-copy-to-note', () => {

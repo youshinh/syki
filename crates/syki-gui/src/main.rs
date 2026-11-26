@@ -459,7 +459,12 @@ fn run_perf_probe() {
 }
 
 fn main() {
-    if std::env::args().nth(1).as_deref() == Some("--perf-probe") {
+    let raw_args: Vec<String> = std::env::args().collect();
+    if raw_args.iter().any(|a| a == "--elevated-pty-helper") {
+        let code = syki_win::pty::run_elevated_pty_helper(&raw_args);
+        std::process::exit(code);
+    }
+    if raw_args.get(1).map(String::as_str) == Some("--perf-probe") {
         run_perf_probe();
         return;
     }

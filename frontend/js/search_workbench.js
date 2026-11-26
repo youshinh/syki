@@ -207,10 +207,14 @@
       results.forEach(res => {
         if (res.matches) {
           res.matches.forEach(m => {
+            const normMatch = Object.assign({}, m, {
+              lineNumber: m.lineNumber != null ? m.lineNumber : (m.line != null ? m.line : 1),
+              lineText: m.lineText != null ? m.lineText : (m.text != null ? m.text : '')
+            });
             scrapsSearchFlattened.push({
               filePath: res.filePath,
               fileName: res.fileName,
-              match: m
+              match: normMatch
             });
           });
         }

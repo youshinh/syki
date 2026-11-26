@@ -1,7 +1,7 @@
 //! Embedded Windows ConPTY terminal manager, gate detection, and Git worktree helper (#13).
 
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::windows::io::FromRawHandle;
 use std::path::{Path, PathBuf};
@@ -14,11 +14,17 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 use syki_core::rpc::RpcEvent;
 use windows::core::{w, HSTRING, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::Foundation::{CloseHandle, ERROR_PIPE_CONNECTED, HANDLE, INVALID_HANDLE_VALUE};
+use windows::Win32::Storage::FileSystem::{
+    FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_INBOUND, PIPE_ACCESS_OUTBOUND,
+};
 use windows::Win32::System::Console::{
     ClosePseudoConsole, CreatePseudoConsole, ResizePseudoConsole, COORD, HPCON,
 };
-use windows::Win32::System::Pipes::CreatePipe;
+use windows::Win32::System::Pipes::{
+    ConnectNamedPipe, CreateNamedPipeW, CreatePipe, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE,
+    PIPE_WAIT,
+};
 use windows::Win32::System::Threading::{
     CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess,
     InitializeProcThreadAttributeList, TerminateProcess, UpdateProcThreadAttribute,
@@ -32,12 +38,58 @@ use crate::rpc_dispatch::EventSender;
 const MAX_HISTORY_BYTES: usize = 256 * 1024;
 const STILL_ACTIVE_CODE: u32 = 259;
 
+const CTRL_TAG_STDIN: u8 = 0;
+const CTRL_TAG_RESIZE: u8 = 1;
+const CTRL_TAG_CLOSE: u8 = 2;
+
+fn write_ctrl_frame(writer: &mut File, tag: u8, payload: &[u8]) -> std::io::Result<()> {
+    let mut hdr = [0u8; 5];
+    hdr[0] = tag;
+    hdr[1..5].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+    writer.write_all(&hdr)?;
+    if !payload.is_empty() {
+        writer.write_all(payload)?;
+    }
+    writer.flush()
+}
+
+fn read_ctrl_frame(reader: &mut File) -> std::io::Result<Option<(u8, Vec<u8>)>> {
+    let mut hdr = [0u8; 5];
+    match reader.read_exact(&mut hdr) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    let tag = hdr[0];
+    let len = u32::from_le_bytes([hdr[1], hdr[2], hdr[3], hdr[4]]) as usize;
+    if len > 16 * 1024 * 1024 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "control frame too large",
+        ));
+    }
+    let mut payload = vec![0u8; len];
+    if len > 0 {
+        reader.read_exact(&mut payload)?;
+    }
+    Ok(Some((tag, payload)))
+}
+
+enum PtyBackend {
+    Local {
+        hpcon: isize,
+        process_handle: isize,
+        writer: Mutex<File>,
+    },
+    ElevatedBridge {
+        ctrl_writer: Mutex<File>,
+    },
+}
+
 struct PtySession {
     _id: String,
     _label: String,
-    hpcon: isize,
-    process_handle: isize,
-    writer: Mutex<File>,
+    backend: PtyBackend,
     history: Arc<Mutex<Vec<u8>>>,
     closed: Arc<AtomicBool>,
 }
@@ -83,110 +135,24 @@ impl PtyManager {
         };
 
         let work_dir = resolve_work_dir(dir);
-        let cmd_line = command_for_preset(preset);
-
-        let mut in_read = HANDLE::default();
-        let mut in_write = HANDLE::default();
-        let mut out_read = HANDLE::default();
-        let mut out_write = HANDLE::default();
-
-        unsafe {
-            CreatePipe(&mut in_read, &mut in_write, None, 0)
-                .map_err(|e| format!("CreatePipe(in) failed: {e}"))?;
-            if let Err(e) = CreatePipe(&mut out_read, &mut out_write, None, 0) {
-                let _ = CloseHandle(in_read);
-                let _ = CloseHandle(in_write);
-                return Err(format!("CreatePipe(out) failed: {e}"));
-            }
+        if let Some(inner_preset) = preset
+            .trim()
+            .strip_prefix("admin:")
+            .or_else(|| preset.trim().strip_prefix("ADMIN:"))
+        {
+            return self.start_elevated_session_with_size(
+                &id,
+                inner_preset,
+                &work_dir,
+                label,
+                cols,
+                rows,
+                sender,
+            );
         }
 
-        let size = COORD {
-            X: cols.max(10) as i16,
-            Y: rows.max(4) as i16,
-        };
-        let hpcon: HPCON = match unsafe { CreatePseudoConsole(size, in_read, out_write, 0) } {
-            Ok(h) => h,
-            Err(e) => {
-                unsafe {
-                    let _ = CloseHandle(in_read);
-                    let _ = CloseHandle(in_write);
-                    let _ = CloseHandle(out_read);
-                    let _ = CloseHandle(out_write);
-                }
-                return Err(format!("CreatePseudoConsole failed: {e}"));
-            }
-        };
-
-        // Child owns the PTY ends after CreatePseudoConsole.
-        unsafe {
-            let _ = CloseHandle(in_read);
-            let _ = CloseHandle(out_write);
-        }
-
-        let mut attr_size: usize = 0;
-        unsafe {
-            let _ = InitializeProcThreadAttributeList(None, 1, Some(0), &mut attr_size);
-        }
-        let mut attr_buf = vec![0u64; (attr_size.max(64) + 7) / 8];
-        let attr_list = LPPROC_THREAD_ATTRIBUTE_LIST(attr_buf.as_mut_ptr() as *mut _);
-        unsafe {
-            InitializeProcThreadAttributeList(Some(attr_list), 1, Some(0), &mut attr_size)
-                .map_err(|e| format!("InitializeProcThreadAttributeList failed: {e}"))?;
-            UpdateProcThreadAttribute(
-                attr_list,
-                0,
-                PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
-                Some(hpcon.0 as *const _),
-                std::mem::size_of::<HPCON>(),
-                None,
-                None,
-            )
-            .map_err(|e| format!("UpdateProcThreadAttribute failed: {e}"))?;
-        }
-
-        let mut si = STARTUPINFOEXW::default();
-        si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
-        si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-        si.lpAttributeList = attr_list;
-
-        let mut cmd_utf16: Vec<u16> = cmd_line.encode_utf16().chain(std::iter::once(0)).collect();
-        let cwd_h = HSTRING::from(work_dir.as_os_str());
-        let mut pi = PROCESS_INFORMATION::default();
-
-        let created = unsafe {
-            CreateProcessW(
-                None,
-                Some(PWSTR(cmd_utf16.as_mut_ptr())),
-                None,
-                None,
-                false,
-                EXTENDED_STARTUPINFO_PRESENT,
-                None,
-                &cwd_h,
-                &si.StartupInfo,
-                &mut pi,
-            )
-        };
-
-        unsafe {
-            DeleteProcThreadAttributeList(attr_list);
-        }
-
-        if let Err(e) = created {
-            unsafe {
-                ClosePseudoConsole(hpcon);
-                let _ = CloseHandle(in_write);
-                let _ = CloseHandle(out_read);
-            }
-            return Err(format!("CreateProcessW failed: {e}"));
-        }
-
-        unsafe {
-            let _ = CloseHandle(pi.hThread);
-        }
-
-        let writer = unsafe { File::from_raw_handle(in_write.0 as *mut _) };
-        let mut reader = unsafe { File::from_raw_handle(out_read.0 as *mut _) };
+        let (hpcon, proc_handle, writer, mut reader) =
+            spawn_conpty_process(preset, &work_dir, cols, rows)?;
         let history = Arc::new(Mutex::new(Vec::new()));
         let closed = Arc::new(AtomicBool::new(false));
         let lbl = if label.trim().is_empty() {
@@ -198,9 +164,11 @@ impl PtyManager {
         let session = Arc::new(PtySession {
             _id: id.clone(),
             _label: lbl.clone(),
-            hpcon: hpcon.0,
-            process_handle: pi.hProcess.0 as isize,
-            writer: Mutex::new(writer),
+            backend: PtyBackend::Local {
+                hpcon: hpcon.0,
+                process_handle: proc_handle.0 as isize,
+                writer: Mutex::new(writer),
+            },
             history: Arc::clone(&history),
             closed: Arc::clone(&closed),
         });
@@ -211,7 +179,7 @@ impl PtyManager {
 
         let id_bg = id.clone();
         let sessions_bg = Arc::clone(&self.sessions);
-        let proc_raw = pi.hProcess.0 as isize;
+        let proc_raw = proc_handle.0 as isize;
         let hist_bg = Arc::clone(&history);
         let closed_bg = Arc::clone(&closed);
 
@@ -284,10 +252,19 @@ impl PtyManager {
             .get(id)
             .cloned()
             .ok_or_else(|| format!("unknown pty session: {id}"))?;
-        let mut w = session.writer.lock().expect("pty writer mutex");
-        w.write_all(data)
-            .and_then(|_| w.flush())
-            .map_err(|e| format!("ptyWrite failed: {e}"))
+        match &session.backend {
+            PtyBackend::Local { writer, .. } => {
+                let mut w = writer.lock().expect("pty writer mutex");
+                w.write_all(data)
+                    .and_then(|_| w.flush())
+                    .map_err(|e| format!("ptyWrite failed: {e}"))
+            }
+            PtyBackend::ElevatedBridge { ctrl_writer } => {
+                let mut w = ctrl_writer.lock().expect("pty ctrl writer mutex");
+                write_ctrl_frame(&mut w, CTRL_TAG_STDIN, data)
+                    .map_err(|e| format!("ptyWrite(elevated) failed: {e}"))
+            }
+        }
     }
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -298,13 +275,27 @@ impl PtyManager {
             .get(id)
             .cloned()
             .ok_or_else(|| format!("unknown pty session: {id}"))?;
-        let coord = COORD {
-            X: cols.max(10) as i16,
-            Y: rows.max(4) as i16,
-        };
-        unsafe {
-            ResizePseudoConsole(HPCON(session.hpcon), coord)
-                .map_err(|e| format!("ResizePseudoConsole failed: {e}"))
+        let c = cols.max(10);
+        let r = rows.max(4);
+        match &session.backend {
+            PtyBackend::Local { hpcon, .. } => {
+                let coord = COORD {
+                    X: c as i16,
+                    Y: r as i16,
+                };
+                unsafe {
+                    ResizePseudoConsole(HPCON(*hpcon), coord)
+                        .map_err(|e| format!("ResizePseudoConsole failed: {e}"))
+                }
+            }
+            PtyBackend::ElevatedBridge { ctrl_writer } => {
+                let mut payload = [0u8; 4];
+                payload[0..2].copy_from_slice(&c.to_le_bytes());
+                payload[2..4].copy_from_slice(&r.to_le_bytes());
+                let mut w = ctrl_writer.lock().expect("pty ctrl writer mutex");
+                write_ctrl_frame(&mut w, CTRL_TAG_RESIZE, &payload)
+                    .map_err(|e| format!("ptyResize(elevated) failed: {e}"))
+            }
         }
     }
 
@@ -342,9 +333,20 @@ impl PtyManager {
             return false;
         };
         if !s.closed.swap(true, Ordering::AcqRel) {
-            unsafe {
-                let _ = TerminateProcess(HANDLE(s.process_handle as *mut _), 1);
-                ClosePseudoConsole(HPCON(s.hpcon));
+            match &s.backend {
+                PtyBackend::Local {
+                    hpcon,
+                    process_handle,
+                    ..
+                } => unsafe {
+                    let _ = TerminateProcess(HANDLE(*process_handle as *mut _), 1);
+                    ClosePseudoConsole(HPCON(*hpcon));
+                },
+                PtyBackend::ElevatedBridge { ctrl_writer } => {
+                    if let Ok(mut w) = ctrl_writer.lock() {
+                        let _ = write_ctrl_frame(&mut w, CTRL_TAG_CLOSE, &[]);
+                    }
+                }
             }
         }
         true
@@ -362,6 +364,406 @@ impl PtyManager {
             self.close(&id);
         }
     }
+
+    fn start_elevated_session_with_size(
+        &self,
+        id: &str,
+        preset: &str,
+        work_dir: &Path,
+        label: &str,
+        cols: u16,
+        rows: u16,
+        sender: Option<EventSender>,
+    ) -> Result<Value, String> {
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let pid = std::process::id();
+        let pipe_base = format!(r"\\.\pipe\syki-elev-pty-{pid}-{nonce}");
+        let in_pipe_name = format!("{pipe_base}-in");
+        let out_pipe_name = format!("{pipe_base}-out");
+
+        let in_h = unsafe {
+            CreateNamedPipeW(
+                &HSTRING::from(in_pipe_name.as_str()),
+                PIPE_ACCESS_OUTBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                1,
+                65536,
+                65536,
+                0,
+                None,
+            )
+        };
+        if in_h == INVALID_HANDLE_VALUE {
+            return Err("CreateNamedPipeW(in) failed".to_string());
+        }
+
+        let out_h = unsafe {
+            CreateNamedPipeW(
+                &HSTRING::from(out_pipe_name.as_str()),
+                PIPE_ACCESS_INBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                1,
+                65536,
+                65536,
+                0,
+                None,
+            )
+        };
+        if out_h == INVALID_HANDLE_VALUE {
+            unsafe {
+                let _ = CloseHandle(in_h);
+            }
+            return Err("CreateNamedPipeW(out) failed".to_string());
+        }
+
+        let exe_path = std::env::current_exe()
+            .map_err(|e| format!("current_exe failed: {e}"))?;
+        let args = format!(
+            "--elevated-pty-helper --pipe \"{}\" --preset \"{}\" --dir \"{}\" --cols {} --rows {}",
+            pipe_base,
+            preset.replace('"', ""),
+            work_dir.to_string_lossy().replace('"', ""),
+            cols.max(10),
+            rows.max(4)
+        );
+
+        let exe_h = HSTRING::from(exe_path.as_os_str());
+        let args_h = HSTRING::from(args);
+        let dir_h = HSTRING::from(work_dir.as_os_str());
+        let res = unsafe {
+            ShellExecuteW(
+                None,
+                w!("runas"),
+                &exe_h,
+                &args_h,
+                &dir_h,
+                SW_HIDE,
+            )
+        };
+        let code = res.0 as isize;
+        if code <= 32 {
+            unsafe {
+                let _ = CloseHandle(in_h);
+                let _ = CloseHandle(out_h);
+            }
+            if code == 5 || code == 1223 {
+                return Err("管理者権限での起動がキャンセルされました".to_string());
+            }
+            return Err(format!("管理者起動に失敗しました (code {code})"));
+        }
+
+        // Wait for the elevated helper to connect to both pipes.
+        let mut ok_in = unsafe { ConnectNamedPipe(in_h, None) }.is_ok();
+        if !ok_in && unsafe { windows::Win32::Foundation::GetLastError() } == ERROR_PIPE_CONNECTED {
+            ok_in = true;
+        }
+        let mut ok_out = if ok_in {
+            unsafe { ConnectNamedPipe(out_h, None) }.is_ok()
+        } else {
+            false
+        };
+        if !ok_out && ok_in && unsafe { windows::Win32::Foundation::GetLastError() } == ERROR_PIPE_CONNECTED {
+            ok_out = true;
+        }
+        if !ok_in || !ok_out {
+            unsafe {
+                let _ = CloseHandle(in_h);
+                let _ = CloseHandle(out_h);
+            }
+            return Err("管理者ターミナルヘルパーとの接続に失敗しました".to_string());
+        }
+
+        let ctrl_writer = unsafe { File::from_raw_handle(in_h.0 as *mut _) };
+        let mut reader = unsafe { File::from_raw_handle(out_h.0 as *mut _) };
+        let history = Arc::new(Mutex::new(Vec::new()));
+        let closed = Arc::new(AtomicBool::new(false));
+        let lbl = if label.trim().is_empty() {
+            format!("Admin {preset}")
+        } else {
+            label.trim().to_string()
+        };
+
+        let session = Arc::new(PtySession {
+            _id: id.to_string(),
+            _label: lbl.clone(),
+            backend: PtyBackend::ElevatedBridge {
+                ctrl_writer: Mutex::new(ctrl_writer),
+            },
+            history: Arc::clone(&history),
+            closed: Arc::clone(&closed),
+        });
+        self.sessions
+            .lock()
+            .expect("pty sessions mutex")
+            .insert(id.to_string(), session);
+
+        let id_bg = id.to_string();
+        let sessions_bg = Arc::clone(&self.sessions);
+        let hist_bg = Arc::clone(&history);
+        let closed_bg = Arc::clone(&closed);
+
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let chunk = &buf[..n];
+                        {
+                            let mut h = hist_bg.lock().expect("pty history mutex");
+                            h.extend_from_slice(chunk);
+                            if h.len() > MAX_HISTORY_BYTES {
+                                let drain = h.len() - MAX_HISTORY_BYTES;
+                                h.drain(..drain);
+                            }
+                        }
+                        if let Some(tx) = sender.as_ref() {
+                            tx(RpcEvent {
+                                topic: "pty:data".to_string(),
+                                payload: json!({
+                                    "id": id_bg,
+                                    "b64": STANDARD.encode(chunk)
+                                }),
+                            });
+                        }
+                    }
+                }
+            }
+            closed_bg.store(true, Ordering::Release);
+            sessions_bg.lock().expect("pty sessions mutex").remove(&id_bg);
+            if let Some(tx) = sender {
+                tx(RpcEvent {
+                    topic: "pty:exit".to_string(),
+                    payload: json!({ "id": id_bg, "code": 0, "error": "" }),
+                });
+            }
+        });
+
+        Ok(json!({
+            "id": id,
+            "preset": format!("admin:{preset}"),
+            "dir": work_dir.to_string_lossy(),
+            "label": lbl
+        }))
+    }
+}
+
+fn spawn_conpty_process(
+    preset: &str,
+    work_dir: &Path,
+    cols: u16,
+    rows: u16,
+) -> Result<(HPCON, HANDLE, File, File), String> {
+    let cmd_line = command_for_preset(preset);
+
+    let mut in_read = HANDLE::default();
+    let mut in_write = HANDLE::default();
+    let mut out_read = HANDLE::default();
+    let mut out_write = HANDLE::default();
+
+    unsafe {
+        CreatePipe(&mut in_read, &mut in_write, None, 0)
+            .map_err(|e| format!("CreatePipe(in) failed: {e}"))?;
+        if let Err(e) = CreatePipe(&mut out_read, &mut out_write, None, 0) {
+            let _ = CloseHandle(in_read);
+            let _ = CloseHandle(in_write);
+            return Err(format!("CreatePipe(out) failed: {e}"));
+        }
+    }
+
+    let size = COORD {
+        X: cols.max(10) as i16,
+        Y: rows.max(4) as i16,
+    };
+    let hpcon: HPCON = match unsafe { CreatePseudoConsole(size, in_read, out_write, 0) } {
+        Ok(h) => h,
+        Err(e) => {
+            unsafe {
+                let _ = CloseHandle(in_read);
+                let _ = CloseHandle(in_write);
+                let _ = CloseHandle(out_read);
+                let _ = CloseHandle(out_write);
+            }
+            return Err(format!("CreatePseudoConsole failed: {e}"));
+        }
+    };
+
+    unsafe {
+        let _ = CloseHandle(in_read);
+        let _ = CloseHandle(out_write);
+    }
+
+    let mut attr_size: usize = 0;
+    unsafe {
+        let _ = InitializeProcThreadAttributeList(None, 1, Some(0), &mut attr_size);
+    }
+    let mut attr_buf = vec![0u64; (attr_size.max(64) + 7) / 8];
+    let attr_list = LPPROC_THREAD_ATTRIBUTE_LIST(attr_buf.as_mut_ptr() as *mut _);
+    unsafe {
+        InitializeProcThreadAttributeList(Some(attr_list), 1, Some(0), &mut attr_size)
+            .map_err(|e| format!("InitializeProcThreadAttributeList failed: {e}"))?;
+        UpdateProcThreadAttribute(
+            attr_list,
+            0,
+            PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
+            Some(hpcon.0 as *const _),
+            std::mem::size_of::<HPCON>(),
+            None,
+            None,
+        )
+        .map_err(|e| format!("UpdateProcThreadAttribute failed: {e}"))?;
+    }
+
+    let mut si = STARTUPINFOEXW::default();
+    si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    si.lpAttributeList = attr_list;
+
+    let mut cmd_utf16: Vec<u16> = cmd_line.encode_utf16().chain(std::iter::once(0)).collect();
+    let cwd_h = HSTRING::from(work_dir.as_os_str());
+    let mut pi = PROCESS_INFORMATION::default();
+
+    let created = unsafe {
+        CreateProcessW(
+            None,
+            Some(PWSTR(cmd_utf16.as_mut_ptr())),
+            None,
+            None,
+            false,
+            EXTENDED_STARTUPINFO_PRESENT,
+            None,
+            &cwd_h,
+            &si.StartupInfo,
+            &mut pi,
+        )
+    };
+
+    unsafe {
+        DeleteProcThreadAttributeList(attr_list);
+    }
+
+    if let Err(e) = created {
+        unsafe {
+            ClosePseudoConsole(hpcon);
+            let _ = CloseHandle(in_write);
+            let _ = CloseHandle(out_read);
+        }
+        return Err(format!("CreateProcessW failed: {e}"));
+    }
+
+    unsafe {
+        let _ = CloseHandle(pi.hThread);
+    }
+
+    let writer = unsafe { File::from_raw_handle(in_write.0 as *mut _) };
+    let reader = unsafe { File::from_raw_handle(out_read.0 as *mut _) };
+    Ok((hpcon, pi.hProcess, writer, reader))
+}
+
+/// Entrypoint for the hidden elevated ConPTY helper (`syki.exe --elevated-pty-helper ...`).
+pub fn run_elevated_pty_helper(args: &[String]) -> i32 {
+    let mut pipe_base = String::new();
+    let mut preset = "shell".to_string();
+    let mut dir = String::new();
+    let mut cols: u16 = 100;
+    let mut rows: u16 = 30;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--pipe" if i + 1 < args.len() => {
+                pipe_base = args[i + 1].clone();
+                i += 2;
+            }
+            "--preset" if i + 1 < args.len() => {
+                preset = args[i + 1].clone();
+                i += 2;
+            }
+            "--dir" if i + 1 < args.len() => {
+                dir = args[i + 1].clone();
+                i += 2;
+            }
+            "--cols" if i + 1 < args.len() => {
+                cols = args[i + 1].parse().unwrap_or(100);
+                i += 2;
+            }
+            "--rows" if i + 1 < args.len() => {
+                rows = args[i + 1].parse().unwrap_or(30);
+                i += 2;
+            }
+            _ => i += 1,
+        }
+    }
+    if pipe_base.is_empty() {
+        return 1;
+    }
+    run_elevated_pty_helper_inner(&pipe_base, &preset, &dir, cols, rows)
+}
+
+fn run_elevated_pty_helper_inner(
+    pipe_base: &str,
+    preset: &str,
+    dir: &str,
+    cols: u16,
+    rows: u16,
+) -> i32 {
+    let Ok(mut ctrl_reader) = OpenOptions::new().read(true).open(format!("{pipe_base}-in")) else {
+        return 2;
+    };
+    let Ok(mut data_writer) = OpenOptions::new().write(true).open(format!("{pipe_base}-out")) else {
+        return 3;
+    };
+
+    let work_dir = resolve_work_dir(dir);
+    let Ok((hpcon, proc_handle, mut pty_writer, mut pty_reader)) =
+        spawn_conpty_process(preset, &work_dir, cols, rows)
+    else {
+        return 4;
+    };
+
+    let pump = std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match pty_reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if data_writer.write_all(&buf[..n]).is_err() || data_writer.flush().is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    while let Ok(Some((tag, payload))) = read_ctrl_frame(&mut ctrl_reader) {
+        match tag {
+            CTRL_TAG_STDIN => {
+                if pty_writer.write_all(&payload).is_err() || pty_writer.flush().is_err() {
+                    break;
+                }
+            }
+            CTRL_TAG_RESIZE if payload.len() >= 4 => {
+                let c = u16::from_le_bytes([payload[0], payload[1]]).max(10) as i16;
+                let r = u16::from_le_bytes([payload[2], payload[3]]).max(4) as i16;
+                let _ = unsafe { ResizePseudoConsole(hpcon, COORD { X: c, Y: r }) };
+            }
+            CTRL_TAG_CLOSE => break,
+            _ => {}
+        }
+    }
+
+    unsafe {
+        let _ = TerminateProcess(proc_handle, 1);
+        ClosePseudoConsole(hpcon);
+        let _ = CloseHandle(proc_handle);
+    }
+    let _ = pump.join();
+    0
 }
 
 fn resolve_work_dir(dir: &str) -> PathBuf {
@@ -622,5 +1024,77 @@ mod tests {
         assert_eq!(command_for_preset("cmd"), "cmd.exe");
         assert!(command_for_preset("shell").ends_with("-NoLogo"));
         assert!(command_for_preset("ps").ends_with("-NoLogo"));
+    }
+
+    #[test]
+    fn elevated_bridge_streams_conpty_output_and_resize_over_named_pipes() {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let pipe_base = format!(r"\\.\pipe\syki-test-elev-{nanos}");
+        let in_h = unsafe {
+            CreateNamedPipeW(
+                &HSTRING::from(format!("{pipe_base}-in")),
+                PIPE_ACCESS_OUTBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                1,
+                65536,
+                65536,
+                0,
+                None,
+            )
+        };
+        assert_ne!(in_h, INVALID_HANDLE_VALUE);
+        let out_h = unsafe {
+            CreateNamedPipeW(
+                &HSTRING::from(format!("{pipe_base}-out")),
+                PIPE_ACCESS_INBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                1,
+                65536,
+                65536,
+                0,
+                None,
+            )
+        };
+        assert_ne!(out_h, INVALID_HANDLE_VALUE);
+
+        let base_clone = pipe_base.clone();
+        let helper = std::thread::spawn(move || {
+            run_elevated_pty_helper_inner(&base_clone, "cmd", ".", 80, 24)
+        });
+
+        unsafe {
+            let _ = ConnectNamedPipe(in_h, None);
+            let _ = ConnectNamedPipe(out_h, None);
+        }
+
+        let mut ctrl_w = unsafe { File::from_raw_handle(in_h.0 as *mut _) };
+        let mut data_r = unsafe { File::from_raw_handle(out_h.0 as *mut _) };
+
+        std::thread::sleep(Duration::from_millis(400));
+        write_ctrl_frame(&mut ctrl_w, CTRL_TAG_STDIN, b"echo SYKI_ELEV_OK\r\n").unwrap();
+        write_ctrl_frame(&mut ctrl_w, CTRL_TAG_RESIZE, &[90, 0, 30, 0]).unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let reader_thread = std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            let mut acc = String::new();
+            while let Ok(n) = data_r.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                acc.push_str(&String::from_utf8_lossy(&buf[..n]));
+                if acc.contains("SYKI_ELEV_OK") {
+                    let _ = tx.send(acc);
+                    break;
+                }
+            }
+        });
+
+        let got = rx.recv_timeout(Duration::from_secs(6)).expect("SYKI_ELEV_OK from bridge");
+        assert!(got.contains("SYKI_ELEV_OK"));
+        let _ = write_ctrl_frame(&mut ctrl_w, CTRL_TAG_CLOSE, &[]);
+        drop(ctrl_w);
+        let _ = reader_thread.join();
+        assert_eq!(helper.join().unwrap(), 0);
     }
 }

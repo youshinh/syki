@@ -278,6 +278,7 @@ impl MmapVectorIndex {
                 (i, cosine_similarity_f32(query_vec, &v))
             })
             .collect();
+        scored.retain(|&(_, s)| s > 0.001);
         scored.sort_by(|a, b| b.1.total_cmp(&a.1));
         scored
             .into_iter()
@@ -301,15 +302,29 @@ impl MmapVectorIndex {
 }
 
 /// Deterministic lightweight feature-hash embedding (64-dim) for local offline fallback & indexing.
+/// Hashes both whitespace-delimited tokens and character 2-grams/3-grams so CJK/Japanese queries match.
 pub fn embed_local_hash(text: &str, dim: usize) -> Vec<f32> {
     let mut vec = vec![0.0f32; dim];
-    for token in text.split_whitespace() {
+    let hash_bytes = |bytes: &[u8]| -> usize {
         let mut h = 2166136261u32;
-        for b in token.to_ascii_lowercase().bytes() {
+        for &b in bytes {
             h ^= b as u32;
             h = h.wrapping_mul(16777619);
         }
-        vec[(h as usize) % dim] += 1.0;
+        (h as usize) % dim
+    };
+    for token in text.split_whitespace() {
+        let lower = token.to_ascii_lowercase();
+        vec[hash_bytes(lower.as_bytes())] += 1.0;
+        let chars: Vec<char> = lower.chars().collect();
+        for w in 2..=3 {
+            if chars.len() >= w {
+                for win in chars.windows(w) {
+                    let s: String = win.iter().collect();
+                    vec[hash_bytes(s.as_bytes())] += 0.7;
+                }
+            }
+        }
     }
     let norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 1e-12 {
@@ -320,22 +335,32 @@ pub fn embed_local_hash(text: &str, dim: usize) -> Vec<f32> {
     vec
 }
 
-/// Indexes all `.md` files in `scrap_dir` into `index_dir` using `dim`-dimensional local embeddings.
-pub fn build_local_semantic_index(scrap_dir: &Path, index_dir: &Path) -> Result<(usize, usize), String> {
-    let Ok(rd) = std::fs::read_dir(scrap_dir) else {
-        return Ok((0, 0));
+fn collect_semindex_md(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
     };
-    let mut files: Vec<PathBuf> = rd
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.is_file()
-                && p.extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| e.eq_ignore_ascii_case("md"))
-                    .unwrap_or(false)
-        })
-        .collect();
+    for entry in rd.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !name.starts_with('.') && name != "node_modules" {
+                collect_semindex_md(&p, out);
+            }
+        } else if p.is_file()
+            && p.extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("md"))
+                .unwrap_or(false)
+        {
+            out.push(p);
+        }
+    }
+}
+
+/// Indexes all `.md` files in `scrap_dir` (recursively) into `index_dir` using `dim`-dimensional local embeddings.
+pub fn build_local_semantic_index(scrap_dir: &Path, index_dir: &Path) -> Result<(usize, usize), String> {
+    let mut files = Vec::new();
+    collect_semindex_md(scrap_dir, &mut files);
     files.sort();
 
     const DIM: usize = 64;

@@ -155,6 +155,7 @@
     },
     action: {
       enabled: true,
+      intentRouter: true,
       baseUrl: 'https://openrouter.ai/api/v1',
       model: 'gemini-decision-1',
       apiKey: ''
@@ -7547,6 +7548,7 @@
   // fade, unless something was typed into it. Alt+Tab away does not count (panel_fade.js; docs/design/panel-template.md).
   // The microphone button of the ask / rewrite and command bars (js/bar_voice.js); set up with the command bar below.
   let barVoice = null;
+  let lastInlineBarVoiceAt = 0;
 
   const askBarFade = window.PanelFade && inlinePromptBar ? window.PanelFade.create(inlinePromptBar, {
     isOpen: isAskBarOpen,
@@ -8127,12 +8129,9 @@
     if (!currentInlinePromptContext) return;
 
     const ctx = currentInlinePromptContext;
-    if (!ctx.onSubmit && !isLlmConfigured(false)) {
-      if (btnInlinePromptSetup) btnInlinePromptSetup.focus();
-      return;
-    }
     const rawInstruction = inlinePromptInput.value.trim();
     let instruction = rawInstruction;
+    let isDiagramRoute = false;
     const curTab = getTab(ctx.tabId);
     if (!curTab) {
       closeInlinePromptBar();
@@ -8166,6 +8165,84 @@
           showMessage(`Skill "${skillName}" not found (skills/${skillName}/SKILL.md)`, 4000);
         }
       }
+    }
+
+    // Intent Router (Decision Model + UI State + History): fast-route natural language before LLM checks
+    if (!ctx.onSubmit && ctx.mode !== 'rewrite' && !skillMatch && rawInstruction && window.IntentRouter) {
+      const routerEnabled = !!(config && config.action && config.action.enabled !== false && config.action.intentRouter !== false);
+      if (routerEnabled) {
+        const uiState = {
+          source: (Date.now() - lastInlineBarVoiceAt < 8000) ? 'bar_voice' : 'bar_text',
+          hasSelection: !!(ctx.target && ctx.target.kind === 'selection'),
+          selectionChars: (ctx.target && ctx.target.text) ? ctx.target.text.length : 0,
+          selectionPreview: (ctx.target && ctx.target.kind === 'selection') ? ctx.target.text.slice(0, 60) : '',
+          activeFile: curTab.title || '',
+          hasEditorContent: !!(curTab.content && curTab.content.trim()),
+          rightPane: isSplitMode ? secondaryViewMode : 'closed',
+          agentRunning: !!(btnAgentSide && btnAgentSide.classList.contains('has-running'))
+        };
+        const routed = await window.IntentRouter.routeIntent({
+          input: rawInstruction,
+          uiState,
+          enabled: true,
+          queryDecision: queryDecisionModel,
+          timeoutMs: 2500,
+          stripSecrets: window.SecretStrip ? window.SecretStrip.strip : undefined
+        });
+        if (routed.route === 'search_semantic') {
+          closeInlinePromptBar();
+          const wb = ensureSearchWorkbench();
+          const canMeaning = !!(config && config.semantic && config.semantic.enabled);
+          if (wb) wb.openForRpc({ mode: canMeaning ? 'meaning' : 'exact', query: routed.query || rawInstruction });
+          showMessage(t(canMeaning ? 'intentRoutedSearchSemantic' : 'intentRoutedSearchGrep'), 2500);
+          return;
+        }
+        if (routed.route === 'search_grep') {
+          closeInlinePromptBar();
+          const wb = ensureSearchWorkbench();
+          if (wb) wb.openForRpc({ mode: 'exact', query: routed.query || rawInstruction });
+          showMessage(t('intentRoutedSearchGrep'), 2500);
+          return;
+        }
+        if (routed.route === 'send_agent') {
+          closeInlinePromptBar();
+          await openAgentPane();
+          const ctrl = ensureAgentController();
+          const sent = ctrl && typeof ctrl.sendTextToActive === 'function' ? ctrl.sendTextToActive(rawInstruction) : false;
+          showMessage(t(sent ? 'intentRoutedSendAgent' : 'intentRoutedSendAgentNoSession'), 3000);
+          return;
+        }
+        if (routed.route === 'run_cli') {
+          closeInlinePromptBar();
+          openCommandBar('ai');
+          if (cliFilterInput) {
+            cliFilterInput.value = rawInstruction;
+            if (cliBarFade && cliBarFade.markTyped) cliBarFade.markTyped();
+          }
+          showMessage(t('intentRoutedRunCli'), 2500);
+          generateAiCliCommand();
+          return;
+        }
+        if (routed.route === 'infographic') {
+          closeInlinePromptBar();
+          showMessage(t('intentRoutedInfographic'), 2500);
+          generateImageFromMermaid();
+          return;
+        }
+        if (routed.route === 'edit_note' && ctx.target && ctx.target.kind !== 'note' && ctx.target.kind !== 'none' && ctx.target.text) {
+          ctx.mode = 'rewrite';
+          showMessage(t('intentRoutedEditNote'), 2200);
+        } else if (routed.route === 'diagram') {
+          isDiagramRoute = true;
+          instruction = `Mermaid図（flowchart / sequenceDiagram / erDiagram 等）で簡潔に図解してください。コードブロック \`\`\`mermaid ... \`\`\` を含めてください。\n\n${rawInstruction}`;
+          showMessage(t('intentRoutedDiagram'), 2200);
+        }
+      }
+    }
+
+    if (!ctx.onSubmit && !isLlmConfigured(false)) {
+      if (btnInlinePromptSetup) btnInlinePromptSetup.focus();
+      return;
     }
     // The offsets the bar took when it opened are only good while the note is as it was then (typing, another answer landing).
     // A bar that only collects a task instruction hands them to its caller, which finds its text again by itself.
@@ -8340,7 +8417,18 @@
       restoreOnError: true,
       baseline: baseline,
       persistRestore: '',
-      onFailure: (errorText) => showAskFailure({ tabId: curTab.id, mode: 'ask', target: ctx.target, instruction: instruction, errorText: errorText })
+      onFailure: (errorText) => showAskFailure({ tabId: curTab.id, mode: 'ask', target: ctx.target, instruction: instruction, errorText: errorText }),
+      onFinish: isDiagramRoute ? (status) => {
+        if (status === 'completed' && curTab.id === activeTabId) {
+          if (!isPreviewMode && !(isSplitMode && secondaryViewMode === 'preview' && secondaryTabId === curTab.id)) {
+            openPreviewToSide(curTab.id);
+          } else if (isSplitMode && secondaryViewMode === 'preview') {
+            updateSecondaryPane();
+          } else if (isPreviewMode) {
+            renderPreview();
+          }
+        }
+      } : undefined
     });
   }
 
@@ -8835,7 +8923,7 @@
       if (inlinePromptInput && inlinePromptBar) {
         barVoice.attach('ask', {
           input: inlinePromptInput, row: inlinePromptBar.querySelector('.inline-prompt-row'), send: btnInlinePromptSend,
-          onText: () => { if (askBarFade && askBarFade.markTyped) askBarFade.markTyped(); }
+          onText: () => { lastInlineBarVoiceAt = Date.now(); if (askBarFade && askBarFade.markTyped) askBarFade.markTyped(); }
         });
       }
       if (cliFilterInput && cliFilterBar) {
@@ -14304,6 +14392,8 @@ OUTPUT FORMAT:
     }
 
     if (!config.action) config.action = {};
+    const saveActionIntentRouterEl = document.getElementById('cfg-action-intent-router');
+    if (saveActionIntentRouterEl) config.action.intentRouter = !!saveActionIntentRouterEl.checked;
     const saveActionBaseEl = document.getElementById('cfg-action-base-url');
     if (saveActionBaseEl) config.action.baseUrl = saveActionBaseEl.value.trim();
     const saveActionModelEl = document.getElementById('cfg-action-model');
@@ -17021,6 +17111,51 @@ OUTPUT FORMAT:
     })), Promise.resolve());
   }
 
+  const pendingDecisionRequests = new Map();
+  window.__onLLMDecisionResult = (reqId, choiceId, reason, by, ok) => {
+    const settle = pendingDecisionRequests.get(reqId);
+    if (!settle) return;
+    pendingDecisionRequests.delete(reqId);
+    settle({ choiceId: String(choiceId || ''), reason: String(reason || ''), by: String(by || ''), ok: !!ok });
+  };
+
+  async function queryDecisionModel({ input, choices, fallback, prompt, timeoutMs }) {
+    if (!window.backend || typeof window.backend.queryDecisionAsync !== 'function') {
+      return { choiceId: String(fallback || ''), reason: 'backend unavailable', by: 'fallback', ok: false };
+    }
+    const reqId = genReqId('dec_');
+    const actionCfg = JSON.stringify((config && config.action) || {});
+    const defaultCfg = JSON.stringify((config && config.text) || {});
+    return new Promise((resolve) => {
+      const ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : 15000;
+      const timer = setTimeout(() => {
+        if (pendingDecisionRequests.delete(reqId)) {
+          resolve({ choiceId: String(fallback || ''), reason: 'timeout', by: 'timeout', ok: false });
+        }
+      }, ms + 2000);
+      pendingDecisionRequests.set(reqId, (res) => {
+        clearTimeout(timer);
+        resolve(res);
+      });
+      try {
+        window.backend.queryDecisionAsync(
+          reqId,
+          actionCfg,
+          defaultCfg,
+          String(input || ''),
+          Array.isArray(choices) ? choices : [],
+          String(fallback || ''),
+          String(prompt || ''),
+          ms
+        );
+      } catch (err) {
+        clearTimeout(timer);
+        pendingDecisionRequests.delete(reqId);
+        resolve({ choiceId: String(fallback || ''), reason: String((err && err.message) || err), by: 'error', ok: false });
+      }
+    });
+  }
+
   function ensurePluginPlatform() {
     if (pluginPlatformState) return Promise.resolve(pluginPlatformState);
     if (pluginPlatformPromise) return pluginPlatformPromise;
@@ -17060,51 +17195,8 @@ OUTPUT FORMAT:
         return bar;
       }
 
-      const pendingDecisionRequests = new Map();
-      window.__onLLMDecisionResult = (reqId, choiceId, reason, by, ok) => {
-        const settle = pendingDecisionRequests.get(reqId);
-        if (!settle) return;
-        pendingDecisionRequests.delete(reqId);
-        settle({ choiceId: String(choiceId || ''), reason: String(reason || ''), by: String(by || ''), ok: !!ok });
-      };
-
       const deps = {
-        queryDecision: async ({ input, choices, fallback, prompt, timeoutMs }) => {
-          if (!window.backend || typeof window.backend.queryDecisionAsync !== 'function') {
-            return { choiceId: String(fallback || ''), reason: 'backend unavailable', by: 'fallback', ok: false };
-          }
-          const reqId = genReqId('dec_');
-          const actionCfg = JSON.stringify((config && config.action) || {});
-          const defaultCfg = JSON.stringify((config && config.text) || {});
-          return new Promise((resolve) => {
-            const ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : 15000;
-            const timer = setTimeout(() => {
-              if (pendingDecisionRequests.delete(reqId)) {
-                resolve({ choiceId: String(fallback || ''), reason: 'timeout', by: 'timeout', ok: false });
-              }
-            }, ms + 2000);
-            pendingDecisionRequests.set(reqId, (res) => {
-              clearTimeout(timer);
-              resolve(res);
-            });
-            try {
-              window.backend.queryDecisionAsync(
-                reqId,
-                actionCfg,
-                defaultCfg,
-                String(input || ''),
-                Array.isArray(choices) ? choices : [],
-                String(fallback || ''),
-                String(prompt || ''),
-                ms
-              );
-            } catch (err) {
-              clearTimeout(timer);
-              pendingDecisionRequests.delete(reqId);
-              resolve({ choiceId: String(fallback || ''), reason: String((err && err.message) || err), by: 'error', ok: false });
-            }
-          });
-        },
+        queryDecision: queryDecisionModel,
         locale: (config && config.general && config.general.language === 'en') ? 'en' : 'ja',
         getText: () => (window.__sykiRPC ? window.__sykiRPC.getBuffer().text : ''),
         setText: (text) => { if (window.__sykiRPC) window.__sykiRPC.writeText(text, 'set'); },
