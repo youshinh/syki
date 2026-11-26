@@ -2955,18 +2955,29 @@
     }
 
     function updateHeaderUI(isAgentMode) {
-      const btnIds = [
+      const hiddenInHeader = [
         'btn-pty-link-to-left',
         'btn-pty-done-next',
         'btn-pty-sleep',
-        'btn-pty-relay',
-        'btn-pty-mermaid-preview',
+        'btn-pty-relay'
+      ];
+      for (let i = 0; i < hiddenInHeader.length; i++) {
+        const b = getById(hiddenInHeader[i]);
+        if (b) b.classList.add('hidden');
+      }
+      const essentialIds = [
         'btn-pty-copy-to-left',
         'btn-pty-summarize-to-left'
       ];
-      for (let i = 0; i < btnIds.length; i++) {
-        const b = getById(btnIds[i]);
+      for (let i = 0; i < essentialIds.length; i++) {
+        const b = getById(essentialIds[i]);
         if (b) b.classList.toggle('hidden', !isAgentMode);
+      }
+      const ctrl = getCtrl();
+      const mermaidBtn = getById('btn-pty-mermaid-preview');
+      if (mermaidBtn) {
+        const hasMermaid = isAgentMode && !!(ctrl && typeof ctrl.getLatestMermaid === 'function' && ctrl.getLatestMermaid());
+        mermaidBtn.classList.toggle('hidden', !hasMermaid);
       }
       const badgeEl = getById('pty-loop-badge');
       const stopBtn = getById('btn-pty-loop-stop');
@@ -2978,7 +2989,6 @@
         }
         return;
       }
-      const ctrl = getCtrl();
       const act = ctrl && ctrl.getActiveSession ? ctrl.getActiveSession() : null;
       const activeLoop = (ctrl && act && ctrl.getLoopForSession) ? ctrl.getLoopForSession(act.id) : null;
       const runningLoop = activeLoop && (activeLoop.phase === 'maker' || activeLoop.phase === 'checker') ? activeLoop : null;
