@@ -98,6 +98,7 @@
     'ptyClose',
     'ptyDetectGate',
     'ptyHistory',
+    'ptyLaunchElevated',
     'ptyPickFolder',
     'ptyPrepareWorktree',
     'ptyRename',

@@ -8,7 +8,8 @@
     { id: 'cc', label: 'Claude Code', short: 'cc' },
     { id: 'codex', label: 'Codex', short: 'codex' },
     { id: 'agy', label: 'Agy', short: 'agy' },
-    { id: 'shell', label: 'Shell', short: 'shell' }
+    { id: 'shell', label: 'PowerShell', short: 'ps' },
+    { id: 'cmd', label: 'CMD', short: 'cmd' }
   ];
 
   function bracketedPaste(text) {
@@ -1345,6 +1346,19 @@
         card.appendChild(histList);
       }
 
+      const adminWrap = doc.createElement('label');
+      adminWrap.className = 'agent-launcher-admin';
+      if (adminWrap.style) {
+        adminWrap.style.cssText = 'display:flex;align-items:center;gap:6px;margin:8px 0 4px;font-size:12px;color:var(--text-muted);cursor:pointer;';
+      }
+      const adminChk = doc.createElement('input');
+      adminChk.type = 'checkbox';
+      const adminSpan = doc.createElement('span');
+      adminSpan.textContent = t('agentRunAsAdmin', 'Run as Administrator (UAC, external window)');
+      adminWrap.appendChild(adminChk);
+      adminWrap.appendChild(adminSpan);
+      card.appendChild(adminWrap);
+
       const actions = doc.createElement('div');
       actions.className = 'agent-launcher-actions';
 
@@ -1382,6 +1396,15 @@
       startBtn.className = 'btn-primary agent-launcher-btn primary';
       startBtn.textContent = t('agentLaunch', 'Start');
       startBtn.onclick = async () => {
+        if (adminChk.checked && backend && typeof backend.ptyLaunchElevated === 'function') {
+          try {
+            await backend.ptyLaunchElevated(selectedPreset || 'shell', selectedDir || '');
+            hideLauncher();
+          } catch (e) {
+            // Keep launcher open if UAC was cancelled or failed.
+          }
+          return;
+        }
         hideLauncher();
         await startSession(selectedPreset, selectedDir);
       };
@@ -3060,6 +3083,28 @@
           const ctrl = ensureCtrl();
           if (ctrl && cfg.secondaryAgentPane) ctrl.showLauncher(cfg.secondaryAgentPane);
         });
+        bindAgentCtx('agent-ctx-admin-shell', async () => {
+          hideMenus();
+          const { target } = resolveTarget();
+          agentContextMenuTargetId = null;
+          const be = win.backend;
+          if (be && typeof be.ptyLaunchElevated === 'function') {
+            try {
+              await be.ptyLaunchElevated('shell', (target && target.dir) || '');
+              notifyMessage(t('agentElevatedLaunched', 'Opened Administrator PowerShell window'), 2500);
+            } catch (err) {
+              notifyMessage((err && err.message) || String(err), 3500);
+            }
+          }
+        });
+        bindAgentCtx('agent-ctx-copy-to-note', () => {
+          hideMenus();
+          const { ctrl, target } = resolveTarget();
+          agentContextMenuTargetId = null;
+          if (ctrl && target && ctrl.selectSession) ctrl.selectSession(target.id);
+          const btn = getById('btn-pty-copy-to-left');
+          if (btn) btn.click();
+        });
         bindAgentCtx('agent-ctx-new-window', () => {
           hideMenus();
           agentContextMenuTargetId = null;
@@ -3475,12 +3520,20 @@
       });
       wireHeaderBtn('btn-pty-copy-to-left', true, () => {
         const ctrl = ensureCtrl();
-        const out = ctrl ? ctrl.readActiveOutput(80) : '';
+        const act = ctrl && ctrl.getActiveSession ? ctrl.getActiveSession() : null;
+        const sel = (act && act.term && typeof act.term.getSelection === 'function')
+          ? String(act.term.getSelection() || '').trim()
+          : '';
+        const out = sel || (ctrl ? ctrl.readActiveOutput(80) : '');
         if (out) insertTextIntoLeftNote(out);
       });
       wireHeaderBtn('btn-pty-summarize-to-left', true, () => {
         const ctrl = ensureCtrl();
-        const out = ctrl ? ctrl.readActiveOutput(120) : '';
+        const act = ctrl && ctrl.getActiveSession ? ctrl.getActiveSession() : null;
+        const sel = (act && act.term && typeof act.term.getSelection === 'function')
+          ? String(act.term.getSelection() || '').trim()
+          : '';
+        const out = sel || (ctrl ? ctrl.readActiveOutput(120) : '');
         if (out) insertTextIntoLeftNote('```\n' + out + '\n```');
       });
     }

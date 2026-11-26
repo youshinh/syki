@@ -1167,6 +1167,14 @@ impl CoreState {
                 RpcResponse::ok(&req.id, json!(pty::prepare_worktree(&dir, &id).to_string()))
             }
             "ptySuggestDirs" => RpcResponse::ok(&req.id, json!(pty::suggest_dirs())),
+            "ptyLaunchElevated" => {
+                let preset = param_str(&req.params, 0, "preset").unwrap_or_else(|| "shell".into());
+                let dir = param_str(&req.params, 1, "dir").unwrap_or_default();
+                match pty::launch_elevated(&preset, &dir) {
+                    Ok(info) => RpcResponse::ok(&req.id, json!(info.to_string())),
+                    Err(e) => RpcResponse::err(&req.id, e),
+                }
+            }
 
             "getSpeechStatus" => {
                 let voice_cfg = param_str(&req.params, 0, "voiceConfigJson").unwrap_or_else(|| "{}".into());

@@ -595,16 +595,25 @@ fn attach_webview_controller(
                 req.Uri(&mut uri_raw)?;
                 let uri = CoTaskMemPWSTR::from(uri_raw).to_string();
 
-                let (status, mime, body) =
-                    match resolve_virtual_request(&uri, dyn_for_res.as_deref()) {
-                        Some(hit) => hit,
-                        None if !uri.starts_with(VIRTUAL_ORIGIN) => {
-                            (403, "text/plain; charset=utf-8", b"Forbidden".to_vec())
+                let (status, mime, dyn_body, arc_body): (u16, &'static str, Vec<u8>, Option<std::sync::Arc<Vec<u8>>>) =
+                    if !uri.starts_with(VIRTUAL_ORIGIN) {
+                        (403, "text/plain; charset=utf-8", b"Forbidden".to_vec(), None)
+                    } else {
+                        let rel = &uri[VIRTUAL_ORIGIN.len() - 1..];
+                        if let Some(hit) = dyn_for_res.as_deref().and_then(|h| h(rel)) {
+                            (hit.0, hit.1, hit.2, None)
+                        } else if let Some(a) = crate::assets::resolve_static_asset(rel) {
+                            (200, a.mime, Vec::new(), Some(crate::assets::decode_asset_arc(a)))
+                        } else {
+                            (404, "text/plain; charset=utf-8", b"Not Found".to_vec(), None)
                         }
-                        None => (404, "text/plain; charset=utf-8", b"Not Found".to_vec()),
                     };
 
-                let stream: Option<IStream> = SHCreateMemStream(Some(&body));
+                let stream: Option<IStream> = if let Some(ref arc) = arc_body {
+                    SHCreateMemStream(Some(arc.as_slice()))
+                } else {
+                    SHCreateMemStream(Some(&dyn_body))
+                };
                 let rel_path = uri
                     .strip_prefix(VIRTUAL_ORIGIN)
                     .unwrap_or("")

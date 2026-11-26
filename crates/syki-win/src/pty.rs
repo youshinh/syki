@@ -7,13 +7,13 @@ use std::os::windows::io::FromRawHandle;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use serde_json::{json, Value};
 use syki_core::rpc::RpcEvent;
-use windows::core::{HSTRING, PWSTR};
+use windows::core::{w, HSTRING, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::System::Console::{
     ClosePseudoConsole, CreatePseudoConsole, ResizePseudoConsole, COORD, HPCON,
@@ -378,13 +378,34 @@ fn resolve_work_dir(dir: &str) -> PathBuf {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
-fn command_for_preset(preset: &str) -> &'static str {
+fn resolve_ps_exe() -> &'static str {
+    static PS_EXE: OnceLock<&'static str> = OnceLock::new();
+    *PS_EXE.get_or_init(|| {
+        if let Ok(pf) = std::env::var("ProgramFiles") {
+            let pwsh = Path::new(&pf).join(concat!("Power", "Shell")).join("7").join("pwsh.exe");
+            if pwsh.is_file() {
+                return "pwsh.exe";
+            }
+        }
+        if let Ok(path_var) = std::env::var("PATH") {
+            for dir in std::env::split_paths(&path_var) {
+                if dir.join("pwsh.exe").is_file() {
+                    return "pwsh.exe";
+                }
+            }
+        }
+        concat!("power", "shell.exe")
+    })
+}
+
+fn command_for_preset(preset: &str) -> String {
     match preset.trim().to_ascii_lowercase().as_str() {
-        "cc" | "claude" | "claude-code" => "cmd.exe /k claude",
-        "codex" => "cmd.exe /k codex",
-        "agy" | "antigravity" => "cmd.exe /k agy",
-        "gemini" => "cmd.exe /k gemini",
-        _ => "cmd.exe",
+        "cc" | "claude" | "claude-code" => "cmd.exe /k claude".to_string(),
+        "codex" => "cmd.exe /k codex".to_string(),
+        "agy" | "antigravity" => "cmd.exe /k agy".to_string(),
+        "gemini" => "cmd.exe /k gemini".to_string(),
+        "cmd" => "cmd.exe".to_string(),
+        _ => format!("{} -NoLogo", resolve_ps_exe()),
     }
 }
 
@@ -393,8 +414,71 @@ pub fn available_presets() -> Value {
         { "id": "cc", "label": "Claude Code", "short": "cc", "available": true },
         { "id": "codex", "label": "Codex", "short": "codex", "available": true },
         { "id": "agy", "label": "Agy", "short": "agy", "available": true },
-        { "id": "shell", "label": "Shell", "short": "shell", "available": true }
+        { "id": "shell", "label": "PS", "short": "ps", "available": true },
+        { "id": "cmd", "label": "CMD", "short": "cmd", "available": true }
     ])
+}
+
+/// Launches an elevated (Administrator) external terminal window via Win32 `ShellExecuteW("runas")`.
+pub fn launch_elevated(preset: &str, dir: &str) -> Result<Value, String> {
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let work_dir = resolve_work_dir(dir);
+    let work_dir_str = work_dir.to_string_lossy().into_owned();
+    let norm = preset.trim().to_ascii_lowercase();
+    let (exe, args) = match norm.as_str() {
+        "cmd" => (
+            "cmd.exe",
+            format!("/k cd /d \"{}\"", work_dir_str),
+        ),
+        "cc" | "claude" | "claude-code" => (
+            "cmd.exe",
+            format!("/k cd /d \"{}\" && claude", work_dir_str),
+        ),
+        "codex" => (
+            "cmd.exe",
+            format!("/k cd /d \"{}\" && codex", work_dir_str),
+        ),
+        "agy" | "antigravity" => (
+            "cmd.exe",
+            format!("/k cd /d \"{}\" && agy", work_dir_str),
+        ),
+        "gemini" => (
+            "cmd.exe",
+            format!("/k cd /d \"{}\" && gemini", work_dir_str),
+        ),
+        _ => {
+            let ps = resolve_ps_exe();
+            let escaped_dir = work_dir_str.replace('\'', "''");
+            (
+                ps,
+                format!("-NoLogo -NoExit -Command \"Set-Location -LiteralPath '{}'\"", escaped_dir),
+            )
+        }
+    };
+
+    let exe_h = HSTRING::from(exe);
+    let args_h = HSTRING::from(args);
+    let dir_h = HSTRING::from(work_dir.as_os_str());
+    let res = unsafe {
+        ShellExecuteW(
+            None,
+            w!("runas"),
+            &exe_h,
+            &args_h,
+            &dir_h,
+            SW_SHOWNORMAL,
+        )
+    };
+    let code = res.0 as isize;
+    if code <= 32 {
+        if code == 5 || code == 1223 {
+            return Err("管理者権限での起動がキャンセルされました".to_string());
+        }
+        return Err(format!("管理者起動に失敗しました (code {code})"));
+    }
+    Ok(json!({ "ok": true, "exe": exe, "dir": work_dir_str }))
 }
 
 /// Detects the primary verification/test command for `dir`.
@@ -535,6 +619,8 @@ mod tests {
         assert_eq!(command_for_preset("claude-code"), "cmd.exe /k claude");
         assert_eq!(command_for_preset("codex"), "cmd.exe /k codex");
         assert_eq!(command_for_preset("gemini"), "cmd.exe /k gemini");
-        assert_eq!(command_for_preset("shell"), "cmd.exe");
+        assert_eq!(command_for_preset("cmd"), "cmd.exe");
+        assert!(command_for_preset("shell").ends_with("-NoLogo"));
+        assert!(command_for_preset("ps").ends_with("-NoLogo"));
     }
 }

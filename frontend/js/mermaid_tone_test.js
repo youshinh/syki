@@ -120,4 +120,42 @@ const MT = require('./mermaid_tone.js');
   MT.decorate(null, 'dark', 't', () => {}); // must not throw
 })();
 
+// sanitizeSource regressions (sub-graph, Unicode arrows, missing [] brackets, smart quotes)
+(() => {
+  const input1 = [
+    'flowchart TD',
+    '  sub-graph S1["[1] 事前チェック初回稼働 (05:40-05:42)"]',
+    '    S1_Start([初回稼働確認]) ──> S1_Res{結果判定}',
+    '    S1_Res ──>|一部問題あり| S1_Check6[6つのタスク]',
+    '    S5_Verify ──> S5_Jdg[残りは外部倉庫側の反映待ちと推定<br>→ 本日の対応は不要と判断]',
+    '  end'
+  ].join('\n');
+  const out1 = MT.sanitizeSource(input1);
+  assert.ok(out1.includes('  subgraph S1["[1] 事前チェック初回稼働 (05:40-05:42)"]'));
+  assert.ok(!out1.includes('sub-graph'));
+  assert.ok(out1.includes('S1_Start([初回稼働確認]) --> S1_Res{結果判定}'));
+  assert.ok(out1.includes('S1_Res -->|一部問題あり| S1_Check6[6つのタスク]'));
+  assert.ok(out1.includes('S5_Verify --> S5_Jdg[残りは外部倉庫側の反映待ちと推定<br>→ 本日の対応は不要と判断]'));
+
+  const input2 = [
+    'flowchart TD',
+    '  subgraph S1 "タイトル"',
+    '  end',
+    '  subgraph "タイトルのみ"',
+    '  end',
+    '  subgraph [1] 事前チェック初回稼働 (05:40-05:42)',
+    '  end',
+    '  subgraph S2[事前チェック (05:40)]',
+    '  end',
+    '  subgraph S3[\u201D[1] 事前チェック\u201D]',
+    '  end'
+  ].join('\n');
+  const out2 = MT.sanitizeSource(input2);
+  assert.ok(out2.includes('subgraph S1["タイトル"]'));
+  assert.ok(out2.includes('subgraph sg_1["タイトルのみ"]'));
+  assert.ok(out2.includes('subgraph sg_2["[1] 事前チェック初回稼働 (05:40-05:42)"]'));
+  assert.ok(out2.includes('subgraph S2["事前チェック (05:40)"]'));
+  assert.ok(out2.includes('subgraph S3["[1] 事前チェック"]'));
+})();
+
 console.log('mermaid_tone tests passed');

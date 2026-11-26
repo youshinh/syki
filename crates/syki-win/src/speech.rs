@@ -1115,24 +1115,112 @@ fn post_gemini_json(
     api_key_header: Option<&str>,
     body: &Value,
 ) -> Result<Value, String> {
-    let mut req = agent
-        .post(url)
-        .set("Content-Type", "application/json");
-    if let Some(k) = api_key_header {
-        req = req.set("x-goog-api-key", k);
-    }
     let payload = serde_json::to_string(body).map_err(|e| format!("JSON encode error: {e}"))?;
-    let resp = req.send_string(&payload).map_err(|e| match e {
-        ureq::Error::Status(code, r) => {
-            let msg = r.into_string().unwrap_or_default();
-            format!("Gemini APIエラー ({code}): {msg}")
+    let mut last_err = String::new();
+    for attempt in 0..2 {
+        let mut req = agent
+            .post(url)
+            .set("Content-Type", "application/json");
+        if let Some(k) = api_key_header {
+            req = req.set("x-goog-api-key", k);
         }
-        ureq::Error::Transport(t) => format!("Gemini接続エラー: {t}"),
-    })?;
-    let text = resp
-        .into_string()
-        .map_err(|e| format!("Gemini応答読込エラー: {e}"))?;
-    serde_json::from_str(&text).map_err(|e| format!("Gemini応答解析エラー: {e}"))
+        match req.send_string(&payload) {
+            Ok(resp) => {
+                let text = resp
+                    .into_string()
+                    .map_err(|e| format!("Gemini応答読込エラー: {e}"))?;
+                return serde_json::from_str(&text)
+                    .map_err(|e| format!("Gemini応答解析エラー: {e}"));
+            }
+            Err(ureq::Error::Status(code, r)) => {
+                let msg = r.into_string().unwrap_or_default();
+                last_err = format!("Gemini APIエラー ({code}): {msg}");
+                if (code == 429 || code == 503 || code == 504) && attempt == 0 {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    continue;
+                }
+                return Err(last_err);
+            }
+            Err(ureq::Error::Transport(t)) => {
+                last_err = format!("Gemini接続エラー: {t}");
+                if attempt == 0 {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    continue;
+                }
+                return Err(last_err);
+            }
+        }
+    }
+    Err(last_err)
+}
+
+const CLOUD_WAV_CHUNK_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+/// Splits a PCM WAV buffer into valid smaller WAV chunks on `block_align` boundaries.
+/// Returns `None` if the input is not PCM WAV or already fits within `max_data_bytes`.
+fn split_wav_pcm_chunks(bytes: &[u8], max_data_bytes: usize) -> Option<Vec<Vec<u8>>> {
+    if bytes.len() < 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return None;
+    }
+    let mut pos = 12usize;
+    let mut fmt_info: Option<(u16, u32, u16, u16)> = None;
+    let mut data_slice: Option<&[u8]> = None;
+
+    while pos + 8 <= bytes.len() {
+        let id = &bytes[pos..pos + 4];
+        let size = u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().ok()?) as usize;
+        let body_start = pos + 8;
+        let body_end = body_start.saturating_add(size).min(bytes.len());
+        if id == b"fmt " && body_end - body_start >= 16 {
+            let b = &bytes[body_start..body_end];
+            let audio_format = u16::from_le_bytes([b[0], b[1]]);
+            let channels = u16::from_le_bytes([b[2], b[3]]);
+            let sample_rate = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+            let block_align = u16::from_le_bytes([b[12], b[13]]);
+            let bits_per_sample = u16::from_le_bytes([b[14], b[15]]);
+            if audio_format != 1 || channels == 0 || sample_rate == 0 || block_align == 0 || bits_per_sample == 0 {
+                return None;
+            }
+            fmt_info = Some((channels, sample_rate, bits_per_sample, block_align));
+        } else if id == b"data" {
+            data_slice = Some(&bytes[body_start..body_end]);
+        }
+        // RIFF chunks are word-aligned (padded to even byte count).
+        let padded = size.saturating_add(size & 1);
+        pos = body_start.saturating_add(padded);
+    }
+
+    let (channels, sample_rate, bits_per_sample, block_align) = fmt_info?;
+    let data = data_slice?;
+    if data.is_empty() || data.len() <= max_data_bytes {
+        return None;
+    }
+
+    let align = block_align as usize;
+    let step = (max_data_bytes / align).max(1) * align;
+    let byte_rate = sample_rate.saturating_mul(channels as u32).saturating_mul((bits_per_sample / 8) as u32);
+    let mut chunks = Vec::with_capacity((data.len() + step - 1) / step);
+    for slice in data.chunks(step) {
+        let data_len = slice.len() as u32;
+        let riff_len = 36u32.saturating_add(data_len);
+        let mut out = Vec::with_capacity(44 + slice.len());
+        out.extend_from_slice(b"RIFF");
+        out.extend_from_slice(&riff_len.to_le_bytes());
+        out.extend_from_slice(b"WAVE");
+        out.extend_from_slice(b"fmt ");
+        out.extend_from_slice(&16u32.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&channels.to_le_bytes());
+        out.extend_from_slice(&sample_rate.to_le_bytes());
+        out.extend_from_slice(&byte_rate.to_le_bytes());
+        out.extend_from_slice(&block_align.to_le_bytes());
+        out.extend_from_slice(&bits_per_sample.to_le_bytes());
+        out.extend_from_slice(b"data");
+        out.extend_from_slice(&data_len.to_le_bytes());
+        out.extend_from_slice(slice);
+        chunks.push(out);
+    }
+    Some(chunks)
 }
 
 fn transcribe_cloud(
@@ -1149,6 +1237,55 @@ fn transcribe_cloud(
     if clean_b64.is_empty() {
         return Err("empty audio data".to_string());
     }
+    let bytes = STANDARD
+        .decode(clean_b64.as_bytes())
+        .map_err(|e| format!("音声データのデコードに失敗しました: {e}"))?;
+    transcribe_cloud_bytes(data_dir, &bytes, mime_type, cfg)
+}
+
+fn transcribe_cloud_bytes(
+    data_dir: &Path,
+    audio_bytes: &[u8],
+    mime_type: &str,
+    cfg: &Value,
+) -> Result<String, String> {
+    if audio_bytes.is_empty() {
+        return Err("empty audio data".to_string());
+    }
+    if audio_bytes.len() > CLOUD_WAV_CHUNK_MAX_BYTES {
+        if let Some(chunks) = split_wav_pcm_chunks(audio_bytes, CLOUD_WAV_CHUNK_MAX_BYTES) {
+            let mut parts = Vec::with_capacity(chunks.len());
+            for chunk in chunks {
+                let b64 = STANDARD.encode(&chunk);
+                match transcribe_cloud_single(data_dir, &b64, "audio/wav", cfg) {
+                    Ok(t) => {
+                        let trimmed = t.trim();
+                        if !trimmed.is_empty() {
+                            parts.push(trimmed.to_string());
+                        }
+                    }
+                    Err(e) if e.contains("話し声が検出されませんでした") || e.contains("空でした") => {
+                        continue;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            if parts.is_empty() {
+                return Err("話し声が検出されませんでした".to_string());
+            }
+            return Ok(parts.join("\n"));
+        }
+    }
+    let b64 = STANDARD.encode(audio_bytes);
+    transcribe_cloud_single(data_dir, &b64, mime_type, cfg)
+}
+
+fn transcribe_cloud_single(
+    data_dir: &Path,
+    clean_b64: &str,
+    mime_type: &str,
+    cfg: &Value,
+) -> Result<String, String> {
     let raw_base = cfg
         .get("baseUrl")
         .and_then(|v| v.as_str())
@@ -1186,13 +1323,16 @@ fn transcribe_cloud(
     let use_interactions = api_style.eq_ignore_ascii_case("interactions")
         || (api_style.eq_ignore_ascii_case("auto") && model.contains("transcribe"));
 
+    let default_timeout = if clean_b64.len() > 15 * 1024 * 1024 { 300 } else { 180 };
     let timeout_secs = cfg
         .get("timeout")
         .and_then(|v| v.as_u64())
         .filter(|&n| n > 0)
-        .unwrap_or(60);
+        .unwrap_or(default_timeout);
     let agent = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .timeout_connect(std::time::Duration::from_secs(30))
+        .timeout_read(std::time::Duration::from_secs(timeout_secs))
+        .timeout_write(std::time::Duration::from_secs(timeout_secs))
         .build();
 
     if use_interactions {
@@ -1323,16 +1463,14 @@ pub fn transcribe_cached_file_with_config(
         {
             let bytes = std::fs::read(cache_path).map_err(|e| e.to_string())?;
             let mime = sniff_audio_mime(&bytes, Some(cache_path));
-            let b64 = STANDARD.encode(&bytes);
-            transcribe_cloud(data_dir, &b64, mime, &cfg)
+            transcribe_cloud_bytes(data_dir, &bytes, mime, &cfg)
         } else {
             local_res
         }
     } else {
         let bytes = std::fs::read(cache_path).map_err(|e| e.to_string())?;
         let mime = sniff_audio_mime(&bytes, Some(cache_path));
-        let b64 = STANDARD.encode(&bytes);
-        transcribe_cloud(data_dir, &b64, mime, &cfg)
+        transcribe_cloud_bytes(data_dir, &bytes, mime, &cfg)
     };
 
     if res.is_ok() && delete_on_success {
@@ -1627,5 +1765,30 @@ mod tests {
         drop(guard);
         assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap(), true);
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn split_wav_pcm_chunks_splits_large_pcm_on_block_align_boundaries() {
+        let samples: Vec<i16> = (0..1000).map(|i| (i as i16).wrapping_mul(17)).collect();
+        let wav = encode_wav_pcm16(&samples, 16_000, 1);
+        let chunks = split_wav_pcm_chunks(&wav, 601).expect("should split into chunks");
+        assert!(chunks.len() >= 4);
+        let mut reassembled = Vec::new();
+        for c in &chunks {
+            assert_eq!(&c[0..4], b"RIFF");
+            assert_eq!(&c[8..12], b"WAVE");
+            assert_eq!(&c[12..16], b"fmt ");
+            assert_eq!(&c[36..40], b"data");
+            assert!((c.len() - 44) % 2 == 0);
+            reassembled.extend_from_slice(&c[44..]);
+        }
+        assert_eq!(reassembled, &wav[44..]);
+    }
+
+    #[test]
+    fn split_wav_pcm_chunks_returns_none_for_small_or_non_wav() {
+        let small = encode_wav_pcm16(&[1, 2, 3, 4], 16_000, 1);
+        assert!(split_wav_pcm_chunks(&small, 1024).is_none());
+        assert!(split_wav_pcm_chunks(b"not a wav file", 4).is_none());
     }
 }

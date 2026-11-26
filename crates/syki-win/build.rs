@@ -157,6 +157,10 @@ const DEFERRED_BOOT_JS: &[&str] = &[
     "js/go_text.js",
     "js/ext_theme_sync.js",
     "js/voice_profiles.js",
+    "js/task_manager.js",
+    "js/status_ai.js",
+    "js/voice_input.js",
+    "js/bar_voice.js",
 ];
 
 fn fnv1a_hex(bytes: &[u8]) -> String {
@@ -187,11 +191,16 @@ fn build_bundled_assets(frontend_root: &Path) -> Option<(Vec<u8>, Vec<u8>, Vec<u
         }
         if trimmed.starts_with("<link ")
             && trimmed.contains("rel=\"stylesheet\"")
-            && !trimmed.contains("media=\"print\"")
         {
             if let Some(rel) = extract_attr_href_or_src(trimmed, "href") {
                 if rel.starts_with("css/") {
                     if let Ok(css) = fs::read_to_string(frontend_root.join(&rel)) {
+                        if trimmed.contains("media=\"print\"") {
+                            out_html.push_str("<style media=\"print\">\n");
+                            out_html.push_str(&minify_css(&css));
+                            out_html.push_str("</style>\n");
+                            continue;
+                        }
                         bundled_css.push_str(&minify_css(&css));
                         if !css_slot_inserted {
                             out_html.push_str("  <!--SYKI_BUNDLED_CSS-->\n");
@@ -249,7 +258,7 @@ fn build_bundled_assets(frontend_root: &Path) -> Option<(Vec<u8>, Vec<u8>, Vec<u
     };
     let boot_bundle_js = format!("{deferred_hint}{bundled_js}");
     let bundle_hash = fnv1a_hex(boot_bundle_js.as_bytes());
-    let script_tag = format!("<meta charset=\"UTF-8\">\n<script defer src=\"/__boot_bundle.js?v={bundle_hash}\"></script>\n");
+    let script_tag = format!("<meta charset=\"UTF-8\">\n<script defer fetchpriority=\"high\" src=\"/__boot_bundle.js?v={bundle_hash}\"></script>\n");
     let final_html = out_html
         .replace("<meta charset=\"UTF-8\">\n", &script_tag)
         .replace("  <!--SYKI_BUNDLED_CSS-->\n", &style_tag)

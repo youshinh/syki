@@ -643,42 +643,40 @@
     const lang = (config.general && config.general.language) || 'en';
     if (document.documentElement.lang !== lang) document.documentElement.lang = lang;
 
-    const skipHiddenModal = (el) => {
-      if (!deferHiddenModals || typeof el.closest !== 'function') return false;
-      const modal = el.closest('.modal-backdrop.hidden');
-      if (modal) { deferredModalI18nPending = true; return true; }
-      return false;
+    const translateRoot = (root) => {
+      root.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.getAttribute('data-i18n');
+        const val = t(key);
+        if (val !== key && el.textContent !== val) {
+          el.textContent = val;
+        }
+      });
+      root.querySelectorAll('[data-i18n-title]').forEach(el => {
+        const key = el.getAttribute('data-i18n-title');
+        const val = t(key);
+        if (val !== key && el.title !== val) {
+          el.title = val;
+        }
+      });
+      root.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+        const key = el.getAttribute('data-i18n-placeholder');
+        const val = t(key);
+        if (val !== key && el.placeholder !== val) {
+          el.placeholder = val;
+        }
+      });
     };
 
-    // Translate all elements with data-i18n
-    document.querySelectorAll('[data-i18n]').forEach(el => {
-      if (skipHiddenModal(el)) return;
-      const key = el.getAttribute('data-i18n');
-      const val = t(key);
-      if (val !== key && el.textContent !== val) {
-        el.textContent = val;
+    if (deferHiddenModals) {
+      deferredModalI18nPending = true;
+      const shellIds = ['toolbar', 'tab-index-left', 'tab-index-right', 'status-bar', 'editor-pane', 'secondary-pane-header'];
+      for (let i = 0; i < shellIds.length; i++) {
+        const el = document.getElementById(shellIds[i]);
+        if (el) translateRoot(el);
       }
-    });
-
-    // Translate titles
-    document.querySelectorAll('[data-i18n-title]').forEach(el => {
-      if (skipHiddenModal(el)) return;
-      const key = el.getAttribute('data-i18n-title');
-      const val = t(key);
-      if (val !== key && el.title !== val) {
-        el.title = val;
-      }
-    });
-
-    // Translate placeholders
-    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
-      if (skipHiddenModal(el)) return;
-      const key = el.getAttribute('data-i18n-placeholder');
-      const val = t(key);
-      if (val !== key && el.placeholder !== val) {
-        el.placeholder = val;
-      }
-    });
+    } else {
+      translateRoot(document);
+    }
 
     // Update status bar texts
     shortcutsTableDirty = true;
@@ -687,8 +685,10 @@
     updateActionStatus(); // also redraws the AI item (its label and popover, in the new language)
     if (btnTogglePreview) btnTogglePreview.title = isPreviewMode ? t('edit') : t('togglePreviewTitle');
     if (btnToggleSplit) btnToggleSplit.title = t('splitViewTitle');
-    renderProviderDetectLine(); // Settings > AI Models "Protocol: ...", written once when the dialog opened
-    updateShortcutLabels();
+    if (!deferHiddenModals) {
+      renderProviderDetectLine(); // Settings > AI Models "Protocol: ...", written once when the dialog opened
+      updateShortcutLabels();
+    }
     // The editor's row labels are translated text: redraw them if it is open.
     if (layoutSectionOpen()) renderLayoutEditors();
     // Icon-only buttons are named by their (translated) title: name them again.
@@ -2719,6 +2719,7 @@
   // The name of a note that is shown in the right page's title (above its text), kept in step with the note's tab: one place for every site
   // that renames or saves a note. With `withPath` the tooltip (the file) is brought up to date too.
   function syncSecondaryTitle(tab, withPath) {
+    if (secondaryViewMode === 'agent') return;
     if (!tab || !isSplitMode || secondaryTabId !== tab.id || !secondaryPaneTitle) return;
     secondaryPaneTitle.textContent = tab.title || t('untitled');
     if (withPath) secondaryPaneTitle.title = tab.path || tab.title || '';
@@ -3657,7 +3658,14 @@
             svg = res && res.svg ? res.svg : String(res || '');
           } catch (firstErr) {
             removeMermaidLeftovers(id);
-            throw firstErr;
+            const sanitized = sanitizeMermaidSubgraphs(drawn);
+            if (sanitized !== drawn) {
+              drawn = sanitized;
+              const resRetry = await window.mermaid.render(id + '-retry', drawn);
+              svg = resRetry && resRetry.svg ? resRetry.svg : String(resRetry || '');
+            } else {
+              throw firstErr;
+            }
           }
           pre.dataset.mermaidSrc = drawn;
           pre.innerHTML = svg;
@@ -3721,7 +3729,8 @@
       if (btnSecondaryMode) btnSecondaryMode.classList.remove('active');
       if (btnSecondaryAgent) btnSecondaryAgent.classList.add('active');
       if (btnAgentSide) btnAgentSide.classList.add('active');
-      if (agentBridge) agentBridge.updateHeaderUI(true);
+      const bridge = ensureAgentBridge();
+      if (bridge) bridge.updateHeaderUI(true);
       applySplitRatio();
       updatePaneFocusClasses();
       return;
@@ -4320,15 +4329,20 @@
   }
 
   function sanitizeMermaidSubgraphs(src) {
+    if (window.MermaidTone && typeof window.MermaidTone.sanitizeSource === 'function') {
+      return window.MermaidTone.sanitizeSource(src);
+    }
     let idx = 0;
-    return String(src || '').replace(/^(\s*subgraph\s+)(.+)$/gm, (full, prefix, rest) => {
-      const title = rest.trim();
-      if (!title || title.startsWith('"') || /\[.*\]/.test(title)) return full;
-      if (!/[（）()「」【】]/.test(title)) return full;
-      idx += 1;
-      const escaped = title.replace(/"/g, '\\"');
-      return `${prefix}sg_${idx}["${escaped}"]`;
-    });
+    return String(src || '')
+      .replace(/^([ \t]*)sub[- ]?graph([ \t]+)/gim, '$1subgraph$2')
+      .replace(/^(\s*subgraph\s+)(.+)$/gm, (full, prefix, rest) => {
+        const title = rest.trim();
+        if (!title || title.startsWith('"') || /\[.*\]/.test(title)) return full;
+        if (!/[（）()「」【】]/.test(title)) return full;
+        idx += 1;
+        const escaped = title.replace(/"/g, '\\"');
+        return `${prefix}sg_${idx}["${escaped}"]`;
+      });
   }
 
   function extractMarkdownFootnotes(src) {
@@ -6445,8 +6459,10 @@
 
   // The AI item of the status bar (status_ai.js): the popover holds Text prediction, Suggestions and Voice tidy-up as switches,
   // and the item says which model answers. Every toggle is the function the rest of the app already uses.
+  let statusAiInitialized = false;
   function initStatusAI() {
-    if (!window.StatusAI) return;
+    if (statusAiInitialized || !window.StatusAI) return;
+    statusAiInitialized = true;
     window.StatusAI.init({
       t,
       getConfig: () => config,
@@ -8805,29 +8821,44 @@
     refocus: () => { if (cliFilterInput && !cliFilterInput.disabled) cliFilterInput.focus(); }
   }) : null;
 
-  // The voice button of the bars. The box takes what was said; Enter sends it. Esc, closing the bar, and the command bar's CLI mode
-  // (a command needs exact input) throw the recording away.
-  if (window.BarVoice) {
-    barVoice = window.BarVoice.create({
-      document: document, window: window, navigator: navigator, VoiceInput: window.VoiceInput,
-      getConfig: () => config, getBackend: () => window.backend, t: (key, params) => t(key, params)
-    });
-    if (inlinePromptInput && inlinePromptBar) {
-      barVoice.attach('ask', {
-        input: inlinePromptInput, row: inlinePromptBar.querySelector('.inline-prompt-row'), send: btnInlinePromptSend,
-        onText: () => { if (askBarFade && askBarFade.markTyped) askBarFade.markTyped(); }
+  let voiceModulesInitialized = false;
+  let pendingEarlyVoiceAfterDefer = false;
+  function ensureVoiceModules() {
+    if (voiceModulesInitialized) return;
+    if (!window.BarVoice && !window.VoiceInput) return;
+    voiceModulesInitialized = true;
+    if (window.BarVoice) {
+      barVoice = window.BarVoice.create({
+        document: document, window: window, navigator: navigator, VoiceInput: window.VoiceInput,
+        getConfig: () => config, getBackend: () => window.backend, t: (key, params) => t(key, params)
+      });
+      if (inlinePromptInput && inlinePromptBar) {
+        barVoice.attach('ask', {
+          input: inlinePromptInput, row: inlinePromptBar.querySelector('.inline-prompt-row'), send: btnInlinePromptSend,
+          onText: () => { if (askBarFade && askBarFade.markTyped) askBarFade.markTyped(); }
+        });
+      }
+      if (cliFilterInput && cliFilterBar) {
+        barVoice.attach('cmd', {
+          input: cliFilterInput, row: cliFilterBar.querySelector('.inline-prompt-row'), send: btnCliFilterSend,
+          available: () => isAiCliMode, // the manual mode takes a command: exact input, typed
+          onText: () => { if (cliBarFade && cliBarFade.markTyped) cliBarFade.markTyped(); }
+        });
+      }
+      window.__barVoiceHandle = (reqId, text, err) => barVoice.handleResult(reqId, text, err);
+      window.__barVoiceBusy = () => barVoice.busy();
+    }
+    if (window.VoiceInput && window.VoiceInput.onStateChange) {
+      window.VoiceInput.onStateChange((recording) => {
+        if (btnVoiceInput) btnVoiceInput.classList.toggle('active', !!recording);
       });
     }
-    if (cliFilterInput && cliFilterBar) {
-      barVoice.attach('cmd', {
-        input: cliFilterInput, row: cliFilterBar.querySelector('.inline-prompt-row'), send: btnCliFilterSend,
-        available: () => isAiCliMode, // the manual mode takes a command: exact input, typed
-        onText: () => { if (cliBarFade && cliBarFade.markTyped) cliBarFade.markTyped(); }
-      });
+    if (pendingEarlyVoiceAfterDefer && window.VoiceInput) {
+      pendingEarlyVoiceAfterDefer = false;
+      setTimeout(() => { if (window.VoiceInput) window.VoiceInput.toggle(); }, 0);
     }
-    window.__barVoiceHandle = (reqId, text, err) => barVoice.handleResult(reqId, text, err);
-    window.__barVoiceBusy = () => barVoice.busy();
   }
+  ensureVoiceModules();
 
 
   function closeCliFilterBar() {
@@ -12100,8 +12131,10 @@ OUTPUT FORMAT:
     hideTabsSubmenu(true);
   }
 
-  agentBridge = (window.TerminalPane && typeof window.TerminalPane.createWorkspaceBridge === 'function')
-    ? window.TerminalPane.createWorkspaceBridge({
+  function ensureAgentBridge() {
+    if (agentBridge) return agentBridge;
+    if (!window.TerminalPane || typeof window.TerminalPane.createWorkspaceBridge !== 'function') return null;
+    agentBridge = window.TerminalPane.createWorkspaceBridge({
         doc: document,
         win: window,
         editorEl,
@@ -12157,8 +12190,13 @@ OUTPUT FORMAT:
         showMessage,
         copyTextToClipboard,
         renderMermaidOverlay: showAgentMermaidOverlay
-      })
-    : null;
+      });
+    if (agentBridge && isSplitMode && secondaryViewMode === 'agent') {
+      agentBridge.updateHeaderUI(true);
+    }
+    return agentBridge;
+  }
+  ensureAgentBridge();
 
   window.addEventListener('contextmenu', (e) => {
     e.preventDefault();
@@ -12169,7 +12207,8 @@ OUTPUT FORMAT:
     }
 
     // 0. Right-click on Agent Tab Strip or Agent Pane
-    if (isSplitMode && secondaryViewMode === 'agent' && agentBridge && agentBridge.openAgentTabContextMenu(e, positionContextMenu)) {
+    const bridgeForCtx = ensureAgentBridge();
+    if (isSplitMode && secondaryViewMode === 'agent' && bridgeForCtx && bridgeForCtx.openAgentTabContextMenu(e, positionContextMenu)) {
       return;
     }
 
@@ -15632,9 +15671,13 @@ OUTPUT FORMAT:
     }
     if (window.__earlyPendingVoice) {
       window.__earlyPendingVoice = false;
-      setTimeout(() => {
-        if (window.VoiceInput) window.VoiceInput.toggle();
-      }, 0);
+      if (window.VoiceInput) {
+        setTimeout(() => {
+          if (window.VoiceInput) window.VoiceInput.toggle();
+        }, 0);
+      } else {
+        pendingEarlyVoiceAfterDefer = true;
+      }
     } else if (window.__earlyKeys && window.__earlyKeys.length > 0 && editorEl) {
       const earlyChars = window.__earlyKeys.join('');
       window.__earlyKeys = [];
@@ -16936,8 +16979,11 @@ OUTPUT FORMAT:
       s.async = true;
       s.onload = () => {
         window.__bootDeferredLoaded = true;
+        ensureAgentBridge();
         ensureRpcBridge();
         ensureSearchWorkbench();
+        initStatusAI();
+        ensureVoiceModules();
         if (window.FileAnchor) {
           if (typeof window.FileAnchor.init === 'function') window.FileAnchor.init();
           if (typeof window.FileAnchor.scheduleMarks === 'function') window.FileAnchor.scheduleMarks();

@@ -148,6 +148,54 @@
     }
   }
 
+  function sanitizeSource(src) {
+    let text = String(src || '');
+    // 0. Normalize smart/curly/fullwidth double quotes to ASCII ".
+    text = text.replace(/[\u201C\u201D\uFF02]/g, '"');
+    // 1. Normalize hyphenated/spaced/capitalized `sub-graph` / `sub graph` at line starts.
+    text = text.replace(/^([ \t]*)sub[- ]?graph([ \t]+)/gim, '$1subgraph$2');
+    // 2. Normalize Unicode box-drawing / typographic arrows outside quoted strings and node label brackets.
+    text = text.replace(
+      /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\[[^\]\r\n]*\]|\([^)\r\n]*\)|\{[^}\r\n]*\}|[\u2500\u2501\u2013\u2014\u2212]+>|[\u2550]+>|[\u2500\u2501\u2013\u2014\u2212]{2,}|[\u2550]{2,}|([ \t])\u2192([ \t])/g,
+      function (tok, preSp, postSp) {
+        if (preSp !== undefined && postSp !== undefined) return preSp + '-->' + postSp;
+        var ch = tok[0];
+        if (ch === '"' || ch === "'" || ch === '[' || ch === '(' || ch === '{') return tok;
+        if (tok[tok.length - 1] === '>') {
+          var dashLen = tok.length - 1;
+          if (ch === '\u2550') return (dashLen === 1 ? '==' : '='.repeat(dashLen)) + '>';
+          return (dashLen === 1 ? '--' : '-'.repeat(dashLen)) + '>';
+        }
+        if (ch === '\u2550') return '='.repeat(tok.length);
+        return '-'.repeat(tok.length);
+      }
+    );
+    // 3. Normalize subgraph headers (missing [] brackets, unquoted titles, smart quotes).
+    var idx = 0;
+    return text.replace(/^([ \t]*subgraph[ \t]+)(.+)$/gm, function (full, prefix, rest) {
+      var title = rest.trim();
+      if (!title) return full;
+      if (/^[A-Za-z0-9_-]+\s*\["[\s\S]*"\]$/.test(title) || /^[A-Za-z0-9_-]+$/.test(title)) {
+        return full;
+      }
+      var mIdQuoted = /^([A-Za-z0-9_-]+)\s+"([^"\r\n]*)"$/.exec(title);
+      if (mIdQuoted) {
+        return prefix + mIdQuoted[1] + '["' + mIdQuoted[2] + '"]';
+      }
+      var mIdBracket = /^([A-Za-z0-9_-]+)\[([^"\r\n][^\r\n]*)\]$/.exec(title);
+      if (mIdBracket) {
+        return prefix + mIdBracket[1] + '["' + mIdBracket[2].replace(/"/g, '\\"') + '"]';
+      }
+      var mQuotedOnly = /^"([^"\r\n]*)"$/.exec(title);
+      if (mQuotedOnly) {
+        idx += 1;
+        return prefix + 'sg_' + idx + '["' + mQuotedOnly[1] + '"]';
+      }
+      idx += 1;
+      return prefix + 'sg_' + idx + '["' + title.replace(/"/g, '\\"') + '"]';
+    });
+  }
+
   global.MermaidTone = {
     TONES: TONES,
     normalizeTone: normalizeTone,
@@ -156,7 +204,8 @@
     flipTone: flipTone,
     mermaidConfig: mermaidConfig,
     cardClasses: cardClasses,
-    decorate: decorate
+    decorate: decorate,
+    sanitizeSource: sanitizeSource
   };
 
   if (typeof module !== 'undefined' && module.exports) {

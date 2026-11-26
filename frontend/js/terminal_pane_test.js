@@ -117,7 +117,7 @@ check('parsePtyLink and note anchor formatters handle session identifiers and la
 
 check('loading the module starts nothing and exposes TerminalPane', () => {
   assert.strictEqual(typeof TP.createController, 'function');
-  assert.strictEqual(TP.DEFAULT_PRESETS.length, 4);
+  assert.strictEqual(TP.DEFAULT_PRESETS.length, 5);
 });
 
 function makeMockEnv() {

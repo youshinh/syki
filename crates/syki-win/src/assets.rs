@@ -41,36 +41,42 @@ pub fn resolve_static_asset(path: &str) -> Option<EmbeddedAsset> {
 }
 
 /// Returns the uncompressed bytes of an [`EmbeddedAsset`] (decompressing gzip on the fly
-/// and caching large boot assets in memory).
-pub fn decode_asset_bytes(asset: EmbeddedAsset) -> Vec<u8> {
+/// and caching large boot assets in memory as `Arc<Vec<u8>>`).
+pub fn decode_asset_arc(asset: EmbeddedAsset) -> std::sync::Arc<Vec<u8>> {
+    use std::sync::Arc;
     if !asset.is_gzip {
-        return asset.bytes.to_vec();
+        return Arc::new(asset.bytes.to_vec());
     }
     use std::collections::HashMap;
     use std::io::Read;
     use std::sync::{Mutex, OnceLock};
 
-    static CACHE: OnceLock<Mutex<HashMap<usize, Vec<u8>>>> = OnceLock::new();
+    static CACHE: OnceLock<Mutex<HashMap<usize, Arc<Vec<u8>>>>> = OnceLock::new();
     let cache_key = asset.bytes.as_ptr() as usize;
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(guard) = cache.lock() {
         if let Some(hit) = guard.get(&cache_key) {
-            return hit.clone();
+            return Arc::clone(hit);
         }
     }
 
     let mut dec = flate2::read::GzDecoder::new(asset.bytes);
     let mut out = Vec::with_capacity(asset.bytes.len().saturating_mul(3));
     if dec.read_to_end(&mut out).is_ok() {
+        let arc = Arc::new(out);
         if asset.bytes.len() > 16 * 1024 {
             if let Ok(mut guard) = cache.lock() {
-                guard.insert(cache_key, out.clone());
+                guard.insert(cache_key, Arc::clone(&arc));
             }
         }
-        out
+        arc
     } else {
-        asset.bytes.to_vec()
+        Arc::new(asset.bytes.to_vec())
     }
+}
+
+pub fn decode_asset_bytes(asset: EmbeddedAsset) -> Vec<u8> {
+    (*decode_asset_arc(asset)).clone()
 }
 
 /// Pre-decompresses `/index.html`, `/__boot_bundle.js`, and `/__boot_deferred.js` on a background thread
