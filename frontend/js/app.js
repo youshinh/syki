@@ -1106,6 +1106,15 @@
             typographer: true,
             breaks: true
           });
+          // Allow safe <br> / <br/> line breaks in paragraphs and tables while keeping html: false for XSS safety.
+          mdInstance.inline.ruler.before('html_inline', 'allow_br', (state, silent) => {
+            if (state.src.charCodeAt(state.pos) !== 0x3C /* < */) return false;
+            const match = /^<br\s*\/?>/i.exec(state.src.slice(state.pos));
+            if (!match) return false;
+            if (!silent) state.push('hardbreak', 'br', 0);
+            state.pos += match[0].length;
+            return true;
+          });
           // Accept `![alt](/path with spaces/x.png)` (preview_images.js), e.g. ~/Library/Application Support.
           window.PreviewImages.installLooseImageRule(mdInstance);
         }
@@ -3652,7 +3661,7 @@
       try {
         if (window.mermaid && typeof window.mermaid.render === 'function') {
           const tone = applyMermaidTone();
-          let drawn = code;
+          let drawn = /^\s*(?:%%[^\n]*\n\s*)*mindmap\b/i.test(code) ? sanitizeMermaidSubgraphs(code) : code;
           let svg;
           try {
             const res = await window.mermaid.render(id, drawn);
@@ -4227,7 +4236,7 @@
           container.dataset.mermaidSrc = diagramCode; // printing draws a dark-tone diagram again in the light tone (print_preview.js)
           const id = 'mermaid-svg-' + idx + '-' + Date.now();
           try {
-            let drawn = diagramCode;
+            let drawn = /^\s*(?:%%[^\n]*\n\s*)*mindmap\b/i.test(diagramCode) ? sanitizeMermaidSubgraphs(diagramCode) : diagramCode;
             let svg;
             try {
               svg = (await window.mermaid.render(id, drawn)).svg;
@@ -9438,8 +9447,8 @@ Analyze the semantic structure and intent of the user's text and STRICTLY select
    - ONLY use when the text specifically represents an operational decision tree, workflow with branches/conditions (if/then/else), algorithms, or standard procedural tasks.
 
 STRICT SYNTAX SAFETY RULES:
-1. Node IDs MUST be ASCII-only alphanumeric (e.g. A, Node1, ProcB, ActorA). NEVER use Japanese or spaces in IDs.
-2. ALL labels must be enclosed in double quotes: id["Label Text"]. Use <br/> for line breaks inside labels.
+1. Node IDs MUST be ASCII-only alphanumeric (e.g. A, Node1, ProcB, ActorA). NEVER use Japanese or spaces in IDs (applies to flowchart/state/class/ER; for mindmap see rule 11).
+2. ALL labels in flowchart/graph/subgraph MUST be enclosed in double quotes: id["Label Text"]. Use <br/> for line breaks inside flowchart labels (NEVER use double quotes or <br/> in mindmap; see rule 11).
 3. In sequence diagrams, define participants with clean ASCII aliases: participant C as "クライアント".
 4. NEVER use the reserved word 'end' as an ID, participant, or label. Use Finish, EndStep, etc.
 5. Replace inner double quotes with single quotes. Use fullwidth （ ） for parentheses in labels.
@@ -9448,7 +9457,8 @@ STRICT SYNTAX SAFETY RULES:
 8. In erDiagram, entity names AND attribute names MUST be ASCII words (Customer, customerId). Put Japanese only in double-quoted text: the relationship label (Customer ||--o{ Order : "places") and the optional comment at the end of an attribute line (string customerId PK "顧客ID"). An attribute name in Japanese is a syntax error.
 9. The code fence language is exactly "mermaid" (\`\`\`mermaid), NEVER the diagram type (not \`\`\`timeline, not \`\`\`flowchart). The first line inside the fence is the diagram type line (flowchart TD, sequenceDiagram, timeline, mindmap ...).
 10. quadrantChart: put EVERY text in double quotes (x-axis "Low" --> "High", quadrant-1 "Do now", "Item A": [0.3, 0.8]); coordinates are between 0 and 1.
-11. stateDiagram-v2: a label is written state "Label" as ID (label first). mindmap: exactly ONE root, and no parentheses or brackets inside plain node text.
+11. stateDiagram-v2: a label is written state "Label" as ID (label first).
+    mindmap: STRICTLY indentation-based (2 spaces per level) with EXACTLY ONE root: \`  root((Main Topic))\`. Write child nodes as plain text without IDs, without \`id["..."]\`, without double quotes, without \`<br/>\`, and without ASCII brackets \`()[]{}\` inside text (use fullwidth （ ） if needed).
 
 HOW MANY DIAGRAMS (one is the default; split only when it makes the result clearer):
 - ONE diagram when the text is about a single subject or a single flow that fits on a screen (up to about 15 nodes). Do not split a cohesive text just to produce more diagrams.
@@ -12263,6 +12273,56 @@ OUTPUT FORMAT:
     hideTabsSubmenu(true);
   }
 
+  function summarizeTerminalOutputToLeftNote(rawOutput) {
+    const cleaned = String(rawOutput || '').trim();
+    if (!cleaned) return;
+    const curTab = getActiveTab();
+    if (!curTab || !editorEl) return;
+
+    const reqId = genReqId('pty_sum_');
+    const anchorId = `[${t('summarizingTerminalAnchor') || 'Summarizing terminal output...'}]`;
+
+    const start = editorEl.selectionStart || 0;
+    const end = editorEl.selectionEnd || 0;
+    const prefix = start > 0 && editorEl.value[start - 1] !== '\n' ? '\n\n' : '';
+    const insertion = `${prefix}${anchorId}\n\n`;
+    editorEl.setSelectionRange(start, end);
+    insertTextWithUndo(insertion);
+
+    curTab.content = editorEl.value;
+    curTab.isDirty = true;
+    renderTabs();
+    updateLineNumbers();
+    updateStatusBar();
+
+    registerPendingLLMRequest(reqId, {
+      tabId: curTab.id,
+      anchorId: anchorId,
+      persistedText: insertion,
+      persistRestore: '',
+      listed: true
+    });
+    listCancellableRequest(reqId, anchorId);
+    updateLLMIndicator();
+
+    const lang = (config && config.general && config.general.language) || 'ja';
+    const clipped = cleaned.length > 12000 ? cleaned.slice(-12000) : cleaned;
+    const isJa = lang === 'ja';
+    const promptPayload = isJa
+      ? `以下のターミナル出力を読み、要点を簡潔なMarkdown箇条書きで要約してください。\n- 実行内容と結果（成功/失敗/件数など）\n- 重要な変更・警告・エラー（あれば具体的なファイル名や原因）\n- 次のアクション（必要なら）\n余計な前置きや挨拶は不要で、ノートにそのまま貼れるMarkdownのみを出力してください。\n\n\`\`\`\n${clipped}\n\`\`\``
+      : `Summarize the following terminal output as concise Markdown bullet points:\n- What ran and its outcome (pass/fail/counts)\n- Key changes, warnings, or errors (with exact file names/reasons if any)\n- Next actions (if any)\nOutput only clean Markdown ready to paste into a note, with no preamble.\n\n\`\`\`\n${clipped}\n\`\`\``;
+
+    if (window.backend && window.backend.queryLLMAsync) {
+      window.backend.queryLLMAsync(reqId, promptPayload, JSON.stringify(config.text));
+    } else {
+      setTimeout(() => {
+        const lines = clipped.split(/\r?\n/).filter((l) => l.trim()).slice(-6);
+        const fallback = '### Terminal Summary\n' + lines.map((l) => `- ${l.trim()}`).join('\n');
+        window.__onLLMResult(reqId, fallback, '');
+      }, 200);
+    }
+  }
+
   function ensureAgentBridge() {
     if (agentBridge) return agentBridge;
     if (!window.TerminalPane || typeof window.TerminalPane.createWorkspaceBridge !== 'function') return null;
@@ -12321,7 +12381,8 @@ OUTPUT FORMAT:
         },
         showMessage,
         copyTextToClipboard,
-        renderMermaidOverlay: showAgentMermaidOverlay
+        renderMermaidOverlay: showAgentMermaidOverlay,
+        summarizeToLeftNote: summarizeTerminalOutputToLeftNote
       });
     if (agentBridge && isSplitMode && secondaryViewMode === 'agent') {
       agentBridge.updateHeaderUI(true);

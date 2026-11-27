@@ -65,6 +65,9 @@
       if (scrapsMeaningMode()) { runScrapsSemanticSearch(q); return; }
       const seq = ++scrapsSearchSeq;
       if (!(window.backend && window.backend.searchScraps)) return;
+      if (scrapsSearchResults && scrapsSearchFlattened.length === 0) {
+        scrapsSearchResults.innerHTML = `<div class="scraps-search-empty">${escapeHtml(t('scrapsSearchSearching') || 'Searching...')}</div>`;
+      }
       Promise.resolve(window.backend.searchScraps(q, 100, scrapsFilterForSearch())).then((results) => {
         if (seq === scrapsSearchSeq) renderScrapsSearchResults(results || []);
       }).catch((err) => {
@@ -79,7 +82,7 @@
       scrapsSearchStale = true;
       if (scrapsSemanticWired) scrapsSearchTyped();
       clearTimeout(scrapsSearchDebounceTimer);
-      scrapsSearchDebounceTimer = setTimeout(() => runScrapsSearch(q), scrapsMeaningMode() ? 400 : 150);
+      scrapsSearchDebounceTimer = setTimeout(() => runScrapsSearch(q), scrapsMeaningMode() ? 400 : 60);
     }
 
     // Also the toolbar button's click handler, so it takes no argument.
@@ -103,7 +106,12 @@
         }, 40);
       }
       renderScrapsSearchResults([]);
-      if (seed) runScrapsSearch(seed);
+      if (seed) {
+        runScrapsSearch(seed);
+      } else if (window.backend && typeof window.backend.scrapFilterOptions === 'function') {
+        // Warm the backend in-memory scrap search cache while the user starts typing.
+        Promise.resolve(window.backend.scrapFilterOptions()).catch(() => {});
+      }
     }
 
     // Tab in the search: put the chosen line into the note at the caret (replacing a selection, like a paste,

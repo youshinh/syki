@@ -148,10 +148,109 @@
     }
   }
 
+  function cleanMindmapLabel(raw) {
+    return String(raw || '')
+      .replace(/<br\s*\/?>/gi, ' / ')
+      .replace(/"/g, '')
+      .replace(/\(/g, '（')
+      .replace(/\)/g, '）')
+      .replace(/\[/g, '［')
+      .replace(/\]/g, '］')
+      .replace(/\{/g, '｛')
+      .replace(/\}/g, '｝')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function sanitizeMindmapSource(src) {
+    const rawLines = String(src || '').replace(/\r\n?/g, '\n').split('\n');
+    let headerIdx = -1;
+    for (let i = 0; i < rawLines.length; i++) {
+      const tr = rawLines[i].trim();
+      if (!tr || tr.startsWith('%%')) continue;
+      if (/^mindmap\b/i.test(tr)) headerIdx = i;
+      break;
+    }
+    if (headerIdx < 0) return src;
+
+    const out = rawLines.slice(0, headerIdx + 1);
+    const body = [];
+    for (let i = headerIdx + 1; i < rawLines.length; i++) {
+      const expanded = rawLines[i].replace(/\t/g, '  ');
+      const trimmed = expanded.trim();
+      if (!trimmed) continue;
+      if (trimmed.startsWith('%%')) {
+        body.push({ indent: expanded.length - expanded.trimStart().length, text: trimmed, isDirective: true });
+        continue;
+      }
+      const indent = expanded.length - expanded.trimStart().length;
+      if (/^::icon\(/.test(trimmed) || /^:::/.test(trimmed)) {
+        body.push({ indent: indent, text: trimmed, isDirective: true });
+        continue;
+      }
+      // Normalize flowchart-style `id["Label"]`, `id("Label")`, `id(("Label"))`, `id{"Label"}`, `id(["Label"])`
+      // as well as unquoted shape labels containing `<br/>` or nested brackets.
+      let normalized = trimmed;
+      let m;
+      if ((m = /^([A-Za-z0-9_-]+)\s*\(\(\s*"?([\s\S]*?)"?\s*\)\)$/.exec(trimmed))) {
+        normalized = m[1] + '((' + cleanMindmapLabel(m[2]) + '))';
+      } else if ((m = /^([A-Za-z0-9_-]+)\s*\(\[\s*"?([\s\S]*?)"?\s*\]\)$/.exec(trimmed))) {
+        normalized = m[1] + '(' + cleanMindmapLabel(m[2]) + ')';
+      } else if ((m = /^([A-Za-z0-9_-]+)\s*\[\s*"([\s\S]*?)"\s*\]$/.exec(trimmed))) {
+        const label = cleanMindmapLabel(m[2]);
+        normalized = m[1] === 'root' ? 'root((' + label + '))' : m[1] + '[' + label + ']';
+      } else if ((m = /^([A-Za-z0-9_-]+)\s*\(\s*"([\s\S]*?)"\s*\)$/.exec(trimmed))) {
+        normalized = m[1] + '(' + cleanMindmapLabel(m[2]) + ')';
+      } else if ((m = /^([A-Za-z0-9_-]+)\s*\{\{\s*"?([\s\S]*?)"?\s*\}\}$/.exec(trimmed))) {
+        normalized = m[1] + '{{' + cleanMindmapLabel(m[2]) + '}}';
+      } else if ((m = /^([A-Za-z0-9_-]+)\s*\{\s*"?([\s\S]*?)"?\s*\}$/.exec(trimmed))) {
+        normalized = m[1] + '[' + cleanMindmapLabel(m[2]) + ']';
+      } else if ((m = /^([A-Za-z0-9_-]+)\s*\[([^\[\]]*)\]$/.exec(trimmed))) {
+        normalized = m[1] + '[' + cleanMindmapLabel(m[2]) + ']';
+      } else if ((m = /^([A-Za-z0-9_-]+)\s*\(([^()]*)\)$/.exec(trimmed))) {
+        normalized = m[1] + '(' + cleanMindmapLabel(m[2]) + ')';
+      } else {
+        normalized = cleanMindmapLabel(trimmed);
+      }
+      body.push({ indent: indent, text: normalized, isDirective: false });
+    }
+
+    // Ensure exactly one root node (Mermaid mindmap throws "There can be only one root" otherwise).
+    let minIndent = Infinity;
+    for (let i = 0; i < body.length; i++) {
+      if (!body[i].isDirective && body[i].indent < minIndent) {
+        minIndent = body[i].indent;
+      }
+    }
+    let rootCount = 0;
+    for (let i = 0; i < body.length; i++) {
+      if (!body[i].isDirective && body[i].indent === minIndent) {
+        rootCount++;
+      }
+    }
+    if (rootCount > 1) {
+      out.push('  root((Mindmap))');
+      for (let i = 0; i < body.length; i++) {
+        const shifted = Math.max(0, body[i].indent - minIndent) + 4;
+        out.push(' '.repeat(shifted) + body[i].text);
+      }
+    } else {
+      for (let i = 0; i < body.length; i++) {
+        const pad = body[i].indent === 0 ? 2 : body[i].indent;
+        out.push(' '.repeat(pad) + body[i].text);
+      }
+    }
+    return out.join('\n');
+  }
+
   function sanitizeSource(src) {
     let text = String(src || '');
     // 0. Normalize smart/curly/fullwidth double quotes to ASCII ".
     text = text.replace(/[\u201C\u201D\uFF02]/g, '"');
+    // 0.5. Mindmap has its own indentation-based grammar (no flowchart `id["..."]`, `<br/>`, or multiple roots).
+    if (/^\s*(?:%%[^\n]*\n\s*)*mindmap\b/i.test(text)) {
+      return sanitizeMindmapSource(text);
+    }
     // 1. Normalize hyphenated/spaced/capitalized `sub-graph` / `sub graph` at line starts.
     text = text.replace(/^([ \t]*)sub[- ]?graph([ \t]+)/gim, '$1subgraph$2');
     // 2. Normalize Unicode box-drawing / typographic arrows outside quoted strings and node label brackets.

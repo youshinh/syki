@@ -158,4 +158,33 @@ const MT = require('./mermaid_tone.js');
   assert.ok(out2.includes('subgraph S3["[1] 事前チェック"]'));
 })();
 
+// sanitizeSource mindmap regressions (flowchart-style id["..."], <br/>, multiple roots, tabs)
+(() => {
+  const realMindmap = [
+    'mindmap',
+    '  root["ノートアプリ仕様"]',
+    '    UI["UIデザインと質感"]',
+    '      Paper["紙のような質感と立体感<br/>枠線排除・シャドウ・綴じ目陰影"]',
+    '      CtrlL["Ctrl+L<br/>カーソル位置のAI (高速)"]'
+  ].join('\n');
+  const out = MT.sanitizeSource(realMindmap);
+  assert.ok(out.includes('  root((ノートアプリ仕様))'), 'root["..."] becomes root((...))');
+  assert.ok(out.includes('    UI[UIデザインと質感]'), 'id["..."] drops quotes');
+  assert.ok(!out.includes('<br/>'), '<br/> is replaced for htmlLabels:false mindmap');
+  assert.ok(!out.includes('"'), 'no double quotes left in mindmap nodes');
+  assert.ok(out.includes('（高速）'), 'ASCII parens inside label become fullwidth');
+
+  const multiRoot = [
+    'mindmap',
+    '\tTopicA',
+    '\t\tSub1',
+    '\tTopicB'
+  ].join('\n');
+  const fixedMulti = MT.sanitizeSource(multiRoot);
+  assert.ok(fixedMulti.includes('  root((Mindmap))'), 'multiple roots wrapped in single root');
+  assert.ok(fixedMulti.includes('    TopicA'));
+  assert.ok(fixedMulti.includes('      Sub1'));
+  assert.ok(fixedMulti.includes('    TopicB'));
+})();
+
 console.log('mermaid_tone tests passed');

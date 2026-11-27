@@ -208,7 +208,10 @@ impl CoreState {
                 }
                 let p = Path::new(path.trim());
                 match NoteFileStore::write_atomic(p, &content, &encoding) {
-                    Ok(_) => RpcResponse::ok(&req.id, save_result_json(p, &content, false)),
+                    Ok(_) => {
+                        syki_core::search::invalidate_search_cache(&self.config_store.scrap_dir());
+                        RpcResponse::ok(&req.id, save_result_json(p, &content, false))
+                    }
                     Err(e) => RpcResponse::err(&req.id, format!("saveFile failed: {e}")),
                 }
             }
@@ -248,7 +251,10 @@ impl CoreState {
                     }
                 }
                 match NoteFileStore::write_atomic(p, &content, &encoding) {
-                    Ok(_) => RpcResponse::ok(&req.id, save_result_json(p, &content, false)),
+                    Ok(_) => {
+                        syki_core::search::invalidate_search_cache(&self.config_store.scrap_dir());
+                        RpcResponse::ok(&req.id, save_result_json(p, &content, false))
+                    }
                     Err(e) => RpcResponse::err(&req.id, format!("saveFileChecked write failed: {e}")),
                 }
             }

@@ -3540,7 +3540,12 @@
           ? String(act.term.getSelection() || '').trim()
           : '';
         const out = sel || (ctrl ? ctrl.readActiveOutput(120) : '');
-        if (out) insertTextIntoLeftNote('```\n' + out + '\n```');
+        if (!out) return;
+        if (typeof cfg.summarizeToLeftNote === 'function') {
+          cfg.summarizeToLeftNote(out);
+        } else {
+          insertTextIntoLeftNote('```\n' + out + '\n```');
+        }
       });
     }
 
