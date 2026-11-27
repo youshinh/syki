@@ -230,13 +230,14 @@ impl IpcPipeServer {
 
         let join = std::thread::spawn(move || {
             let pipe_h = HSTRING::from(pipe_bg.as_str());
+            let token_arc = Arc::new(token);
             while !stop_bg.load(Ordering::Acquire) {
                 let raw_handle: HANDLE = unsafe {
                     CreateNamedPipeW(
                         &pipe_h,
                         PIPE_ACCESS_DUPLEX,
                         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-                        4,
+                        32,
                         64 * 1024,
                         64 * 1024,
                         0,
@@ -244,7 +245,7 @@ impl IpcPipeServer {
                     )
                 };
                 if raw_handle == INVALID_HANDLE_VALUE || raw_handle.is_invalid() {
-                    std::thread::sleep(Duration::from_millis(50));
+                    std::thread::sleep(Duration::from_millis(20));
                     continue;
                 }
                 if stop_bg.load(Ordering::Acquire) {
@@ -266,37 +267,45 @@ impl IpcPipeServer {
                     continue;
                 }
 
-                let mut file = unsafe { std::fs::File::from_raw_handle(raw_handle.0 as *mut _) };
-                let mut limited = (&mut file).take(MAX_IPC_LINE_BYTES as u64);
-                let mut reader = BufReader::new(&mut limited);
-                let mut line = String::new();
-                let reply = match reader.read_line(&mut line) {
-                    Ok(0) => None,
-                    Ok(_) => match serde_json::from_str::<IpcEnvelope>(line.trim()) {
-                        Ok(req) => {
-                            if req.auth != token {
-                                Some(IpcReply::err(req.id, "unauthorized: invalid ipc token"))
-                            } else {
-                                Some(handler(req))
+                // Offload request handling to a worker thread so the accept loop immediately
+                // creates the next pipe instance, eliminating ENOENT gaps under concurrent load.
+                let raw_usize = raw_handle.0 as usize;
+                let handler_bg = Arc::clone(&handler);
+                let token_bg = Arc::clone(&token_arc);
+                std::thread::spawn(move || {
+                    let h = HANDLE(raw_usize as *mut _);
+                    let mut file = unsafe { std::fs::File::from_raw_handle(h.0 as *mut _) };
+                    let mut limited = (&mut file).take(MAX_IPC_LINE_BYTES as u64);
+                    let mut reader = BufReader::new(&mut limited);
+                    let mut line = String::new();
+                    let reply = match reader.read_line(&mut line) {
+                        Ok(0) => None,
+                        Ok(_) => match serde_json::from_str::<IpcEnvelope>(line.trim()) {
+                            Ok(req) => {
+                                if req.auth != *token_bg {
+                                    Some(IpcReply::err(req.id, "unauthorized: invalid ipc token"))
+                                } else {
+                                    Some(handler_bg(req))
+                                }
                             }
-                        }
-                        Err(e) => Some(IpcReply::err("", format!("invalid ipc json: {e}"))),
-                    },
-                    Err(e) => Some(IpcReply::err("", format!("ipc read error: {e}"))),
-                };
+                            Err(e) => Some(IpcReply::err("", format!("invalid ipc json: {e}"))),
+                        },
+                        Err(e) => Some(IpcReply::err("", format!("ipc read error: {e}"))),
+                    };
 
-                if let Some(resp) = reply {
-                    if let Ok(mut json_line) = serde_json::to_string(&resp) {
-                        json_line.push('\n');
-                        let _ = file.write_all(json_line.as_bytes());
-                        let _ = file.flush();
+                    if let Some(resp) = reply {
+                        if let Ok(mut json_line) = serde_json::to_string(&resp) {
+                            json_line.push('\n');
+                            let _ = file.write_all(json_line.as_bytes());
+                            let _ = file.flush();
+                        }
                     }
-                }
-                unsafe {
-                    let _ = FlushFileBuffers(raw_handle);
-                    let _ = DisconnectNamedPipe(raw_handle);
-                }
-                // `file` owns `raw_handle` and closes it on drop.
+                    unsafe {
+                        let _ = FlushFileBuffers(h);
+                        let _ = DisconnectNamedPipe(h);
+                    }
+                    // `file` owns `h` and closes it on drop.
+                });
             }
             finished_bg.store(true, Ordering::Release);
         });

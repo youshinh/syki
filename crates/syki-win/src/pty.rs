@@ -307,6 +307,23 @@ impl PtyManager {
         Ok(new_label.trim().to_string())
     }
 
+    pub fn list_sessions(&self) -> Value {
+        let guard = self.sessions.lock().expect("pty sessions mutex");
+        let mut items: Vec<Value> = guard
+            .values()
+            .filter(|s| !s.closed.load(Ordering::Acquire))
+            .map(|s| {
+                json!({
+                    "id": s._id,
+                    "label": s._label,
+                    "active": true
+                })
+            })
+            .collect();
+        items.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+        Value::Array(items)
+    }
+
     pub fn history(&self, id: &str) -> String {
         let session = self
             .sessions

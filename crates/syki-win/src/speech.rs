@@ -1572,7 +1572,7 @@ pub fn is_audio_media(file_name: &str, mime: &str) -> bool {
         .unwrap_or_default();
     matches!(
         ext.as_str(),
-        "wav" | "mp3" | "m4a" | "aac" | "ogg" | "oga" | "opus" | "flac" | "weba"
+        "wav" | "mp3" | "m4a" | "aac" | "ogg" | "oga" | "opus" | "flac" | "weba" | "webm"
     )
 }
 

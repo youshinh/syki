@@ -213,15 +213,42 @@ fn handle_ipc_envelope(
             }
             let next = serde_json::to_string_pretty(&obj).unwrap_or_else(|_| "{}".to_string());
             match store.save_raw(&next) {
-                Ok(()) => IpcReply::ok(req.id, json!({ "ok": true, "key": key })),
+                Ok(()) => {
+                    let resolved_val = store
+                        .load_resolved_json()
+                        .ok()
+                        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                        .unwrap_or(obj);
+                    (handle.event_sender)(RpcEvent {
+                        topic: "config:changed".to_string(),
+                        payload: json!({ "key": key, "config": resolved_val }),
+                    });
+                    IpcReply::ok(req.id, json!({ "ok": true, "key": key }))
+                }
                 Err(e) => IpcReply::err(req.id, e.to_string()),
             }
         } else {
             let raw = serde_json::to_string(&req.params).unwrap_or_else(|_| "{}".to_string());
             match store.save_raw(&raw) {
-                Ok(()) => IpcReply::ok(req.id, json!(true)),
+                Ok(()) => {
+                    let resolved_val = store
+                        .load_resolved_json()
+                        .ok()
+                        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                        .unwrap_or_else(|| req.params.clone());
+                    (handle.event_sender)(RpcEvent {
+                        topic: "config:changed".to_string(),
+                        payload: json!({ "config": resolved_val }),
+                    });
+                    IpcReply::ok(req.id, json!(true))
+                }
                 Err(e) => IpcReply::err(req.id, e.to_string()),
             }
+        }
+    } else if method == "config.live" {
+        match eval_syki_rpc(handle, "window.__sykiRPC.getLiveConfig()") {
+            Ok(v) => IpcReply::ok(req.id, v),
+            Err(e) => IpcReply::err(req.id, e),
         }
     } else if method == "tab.open" {
         let arg0 = req
@@ -319,7 +346,7 @@ fn handle_ipc_envelope(
         } else {
             IpcReply::err(req.id, resp.error.unwrap_or_else(|| "searchScraps failed".into()))
         }
-    } else if method == "pty.presets" || method == "pty.list" {
+    } else if method == "pty.presets" {
         let resp = core.dispatch(&syki_core::rpc::RpcRequest {
             id: req.id.clone(),
             method: "ptyAvailablePresets".to_string(),
@@ -333,6 +360,13 @@ fn handle_ipc_envelope(
             None => json!([]),
         };
         IpcReply::ok(req.id, val)
+    } else if method == "pty.list" {
+        let resp = core.dispatch(&syki_core::rpc::RpcRequest {
+            id: req.id.clone(),
+            method: "ptyList".to_string(),
+            params: json!([]),
+        });
+        IpcReply::ok(req.id, resp.result.unwrap_or(json!([])))
     } else if method == "speech.status" {
         let resp = core.dispatch(&syki_core::rpc::RpcRequest {
             id: req.id.clone(),
@@ -341,6 +375,8 @@ fn handle_ipc_envelope(
         });
         IpcReply::ok(req.id, resp.result.unwrap_or(json!({})))
     } else if method == "ocr" || method == "ocr.run" {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine as _;
         let img_path = req
             .params
             .get("args")
@@ -352,10 +388,72 @@ fn handle_ipc_envelope(
         if img_path.is_empty() {
             return IpcReply::err(req.id, "usage: syki-cli ocr run <image-path>");
         }
-        if !Path::new(img_path).is_file() {
+        let path_ref = Path::new(img_path);
+        if !path_ref.is_file() {
             return IpcReply::err(req.id, format!("image file not found: {img_path}"));
         }
-        IpcReply::ok(req.id, json!({ "queued": true, "path": img_path }))
+        let bytes = match fs::read(path_ref) {
+            Ok(b) => b,
+            Err(e) => return IpcReply::err(req.id, format!("failed to read image: {e}")),
+        };
+        let mime = match path_ref
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("jpg" | "jpeg") => "image/jpeg",
+            Some("webp") => "image/webp",
+            Some("gif") => "image/gif",
+            _ => "image/png",
+        };
+        let store = JsonConfigStore::new(env.data_dir.join("config.json"));
+        let resolved: serde_json::Value = store
+            .load_resolved_json()
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| json!({}));
+        let vision_obj = resolved.get("vision").and_then(|v| v.as_object());
+        let text_obj = resolved.get("text").and_then(|v| v.as_object());
+        let pick_str = |k: &str| -> String {
+            vision_obj
+                .and_then(|m| m.get(k))
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    text_obj
+                        .and_then(|m| m.get(k))
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                })
+                .unwrap_or("")
+                .to_string()
+        };
+        let prompt = vision_obj
+            .and_then(|m| m.get("prompt"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Extract all visible text accurately from this image. Preserve layout as Markdown.");
+        let cfg = syki_win::llm::LlmConfig {
+            provider: pick_str("provider"),
+            base_url: pick_str("baseUrl"),
+            model: pick_str("model"),
+            api_key: pick_str("apiKey"),
+            system_prompt: String::new(),
+            temperature: None,
+            max_tokens: None,
+        };
+        let b64 = STANDARD.encode(&bytes);
+        match syki_win::llm::query_vision_sync(prompt, &b64, mime, &cfg) {
+            Ok(text) => IpcReply::ok(
+                req.id,
+                json!({ "ok": true, "path": img_path, "text": text }),
+            ),
+            Err(e) => IpcReply::err(req.id, format!("ocr failed: {e}")),
+        }
     } else if method == METHOD_PLUGIN_LIST {
         let roots = syki_win::ext_store::ExtRoots::new(
             syki_win::ext_store::portable_dir_from_exe(),

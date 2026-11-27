@@ -155,7 +155,8 @@ pub fn run_command_filter(
     }
 
     let mut child = match Command::new("cmd.exe")
-        .args(["/d", "/c", trimmed])
+        .raw_arg("/d /s /c")
+        .raw_arg(format!("\"{trimmed}\""))
         .creation_flags(CREATE_NO_WINDOW)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

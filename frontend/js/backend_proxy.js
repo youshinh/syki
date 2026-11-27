@@ -211,6 +211,9 @@
       case 'scrap:appended':
         if (typeof win.onScrapAppended === 'function') win.onScrapAppended(p);
         break;
+      case 'config:changed':
+        if (typeof win.__onConfigChanged === 'function') win.__onConfigChanged(p);
+        break;
       case 'window:restored':
         if (typeof win.__onWindowRestored === 'function') win.__onWindowRestored();
         break;

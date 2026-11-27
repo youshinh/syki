@@ -330,9 +330,17 @@ pub fn config_key_kind(key: &str) -> Option<ConfigValueKind> {
     use ConfigValueKind::*;
     match key {
         "text" | "autocomplete" | "vision" | "voice" | "whisper" | "cli" | "action" | "image"
-        | "general" | "scraps" | "shortcuts" | "ocr" | "cfBridge" | "gitSync"
-        | "general.cloudConsent" | "general.toolbarLayout" | "general.contextMenuLayout"
-        | "voice.refine" | "voice.realtime" | "voice.batch" => Some(Object),
+        | "general" | "scraps" | "shortcuts" | "ocr" | "cfBridge" | "gitSync" | "semantic"
+        | "appearance" | "general.cloudConsent" | "general.toolbarLayout"
+        | "general.contextMenuLayout" | "voice.refine" | "voice.realtime" | "voice.batch" => {
+            Some(Object)
+        }
+
+        "semantic.enabled" => Some(Bool),
+        "semantic.model" | "semantic.baseUrl" | "semantic.apiKey" => Some(String),
+
+        "appearance.look" | "appearance.accent" | "appearance.font" => Some(String),
+        "appearance.fontSize" => Some(Number),
 
         "text.baseUrl" | "text.model" | "text.apiKey" | "text.systemPrompt" => Some(String),
 
@@ -342,8 +350,8 @@ pub fn config_key_kind(key: &str) -> Option<ConfigValueKind> {
 
         "vision.baseUrl" | "vision.model" | "vision.apiKey" | "vision.prompt" => Some(String),
 
-        "voice.model" | "voice.apiStyle" | "voice.baseUrl" | "voice.apiKey" | "voice.mode"
-        | "voice.prompt" => Some(String),
+        "voice.engine" | "voice.model" | "voice.apiStyle" | "voice.baseUrl" | "voice.apiKey"
+        | "voice.mode" | "voice.prompt" => Some(String),
         "voice.languageCodes" | "voice.customVocabulary" => Some(StringArray),
         "voice.silence_timeout_sec" | "voice.barSilenceSec" => Some(Number),
         "voice.includeSystemAudio" => Some(Bool),
@@ -365,10 +373,10 @@ pub fn config_key_kind(key: &str) -> Option<ConfigValueKind> {
         }
         "cli.openResultInNewTab" | "cli.openErrorInNewTab" => Some(Bool),
 
-        "action.enabled" => Some(Bool),
+        "action.enabled" | "action.intentRouter" => Some(Bool),
         "action.baseUrl" | "action.model" | "action.apiKey" => Some(String),
 
-        "image.model" | "image.aspectRatio" | "image.resolution" => Some(String),
+        "image.model" | "image.apiKey" | "image.aspectRatio" | "image.resolution" => Some(String),
 
         "general.language"
         | "general.theme"
@@ -400,6 +408,7 @@ pub fn config_key_kind(key: &str) -> Option<ConfigValueKind> {
         | "general.tabDock"
         | "general.tabDockFollowOs"
         | "general.rewriteHistoryLink"
+        | "general.inheritTextConnection"
         | "general.welcomeShown"
         | "general.aiChoiceMade" => Some(Bool),
         "general.tabStripWidth"

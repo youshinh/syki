@@ -1093,6 +1093,9 @@ impl CoreState {
             "ptyAvailablePresets" => {
                 RpcResponse::ok(&req.id, json!(pty::available_presets().to_string()))
             }
+            "ptyList" => {
+                RpcResponse::ok(&req.id, self.pty_mgr.list_sessions())
+            }
             "ptyStart" => {
                 let preset = param_str(&req.params, 0, "preset").unwrap_or_else(|| "cmd".into());
                 let dir = param_str(&req.params, 1, "dir").unwrap_or_default();

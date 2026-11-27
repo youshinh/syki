@@ -379,11 +379,24 @@ fn dispatch_subcommand(cmd: &str, args: &[String]) -> Result<(), String> {
                 Some("set") => {
                     let key = args.get(1).ok_or("usage: syki-cli config set <key> <value>")?;
                     let raw_val = args.get(2).ok_or("usage: syki-cli config set <key> <value>")?;
-                    let raw = store.load_raw().map_err(|e| e.to_string())?;
-                    let mut obj: Value = serde_json::from_str(&raw).unwrap_or_else(|_| json!({}));
                     let parsed_val = serde_json::from_str::<Value>(raw_val)
                         .unwrap_or_else(|_| Value::String(raw_val.clone()));
-                    syki_core::storage::config::set_config_value(&mut obj, key, parsed_val)?;
+                    // Validate against schema before IPC or disk write.
+                    let raw = store.load_raw().map_err(|e| e.to_string())?;
+                    let mut obj: Value = serde_json::from_str(&raw).unwrap_or_else(|_| json!({}));
+                    syki_core::storage::config::set_config_value(&mut obj, key, parsed_val.clone())?;
+                    // Prefer routing through the running GUI instance so WebView2 receives live `config:changed`.
+                    if let Ok(res) = try_send_ipc(
+                        &env,
+                        "",
+                        "config.set",
+                        json!({ "key": key, "value": parsed_val }),
+                        String::new(),
+                        String::new(),
+                    ) {
+                        println!("{}", serde_json::to_string(&res).unwrap_or_else(|_| res.to_string()));
+                        return Ok(());
+                    }
                     let next = serde_json::to_string_pretty(&obj).map_err(|e| e.to_string())?;
                     store.save_raw(&next).map_err(|e| e.to_string())?;
                     println!("{}", json!({ "ok": true, "key": key }));

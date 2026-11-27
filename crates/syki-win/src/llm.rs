@@ -26,6 +26,8 @@ pub struct LlmConfig {
     #[serde(default)]
     pub api_key: String,
     #[serde(default)]
+    pub system_prompt: String,
+    #[serde(default)]
     pub temperature: Option<f64>,
     #[serde(default)]
     pub max_tokens: Option<u32>,
@@ -170,15 +172,41 @@ fn is_timeout_error(err: &dyn std::error::Error) -> bool {
     msg.contains("timed out") || msg.contains("timeout") || msg.contains("deadline")
 }
 
+fn redact_url_secrets(msg: &str) -> String {
+    let mut out = msg.to_string();
+    for marker in ["?key=", "&key="] {
+        while let Some(pos) = out.find(marker) {
+            let val_start = pos + marker.len();
+            let val_end = out[val_start..]
+                .find(|c: char| c == '&' || c == ':' || c == ' ' || c == '"' || c == '\'')
+                .map(|i| val_start + i)
+                .unwrap_or(out.len());
+            out.replace_range(val_start..val_end, "[REDACTED]");
+            break;
+        }
+    }
+    out
+}
+
+fn resolve_gemini_root(base: &str) -> &str {
+    let b = base.trim().trim_end_matches('/');
+    b.strip_suffix("/v1beta/openai")
+        .or_else(|| b.strip_suffix("/v1/openai"))
+        .or_else(|| b.strip_suffix("/openai"))
+        .or_else(|| b.strip_suffix("/v1beta"))
+        .unwrap_or(b)
+}
+
 fn send_json_post(req: ureq::Request, body: &Value) -> Result<Value, String> {
     let resp = req
         .set("Content-Type", "application/json")
         .send_string(&body.to_string())
         .map_err(|e| {
+            let raw = redact_url_secrets(&e.to_string());
             if is_timeout_error(&e) {
-                format!("HTTP request timed out: {e}")
+                format!("HTTP request timed out: {raw}")
             } else {
-                format!("HTTP request failed: {e}")
+                format!("HTTP request failed: {raw}")
             }
         })?;
     let raw = resp
@@ -211,6 +239,31 @@ fn resolve_openai_chat_url(base: &str) -> String {
     }
 }
 
+fn extract_gemini_text(val: &Value) -> Option<String> {
+    let parts = val.pointer("/candidates/0/content/parts")?.as_array()?;
+    let mut non_thought = String::new();
+    let mut all_text = String::new();
+    for part in parts {
+        if let Some(t) = part.get("text").and_then(|v| v.as_str()) {
+            all_text.push_str(t);
+            if part.get("thought").and_then(|v| v.as_bool()) != Some(true) {
+                non_thought.push_str(t);
+            }
+        }
+    }
+    let chosen = if !non_thought.trim().is_empty() {
+        non_thought
+    } else {
+        all_text
+    };
+    let cleaned = strip_think_tags(&chosen);
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
 fn strip_think_tags(s: &str) -> String {
     let mut out = s.to_string();
     while let Some(start) = out.find("<think>") {
@@ -237,12 +290,19 @@ pub fn query_llm_sync_with_timeout(
     let api_key = cfg.resolved_api_key();
     let agent = http_agent_with_timeout(timeout);
 
+    let sys_prompt = cfg.system_prompt.trim();
+
     if provider == "ollama" {
         let url = format!("{base}/api/chat");
+        let mut messages = Vec::new();
+        if !sys_prompt.is_empty() {
+            messages.push(json!({ "role": "system", "content": sys_prompt }));
+        }
+        messages.push(json!({ "role": "user", "content": prompt }));
         let body = json!({
             "model": model,
             "stream": false,
-            "messages": [{ "role": "user", "content": prompt }]
+            "messages": messages
         });
         let val = send_json_post(agent.post(&url), &body)?;
         return val
@@ -254,11 +314,14 @@ pub fn query_llm_sync_with_timeout(
 
     if provider == "anthropic" {
         let url = format!("{base}/messages");
-        let body = json!({
+        let mut body = json!({
             "model": model,
             "max_tokens": cfg.max_tokens.unwrap_or(2048),
             "messages": [{ "role": "user", "content": prompt }]
         });
+        if !sys_prompt.is_empty() {
+            body["system"] = json!(sys_prompt);
+        }
         let mut req = agent
             .post(&url)
             .set("anthropic-version", "2023-06-01");
@@ -274,41 +337,52 @@ pub fn query_llm_sync_with_timeout(
     }
 
     if (base.contains("googleapis.com") && !base.contains("/openai")) || provider == "gemini" {
-        let root = base
-            .trim_end_matches('/')
-            .strip_suffix("/v1beta")
-            .unwrap_or(base.trim_end_matches('/'));
+        let root = resolve_gemini_root(&base);
         let clean_model = model.trim_start_matches("models/");
-        let url = format!("{root}/v1beta/models/{clean_model}:generateContent?key={api_key}");
+        let url = format!("{root}/v1beta/models/{clean_model}:generateContent");
         let mut body = json!({
             "contents": [{
                 "role": "user",
                 "parts": [{ "text": prompt }]
             }]
         });
+        if !sys_prompt.is_empty() {
+            body["systemInstruction"] = json!({
+                "parts": [{ "text": sys_prompt }]
+            });
+        }
         let mut gen_cfg = json!({});
         if let Some(t) = cfg.temperature {
             gen_cfg["temperature"] = json!(t);
         }
         if let Some(m) = cfg.max_tokens {
             gen_cfg["maxOutputTokens"] = json!(m);
+            if clean_model.starts_with("gemini-2.5") && m <= 512 {
+                gen_cfg["thinkingConfig"] = json!({ "thinkingBudget": 0 });
+            }
         }
         if !gen_cfg.as_object().map(|o| o.is_empty()).unwrap_or(true) {
             body["generationConfig"] = gen_cfg;
         }
-        let val = send_json_post(agent.post(&url), &body)?;
-        return val
-            .pointer("/candidates/0/content/parts/0/text")
-            .and_then(|v| v.as_str())
-            .map(strip_think_tags)
+        let mut req = agent.post(&url);
+        if !api_key.is_empty() {
+            req = req.set("x-goog-api-key", &api_key);
+        }
+        let val = send_json_post(req, &body)?;
+        return extract_gemini_text(&val)
             .ok_or_else(|| "Gemini response missing candidates[0].content.parts[0].text".to_string());
     }
 
     // OpenAI-compatible (`/chat/completions`, works for OpenAI, Gemini OpenAI-compat, LM Studio, Strata)
     let url = resolve_openai_chat_url(&base);
+    let mut messages = Vec::new();
+    if !sys_prompt.is_empty() {
+        messages.push(json!({ "role": "system", "content": sys_prompt }));
+    }
+    messages.push(json!({ "role": "user", "content": prompt }));
     let mut body = json!({
         "model": model,
-        "messages": [{ "role": "user", "content": prompt }]
+        "messages": messages
     });
     if is_local_openai_compat(&base) {
         body["chat_template_kwargs"] = json!({ "enable_thinking": false });
@@ -380,12 +454,9 @@ pub fn query_vision_sync(
         || base.trim_end_matches('/').ends_with("/v1beta")
         || (provider == "gemini");
     if is_gemini {
-        let root = base
-            .trim_end_matches('/')
-            .strip_suffix("/v1beta")
-            .unwrap_or(base.trim_end_matches('/'));
+        let root = resolve_gemini_root(&base);
         let clean_model = model.trim_start_matches("models/");
-        let url = format!("{root}/v1beta/models/{clean_model}:generateContent?key={api_key}");
+        let url = format!("{root}/v1beta/models/{clean_model}:generateContent");
         let body = json!({
             "contents": [{
                 "parts": [
@@ -394,12 +465,12 @@ pub fn query_vision_sync(
                 ]
             }]
         });
-        let val = send_json_post(http_agent().post(&url), &body)?;
-        return val
-            .pointer("/candidates/0/content/parts/0/text")
-            .and_then(|v| v.as_str())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
+        let mut req = http_agent().post(&url);
+        if !api_key.is_empty() {
+            req = req.set("x-goog-api-key", &api_key);
+        }
+        let val = send_json_post(req, &body)?;
+        return extract_gemini_text(&val)
             .ok_or_else(|| "Gemini vision response missing candidates[0].content.parts[0].text".to_string());
     }
 
@@ -564,14 +635,12 @@ pub fn generate_image_async(
 
         let (result, error) = if is_gemini {
             let root = if base.contains("googleapis.com") {
-                base.trim_end_matches('/')
-                    .strip_suffix("/v1beta")
-                    .unwrap_or(base.trim_end_matches('/'))
+                resolve_gemini_root(&base)
             } else {
                 "https://generativelanguage.googleapis.com"
             };
             let clean_model = model.trim_start_matches("models/");
-            let url = format!("{root}/v1beta/models/{clean_model}:generateContent?key={api_key}");
+            let url = format!("{root}/v1beta/models/{clean_model}:generateContent");
             let mut gen_cfg = json!({
                 "responseModalities": ["IMAGE", "TEXT"]
             });
@@ -587,7 +656,11 @@ pub fn generate_image_async(
                 "contents": [{ "role": "user", "parts": [{ "text": prompt }] }],
                 "generationConfig": gen_cfg
             });
-            match send_json_post(http_agent().post(&url), &body) {
+            let mut req = http_agent().post(&url);
+            if !api_key.is_empty() {
+                req = req.set("x-goog-api-key", &api_key);
+            }
+            match send_json_post(req, &body) {
                 Ok(val) => {
                     let found = val
                         .pointer("/candidates/0/content/parts")
@@ -769,6 +842,7 @@ impl DecisionConfig {
             base_url: self.base_url.clone(),
             model: self.model.clone(),
             api_key: self.api_key.clone(),
+            system_prompt: String::new(),
             temperature: self.temperature,
             max_tokens: self.max_tokens,
         }

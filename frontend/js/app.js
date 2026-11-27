@@ -11555,6 +11555,50 @@ OUTPUT FORMAT:
   }
 
   // --- Feature 2: Webview Scrap Appended Listener ---
+  window.__onConfigChanged = function (payload) {
+    try {
+      const next = payload && payload.config && typeof payload.config === 'object' ? payload.config : null;
+      if (!next) return;
+      const prevLang = (config.general && config.general.language) || 'en';
+      const prevTheme = (config.general && config.general.theme) || '';
+      const prevAppearance = appearanceSignature();
+      const prevMermaid = config.general ? config.general.mermaidTone : undefined;
+      for (const grp of ['text', 'autocomplete', 'vision', 'voice', 'cli', 'image', 'scraps', 'action', 'general']) {
+        if (next[grp] && typeof next[grp] === 'object' && !Array.isArray(next[grp])) {
+          if (!config[grp] || typeof config[grp] !== 'object') config[grp] = {};
+          Object.assign(config[grp], next[grp]);
+        }
+      }
+      if (next.semantic && typeof next.semantic === 'object' && !Array.isArray(next.semantic)) {
+        config.semantic = Object.assign({}, config.semantic || {}, next.semantic);
+      }
+      loadAppearanceGroup(next);
+      if (next.shortcuts && typeof next.shortcuts === 'object') {
+        config.shortcuts = Object.assign({}, DEFAULT_SHORTCUTS, config.shortcuts || {}, usableShortcuts(next.shortcuts));
+      }
+      try {
+        if (window.SecretStrip) window.SecretStrip.saveLocalCopy(localStorage, config);
+      } catch (_) {}
+      if ((config.general && config.general.theme) !== prevTheme || appearanceSignature() !== prevAppearance) {
+        applyTheme();
+      }
+      if ((config.general && config.general.language) !== prevLang) {
+        applyLanguage();
+      }
+      renderAutosaveStatus();
+      renderImeStatus();
+      refreshStatusAI();
+      applyTabBarTop();
+      applyTabDock();
+      if (window.MermaidTone && window.MermaidTone.normalizeTone(config.general && config.general.mermaidTone) !== window.MermaidTone.normalizeTone(prevMermaid)) {
+        renderPreview();
+        renderSecondaryPreview();
+      }
+    } catch (e) {
+      console.warn('__onConfigChanged failed:', e);
+    }
+  };
+
   window.onScrapAppended = async function(data) {
     if (!data) return;
     if (data.cwd) lastPipedCwd = data.cwd;
@@ -16970,6 +17014,7 @@ OUTPUT FORMAT:
       return { tabId: tab.id, start: editor.selectionStart, end: editor.selectionEnd, line: at.line, col: at.col };
     },
     rpcUiState: rpcUiState,
+    getConfig: function () { return config; },
     setUiStateForRpc: setUiStateForRpc,
     printPdfForRpc: printPdfForRpc,
     openPanelForRpc: openPanelForRpc

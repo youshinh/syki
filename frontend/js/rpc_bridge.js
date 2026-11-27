@@ -278,6 +278,10 @@
         return port.rpcUiState();
       },
 
+      getLiveConfig: function () {
+        return typeof port.getConfig === 'function' ? port.getConfig() : null;
+      },
+
       setUiState: function (spec) {
         return port.setUiStateForRpc(spec);
       },
