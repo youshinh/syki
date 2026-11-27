@@ -357,7 +357,7 @@ pub fn query_llm_sync_with_timeout(
         }
         if let Some(m) = cfg.max_tokens {
             gen_cfg["maxOutputTokens"] = json!(m);
-            if clean_model.starts_with("gemini-2.5") && m <= 512 {
+            if clean_model.starts_with("gemini-2.5") && m <= 1024 {
                 gen_cfg["thinkingConfig"] = json!({ "thinkingBudget": 0 });
             }
         }

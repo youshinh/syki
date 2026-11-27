@@ -185,6 +185,19 @@ const MT = require('./mermaid_tone.js');
   assert.ok(fixedMulti.includes('    TopicA'));
   assert.ok(fixedMulti.includes('      Sub1'));
   assert.ok(fixedMulti.includes('    TopicB'));
+
+  // sequenceDiagram redundant deactivate across alt/else branches
+  const seqWithDupDeact = [
+    'sequenceDiagram',
+    '  activate AuthAPI',
+    '  alt OK',
+    '    deactivate AuthAPI',
+    '  else NG',
+    '    deactivate AuthAPI',
+    '  end'
+  ].join('\n');
+  const fixedSeq = MT.sanitizeSource(seqWithDupDeact);
+  assert.strictEqual((fixedSeq.match(/deactivate AuthAPI/g) || []).length, 1, 'drops redundant second deactivate');
 })();
 
 console.log('mermaid_tone tests passed');

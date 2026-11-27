@@ -7,7 +7,7 @@
       "pluginBootDelayMs": 200
     },
     "webview": {
-      "browserArgs": "--disable-background-networking --disable-component-update --no-pings --disable-sync --no-first-run --disable-default-apps --no-proxy-server --disable-background-timer-throttling --disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints,AutofillServerCommunication,msSmartScreenProtection,CalculateNativeWinOcclusion",
+      "browserArgs": "--disable-background-networking --disable-component-update --no-pings --disable-sync --no-first-run --disable-default-apps --no-proxy-server --disable-extensions --disable-renderer-backgrounding --disable-background-timer-throttling --disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints,AutofillServerCommunication,msSmartScreenProtection,CalculateNativeWinOcclusion",
       "idleDetachMs": 270000,
       "detachCommitMs": 200
     },

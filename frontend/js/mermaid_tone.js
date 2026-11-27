@@ -176,7 +176,7 @@
     const out = rawLines.slice(0, headerIdx + 1);
     const body = [];
     for (let i = headerIdx + 1; i < rawLines.length; i++) {
-      const expanded = rawLines[i].replace(/\t/g, '  ');
+      const expanded = rawLines[i].replace(/\t/g, '  ').replace(/^([ \u3000]+)/, (m) => m.replace(/\u3000/g, '  '));
       const trimmed = expanded.trim();
       if (!trimmed) continue;
       if (trimmed.startsWith('%%')) {
@@ -235,21 +235,68 @@
         out.push(' '.repeat(shifted) + body[i].text);
       }
     } else {
+      const baseShift = minIndent === 0 ? 2 : 0;
       for (let i = 0; i < body.length; i++) {
-        const pad = body[i].indent === 0 ? 2 : body[i].indent;
+        const pad = body[i].indent + baseShift;
         out.push(' '.repeat(pad) + body[i].text);
       }
     }
     return out.join('\n');
   }
 
+  function sanitizeSequenceSource(src) {
+    const lines = String(src || '').replace(/\r\n?/g, '\n').split('\n');
+    const active = Object.create(null);
+    const out = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      let m;
+      if ((m = /^activate\s+([^\s]+)\s*$/i.exec(trimmed))) {
+        const p = m[1];
+        active[p] = (active[p] || 0) + 1;
+        out.push(line);
+        continue;
+      }
+      if ((m = /^deactivate\s+([^\s]+)\s*$/i.exec(trimmed))) {
+        const p = m[1];
+        if ((active[p] || 0) > 0) {
+          active[p] -= 1;
+          out.push(line);
+        }
+        continue;
+      }
+      // Track shorthand activation/deactivation arrows like A->>+B: msg or B-->>-A: msg
+      if ((m = /(?:->>|-->>|->|-->|-x|--x|-\)|--\))([+-])([^:\s]+)\s*:/.exec(trimmed))) {
+        const sign = m[1];
+        const target = m[2];
+        if (sign === '+') {
+          active[target] = (active[target] || 0) + 1;
+        } else if (sign === '-') {
+          if ((active[target] || 0) > 0) {
+            active[target] -= 1;
+          } else {
+            out.push(line.replace(/((?:->>|-->>|->|-->|-x|--x|-\)|--\)))-([^:\s]+\s*:)/, '$1$2'));
+            continue;
+          }
+        }
+      }
+      out.push(line);
+    }
+    return out.join('\n');
+  }
+
   function sanitizeSource(src) {
-    let text = String(src || '');
+    let text = String(src || '').replace(/^\uFEFF/, '');
     // 0. Normalize smart/curly/fullwidth double quotes to ASCII ".
     text = text.replace(/[\u201C\u201D\uFF02]/g, '"');
     // 0.5. Mindmap has its own indentation-based grammar (no flowchart `id["..."]`, `<br/>`, or multiple roots).
     if (/^\s*(?:%%[^\n]*\n\s*)*mindmap\b/i.test(text)) {
       return sanitizeMindmapSource(text);
+    }
+    // 0.6. sequenceDiagram: drop redundant `deactivate` calls (common LLM bug across alt/else branches).
+    if (/^\s*(?:%%[^\n]*\n\s*)*sequenceDiagram\b/i.test(text)) {
+      return sanitizeSequenceSource(text);
     }
     // 1. Normalize hyphenated/spaced/capitalized `sub-graph` / `sub graph` at line starts.
     text = text.replace(/^([ \t]*)sub[- ]?graph([ \t]+)/gim, '$1subgraph$2');

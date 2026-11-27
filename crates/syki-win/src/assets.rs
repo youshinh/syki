@@ -49,12 +49,12 @@ pub fn decode_asset_arc(asset: EmbeddedAsset) -> std::sync::Arc<Vec<u8>> {
     }
     use std::collections::HashMap;
     use std::io::Read;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::{OnceLock, RwLock};
 
-    static CACHE: OnceLock<Mutex<HashMap<usize, Arc<Vec<u8>>>>> = OnceLock::new();
+    static CACHE: OnceLock<RwLock<HashMap<usize, Arc<Vec<u8>>>>> = OnceLock::new();
     let cache_key = asset.bytes.as_ptr() as usize;
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(guard) = cache.lock() {
+    let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+    if let Ok(guard) = cache.read() {
         if let Some(hit) = guard.get(&cache_key) {
             return Arc::clone(hit);
         }
@@ -64,8 +64,8 @@ pub fn decode_asset_arc(asset: EmbeddedAsset) -> std::sync::Arc<Vec<u8>> {
     let mut out = Vec::with_capacity(asset.bytes.len().saturating_mul(3));
     if dec.read_to_end(&mut out).is_ok() {
         let arc = Arc::new(out);
-        if asset.bytes.len() > 16 * 1024 {
-            if let Ok(mut guard) = cache.lock() {
+        if asset.bytes.len() > 2 * 1024 {
+            if let Ok(mut guard) = cache.write() {
                 guard.insert(cache_key, Arc::clone(&arc));
             }
         }
@@ -79,17 +79,19 @@ pub fn decode_asset_bytes(asset: EmbeddedAsset) -> Vec<u8> {
     (*decode_asset_arc(asset)).clone()
 }
 
-/// Pre-decompresses `/index.html`, `/__boot_bundle.js`, and `/__boot_deferred.js` on a background thread
-/// so they are already in memory when WebView2 finishes initializing.
+/// Pre-decompresses `/index.html`, `/__boot_bundle.js`, `/__boot_deferred.js`, and `/__boot_deferred.css`
+/// on a background thread so they are already in memory when WebView2 finishes initializing.
 pub fn prewarm_boot_assets() {
     std::thread::spawn(|| {
         for path in [
             "/index.html",
+            "/__boot_style.css",
             "/__boot_bundle.js",
             "/__boot_deferred.js",
+            "/__boot_deferred.css",
         ] {
             if let Some(asset) = resolve_static_asset(path) {
-                let _ = decode_asset_bytes(asset);
+                let _ = decode_asset_arc(asset);
             }
         }
     });

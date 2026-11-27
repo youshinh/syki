@@ -162,6 +162,12 @@ const DEFERRED_BOOT_JS: &[&str] = &[
     "js/voice_input.js",
     "js/bar_voice.js",
     "js/intent_router.js",
+    "js/note_title.js",
+];
+
+const DEFERRED_BOOT_CSS: &[&str] = &[
+    "css/panels.css",
+    "css/modals.css",
 ];
 
 fn fnv1a_hex(bytes: &[u8]) -> String {
@@ -173,11 +179,12 @@ fn fnv1a_hex(bytes: &[u8]) -> String {
     format!("{h:016x}")
 }
 
-fn build_bundled_assets(frontend_root: &Path) -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+fn build_bundled_assets(frontend_root: &Path) -> Option<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> {
     let index_path = frontend_root.join("index.html");
     let raw_html = fs::read_to_string(&index_path).ok()?;
 
     let mut bundled_css = String::with_capacity(64 * 1024);
+    let mut deferred_css = String::with_capacity(32 * 1024);
     let mut bundled_js = String::with_capacity(1024 * 1024);
     let mut deferred_js = String::with_capacity(256 * 1024);
     let mut out_html = String::with_capacity(raw_html.len());
@@ -197,9 +204,13 @@ fn build_bundled_assets(frontend_root: &Path) -> Option<(Vec<u8>, Vec<u8>, Vec<u
                 if rel.starts_with("css/") {
                     if let Ok(css) = fs::read_to_string(frontend_root.join(&rel)) {
                         if trimmed.contains("media=\"print\"") {
-                            out_html.push_str("<style media=\"print\">\n");
-                            out_html.push_str(&minify_css(&css));
-                            out_html.push_str("</style>\n");
+                            deferred_css.push_str("@media print {\n");
+                            deferred_css.push_str(&minify_css(&css));
+                            deferred_css.push_str("}\n");
+                            continue;
+                        }
+                        if DEFERRED_BOOT_CSS.contains(&rel.as_str()) {
+                            deferred_css.push_str(&minify_css(&css));
                             continue;
                         }
                         bundled_css.push_str(&minify_css(&css));
@@ -251,15 +262,21 @@ fn build_bundled_assets(frontend_root: &Path) -> Option<(Vec<u8>, Vec<u8>, Vec<u
         out_html.push('\n');
     }
 
-    let style_tag = format!("<style>\n{bundled_css}</style>\n");
+    let css_hash = fnv1a_hex(bundled_css.as_bytes());
     let deferred_hint = if deferred_js.is_empty() {
         ""
     } else {
         "window.__bootDeferredURL=\"/__boot_deferred.js\";\n"
     };
-    let boot_bundle_js = format!("{deferred_hint}{bundled_js}");
+    let deferred_css_hint = if deferred_css.is_empty() {
+        ""
+    } else {
+        "window.__bootDeferredCSS=\"/__boot_deferred.css\";\n"
+    };
+    let boot_bundle_js = format!("{deferred_hint}{deferred_css_hint}{bundled_js}");
     let bundle_hash = fnv1a_hex(boot_bundle_js.as_bytes());
-    let script_tag = format!("<meta charset=\"UTF-8\">\n<script defer fetchpriority=\"high\" src=\"/__boot_bundle.js?v={bundle_hash}\"></script>\n");
+    let style_tag = format!("<link rel=\"stylesheet\" href=\"/__boot_style.css?v={css_hash}\">\n");
+    let script_tag = format!("<meta charset=\"UTF-8\">\n<link rel=\"preload\" as=\"style\" href=\"/__boot_style.css?v={css_hash}\">\n<link rel=\"preload\" as=\"script\" href=\"/__boot_bundle.js?v={bundle_hash}\">\n<script defer fetchpriority=\"high\" src=\"/__boot_bundle.js?v={bundle_hash}\"></script>\n");
     let final_html = out_html
         .replace("<meta charset=\"UTF-8\">\n", &script_tag)
         .replace("  <!--SYKI_BUNDLED_CSS-->\n", &style_tag)
@@ -268,6 +285,8 @@ fn build_bundled_assets(frontend_root: &Path) -> Option<(Vec<u8>, Vec<u8>, Vec<u
         final_html.into_bytes(),
         boot_bundle_js.into_bytes(),
         deferred_js.into_bytes(),
+        bundled_css.into_bytes(),
+        deferred_css.into_bytes(),
     ))
 }
 
@@ -312,7 +331,7 @@ fn main() {
     let mut entries = Vec::new();
     collect_files(&frontend_root, &frontend_root, &mut entries);
     let bundled = build_bundled_assets(&frontend_root);
-    if let Some((_, ref boot_bytes, ref deferred_bytes)) = bundled {
+    if let Some((_, ref boot_bytes, ref deferred_bytes, ref boot_css_bytes, ref deferred_css_bytes)) = bundled {
         if !boot_bytes.is_empty() {
             entries.push((
                 "/__boot_bundle.js".to_string(),
@@ -324,6 +343,20 @@ fn main() {
             entries.push((
                 "/__boot_deferred.js".to_string(),
                 "application/javascript; charset=utf-8",
+                String::new(),
+            ));
+        }
+        if !boot_css_bytes.is_empty() {
+            entries.push((
+                "/__boot_style.css".to_string(),
+                "text/css; charset=utf-8",
+                String::new(),
+            ));
+        }
+        if !deferred_css_bytes.is_empty() {
+            entries.push((
+                "/__boot_deferred.css".to_string(),
+                "text/css; charset=utf-8",
                 String::new(),
             ));
         }
@@ -369,22 +402,36 @@ fn main() {
     for (url_path, mime, abs_path) in entries {
         assert!(!abs_path.contains('"'), "unexpected quote in path: {abs_path}");
         if url_path == "/index.html" {
-            if let Some((ref html_bytes, _, _)) = bundled {
+            if let Some((ref html_bytes, _, _, _, _)) = bundled {
                 emit_asset(next_idx, &url_path, mime, html_bytes, None);
                 next_idx += 1;
                 continue;
             }
         }
         if url_path == "/__boot_bundle.js" {
-            if let Some((_, ref boot_bytes, _)) = bundled {
+            if let Some((_, ref boot_bytes, _, _, _)) = bundled {
                 emit_asset(next_idx, &url_path, mime, boot_bytes, None);
                 next_idx += 1;
                 continue;
             }
         }
         if url_path == "/__boot_deferred.js" {
-            if let Some((_, _, ref deferred_bytes)) = bundled {
+            if let Some((_, _, ref deferred_bytes, _, _)) = bundled {
                 emit_asset(next_idx, &url_path, mime, deferred_bytes, None);
+                next_idx += 1;
+                continue;
+            }
+        }
+        if url_path == "/__boot_style.css" {
+            if let Some((_, _, _, ref boot_css_bytes, _)) = bundled {
+                emit_asset(next_idx, &url_path, mime, boot_css_bytes, None);
+                next_idx += 1;
+                continue;
+            }
+        }
+        if url_path == "/__boot_deferred.css" {
+            if let Some((_, _, _, _, ref deferred_css_bytes)) = bundled {
+                emit_asset(next_idx, &url_path, mime, deferred_css_bytes, None);
                 next_idx += 1;
                 continue;
             }

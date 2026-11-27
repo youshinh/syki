@@ -87,6 +87,7 @@ impl ScrapStore {
         }
         file.write_all(entry.as_bytes())?;
         file.sync_all()?;
+        crate::search::invalidate_search_cache(&resolved_dir);
         Ok(target)
     }
 

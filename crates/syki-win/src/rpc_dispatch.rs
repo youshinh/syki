@@ -265,7 +265,10 @@ impl CoreState {
                 let suggested = param_str(&req.params, 2, "suggestedPath");
                 match dialogs::pick_save_file(None, suggested.as_deref(), false) {
                     Ok(Some(path)) => match NoteFileStore::write_atomic(&path, &content, &encoding) {
-                        Ok(_) => RpcResponse::ok(&req.id, save_result_json(&path, &content, false)),
+                        Ok(_) => {
+                            syki_core::search::invalidate_search_cache(&self.config_store.scrap_dir());
+                            RpcResponse::ok(&req.id, save_result_json(&path, &content, false))
+                        }
                         Err(e) => RpcResponse::err(&req.id, format!("saveFileAs write failed: {e}")),
                     },
                     Ok(None) => RpcResponse::ok(&req.id, Value::Null),
@@ -284,7 +287,10 @@ impl CoreState {
                 }
                 let target_path = unique_note_path(&target_dir, &suggested_name);
                 match NoteFileStore::write_atomic(&target_path, &content, &encoding) {
-                    Ok(_) => RpcResponse::ok(&req.id, save_result_json(&target_path, &content, false)),
+                    Ok(_) => {
+                        syki_core::search::invalidate_search_cache(&self.config_store.scrap_dir());
+                        RpcResponse::ok(&req.id, save_result_json(&target_path, &content, false))
+                    }
                     Err(e) => RpcResponse::err(&req.id, format!("createNoteInFolder write failed: {e}")),
                 }
             }

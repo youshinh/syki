@@ -157,7 +157,8 @@
         clearTimeout(scrapsSearchDebounceTimer);
         if (!q) {
           scrapsSearchFlattened = [];
-          if (scrapsMeaningMode()) scrapsSearchSeq++; // a slow meaning answer to the text that was just erased must not bring its list back
+          scrapsSearchSeq++; // invalidate any in-flight exact or meaning search so late results cannot resurrect
+          scrapsSearchStale = false;
           if (scrapsSemanticWired) scrapsSearchTyped();
           renderScrapsSearchResults([]);
           return;

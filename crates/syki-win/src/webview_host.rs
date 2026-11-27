@@ -518,6 +518,39 @@ fn attach_webview_controller(
     visible: bool,
     preload_override: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Spawn persistent 4-thread RPC worker pool BEFORE CreateCoreWebView2Controller so OS thread
+    // creation overlaps with the ~200ms WebView2 controller startup instead of delaying Navigate().
+    let rpc_for_msg = Arc::clone(&state.rpc_handler);
+    let q_for_msg = Arc::clone(&state.event_queue);
+    let hwnd_for_msg = hwnd.0 as isize;
+    let (rpc_tx, rpc_rx) = mpsc::channel::<String>();
+    let rpc_rx = Arc::new(Mutex::new(rpc_rx));
+    for _ in 0..4 {
+        let rx = Arc::clone(&rpc_rx);
+        let rpc = Arc::clone(&rpc_for_msg);
+        let q = Arc::clone(&q_for_msg);
+        std::thread::spawn(move || loop {
+            let raw_json = {
+                let guard = rx.lock().expect("rpc worker rx mutex");
+                match guard.recv() {
+                    Ok(msg) => msg,
+                    Err(_) => break,
+                }
+            };
+            let reply_json = dispatch_rpc_message(&raw_json, rpc.as_ref());
+            q.lock().expect("event_queue mutex").push_back(reply_json);
+            unsafe {
+                let _ = PostMessageW(
+                    Some(HWND(hwnd_for_msg as *mut _)),
+                    WM_APP_PUSH_EVENT,
+                    WPARAM(0),
+                    LPARAM(0),
+                );
+            }
+        });
+    }
+    let rpc_tx = Arc::new(Mutex::new(rpc_tx));
+
     let controller = {
         let (tx, rx) = mpsc::channel();
         let env_ref = environment.clone();
@@ -565,13 +598,9 @@ fn attach_webview_controller(
         }
     }
 
-    let filter_patterns = [
-        format!("{}*", state.virtual_origin),
-        "http://*".to_string(),
-        "https://*".to_string(),
-    ];
-    for pat in &filter_patterns {
-        let filter_pattern = CoTaskMemPWSTR::from(pat.as_str());
+    // `https://*` already matches `https://app.syki.local/*`, saving one redundant COM filter call.
+    for pat in ["https://*", "http://*"] {
+        let filter_pattern = CoTaskMemPWSTR::from(pat);
         unsafe {
             webview.AddWebResourceRequestedFilter(
                 *filter_pattern.as_ref().as_pcwstr(),
@@ -641,38 +670,6 @@ fn attach_webview_controller(
         )?;
     }
 
-    let rpc_for_msg = Arc::clone(&state.rpc_handler);
-    let q_for_msg = Arc::clone(&state.event_queue);
-    let hwnd_for_msg = hwnd.0 as isize;
-    // Persistent 4-thread RPC worker pool eliminates per-message OS thread spawn overhead
-    // during startup RPC bursts, typing, and voice transcription handoffs.
-    let (rpc_tx, rpc_rx) = mpsc::channel::<String>();
-    let rpc_rx = Arc::new(Mutex::new(rpc_rx));
-    for _ in 0..4 {
-        let rx = Arc::clone(&rpc_rx);
-        let rpc = Arc::clone(&rpc_for_msg);
-        let q = Arc::clone(&q_for_msg);
-        std::thread::spawn(move || loop {
-            let raw_json = {
-                let guard = rx.lock().expect("rpc worker rx mutex");
-                match guard.recv() {
-                    Ok(msg) => msg,
-                    Err(_) => break,
-                }
-            };
-            let reply_json = dispatch_rpc_message(&raw_json, rpc.as_ref());
-            q.lock().expect("event_queue mutex").push_back(reply_json);
-            unsafe {
-                let _ = PostMessageW(
-                    Some(HWND(hwnd_for_msg as *mut _)),
-                    WM_APP_PUSH_EVENT,
-                    WPARAM(0),
-                    LPARAM(0),
-                );
-            }
-        });
-    }
-    let rpc_tx = Arc::new(Mutex::new(rpc_tx));
     let startup_t0_for_msg = state.startup_t0;
     let mut msg_token: i64 = 0;
     unsafe {
@@ -1192,11 +1189,6 @@ pub fn run_webview_host_with_handle(
     let state_ptr = Box::into_raw(boxed_state);
     unsafe {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr as isize);
-    }
-    let _ = apply_hotkey(hwnd, HOTKEY_ID_MAIN, &init_main_hk);
-    let _ = apply_hotkey(hwnd, HOTKEY_ID_QUICKCAPTURE, &init_qc_hk);
-    let _ = add_tray_icon(hwnd, &config.title);
-    unsafe {
         let dark_mode: i32 = 1;
         let _ = DwmSetWindowAttribute(
             hwnd,
@@ -1252,6 +1244,17 @@ pub fn run_webview_host_with_handle(
     let prebuilt_preload = preload_rx.recv().ok();
     attach_webview_controller(hwnd, &environment, state_ref, true, prebuilt_preload)?;
     write_perf_trace_event("controller_ready", startup_t0.elapsed().as_secs_f64() * 1000.0);
+    let _ = apply_hotkey(hwnd, HOTKEY_ID_MAIN, &init_main_hk);
+    let _ = apply_hotkey(hwnd, HOTKEY_ID_QUICKCAPTURE, &init_qc_hk);
+    // Offload Shell_NotifyIconW to a background thread so Explorer IPC never blocks
+    // WebView2 WebResourceRequested callbacks on the UI thread during boot.
+    {
+        let tray_hwnd = hwnd.0 as isize;
+        let tray_title = config.title.clone();
+        std::thread::spawn(move || {
+            let _ = add_tray_icon(HWND(tray_hwnd as *mut _), &tray_title);
+        });
+    }
 
     if let Some(cb) = on_ready {
         let hwnd_raw = hwnd.0 as isize;

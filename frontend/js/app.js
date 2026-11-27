@@ -644,7 +644,7 @@
     const lang = (config.general && config.general.language) || 'en';
     if (document.documentElement.lang !== lang) document.documentElement.lang = lang;
 
-    const translateRoot = (root) => {
+    const translateRoot = (root, skipTitles) => {
       root.querySelectorAll('[data-i18n]').forEach(el => {
         const key = el.getAttribute('data-i18n');
         const val = t(key);
@@ -652,13 +652,15 @@
           el.textContent = val;
         }
       });
-      root.querySelectorAll('[data-i18n-title]').forEach(el => {
-        const key = el.getAttribute('data-i18n-title');
-        const val = t(key);
-        if (val !== key && el.title !== val) {
-          el.title = val;
-        }
-      });
+      if (!skipTitles) {
+        root.querySelectorAll('[data-i18n-title]').forEach(el => {
+          const key = el.getAttribute('data-i18n-title');
+          const val = t(key);
+          if (val !== key && el.title !== val) {
+            el.title = val;
+          }
+        });
+      }
       root.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
         const key = el.getAttribute('data-i18n-placeholder');
         const val = t(key);
@@ -673,10 +675,10 @@
       const shellIds = ['toolbar', 'tab-index-left', 'tab-index-right', 'status-bar', 'editor-pane', 'secondary-pane-header'];
       for (let i = 0; i < shellIds.length; i++) {
         const el = document.getElementById(shellIds[i]);
-        if (el) translateRoot(el);
+        if (el) translateRoot(el, true);
       }
     } else {
-      translateRoot(document);
+      translateRoot(document, false);
     }
 
     // Update status bar texts
@@ -2069,6 +2071,8 @@
   // it over the first copy's edits. The text the caller has just read from the file goes into that tab when the tab holds no unsaved
   // text (the file may have changed on disk since the tab was filled: a Git pull, another editor, a session restored after a change,
   // and the next save would write the older text over it); a tab with unsaved text keeps it (see adoptDiskText).
+  let bootInitializing = false;
+
   function createTab(title, content, path, encoding, background) {
     const alreadyOpen = path ? findTabByPath(path) : null;
     if (alreadyOpen) {
@@ -2109,8 +2113,10 @@
     tabs.push(newTab);
     if (!(background && activeTabId && getTab(activeTabId))) {
       showTab(tabId);
-      const activeEd = getActiveEditor();
-      if (activeEd && typeof activeEd.focus === 'function') activeEd.focus();
+      if (!bootInitializing) {
+        const activeEd = getActiveEditor();
+        if (activeEd && typeof activeEd.focus === 'function') activeEd.focus();
+      }
     } else {
       renderTabs();
     }
@@ -2167,17 +2173,24 @@
     // A result's highlight belongs to the note it landed in, not to whatever this textarea shows next.
     if (window.GhostDiff) window.GhostDiff.clear(editorEl);
     editorEl.value = tab.content;
-    const pos = tab.cursorPos !== undefined ? tab.cursorPos : tab.content.length;
-    editorEl.selectionStart = pos;
-    editorEl.selectionEnd = pos;
+    if (!bootInitializing) {
+      const pos = tab.cursorPos !== undefined ? tab.cursorPos : tab.content.length;
+      editorEl.selectionStart = pos;
+      editorEl.selectionEnd = pos;
+    }
 
     statEncoding.textContent = tab.encoding;
     activePane = 'primary';
     updatePaneFocusClasses();
     renderTabs();
     cachedLineCount = 0;
-    updateLineNumbers();
-    updateStatusBar();
+    if (bootInitializing) {
+      scheduleUpdateLineNumbers();
+      scheduleUpdateStatusBar();
+    } else {
+      updateLineNumbers();
+      updateStatusBar();
+    }
 
     if (isPreviewMode) {
       renderPreview();
@@ -2198,7 +2211,7 @@
       }
     }
 
-    if (editorEl) {
+    if (editorEl && !bootInitializing) {
       editorEl.focus();
     }
     followAskBarToActiveTab();
@@ -2518,7 +2531,7 @@
   // for a Mac's overlay scrollbars): measured once, the first time the strip is shown, on a box made for it and thrown away (nothing is
   // measured at start). The stylesheet's --tab-strip-gap-right is the least room it keeps; the strip only ever moves further out.
   function measureStripGap() {
-    if (stripGapMeasured) return;
+    if (stripGapMeasured || bootInitializing) return;
     stripGapMeasured = true;
     const right = tabStrips[1].root;
     if (!right || !right.style || typeof right.style.setProperty !== 'function' || !document.body || !document.createElement) return;
@@ -2892,7 +2905,7 @@
     drawTabs();
     updateHeaderTitle();
     renderAutosaveStatus(); // "failed" follows the tabs: a note's save failing, working, or the note being closed
-    notifyTabOverflow();
+    if (!bootInitializing) notifyTabOverflow();
   }
 
   // Number of "\n" in text.substring(0, end) (the whole text when end is omitted). indexOf scans
@@ -4168,8 +4181,8 @@
           return token;
         });
 
-        // 3. Extract Inline Math ($...$)
-        rawText = rawText.replace(/\$([^\$\s\n](?:[^\$\n]*?[^\$\s\n])?)\$/g, (_, math) => {
+        // 3. Extract Inline Math ($...$); closing $ must not be followed by a digit (avoids currency ranges like $100〜$200).
+        rawText = rawText.replace(/\$([^\$\s\n](?:[^\$\n]*?[^\$\s\n])?)\$(?![0-9])/g, (_, math) => {
           const token = `KATEXMATHINLINE${mathPlaceholders.length}XYZ`;
           let rendered = '';
           try {
@@ -4301,14 +4314,15 @@
   // Feature 5: Detect path/to/file.ext:line and convert to vscode:// URI links
   function linkifyVsCodePaths(container, tabObj) {
     if (!container) return;
-    const pathRegex = /(?:^|[\s\(\[\'"])((?:[a-zA-Z]:[\\\/]|\/|\.\/|\.\.\/)?(?:[\w\.\-\_\\\/]+?\.[a-zA-Z0-9]+)):(\d+)(?::(\d+))?/g;
+    // Require an alphabetic-leading file extension (avoids misclassifying versions like v1.2.3:45 or IPs like 127.0.0.1:8080).
+    const pathRegex = /(?:^|[\s\(\[\'"])((?:[a-zA-Z]:[\\\/]|\/|\.\/|\.\.\/)?(?:[\w\.\-\_\\\/]+?\.[a-zA-Z][a-zA-Z0-9]*)):(\d+)(?::(\d+))?/g;
 
     let baseDir = lastPipedCwd || '';
     if (!baseDir && tabObj && tabObj.path) {
       baseDir = tabObj.path.replace(/[\\\/][^\\\/]+$/, '');
     }
 
-    const elementsToProcess = container.querySelectorAll('p, li, blockquote, pre code');
+    const elementsToProcess = container.querySelectorAll('p, li, td, blockquote, pre code');
     elementsToProcess.forEach(el => {
       if (el.querySelector('.vscode-jump-link')) return;
 
@@ -4379,8 +4393,13 @@
     if (defs.size === 0) return { text: src, footnotes: [] };
     const order = [];
     const indexById = new Map();
+    let inFenceOut = false;
     const outLines = kept.map((line) => {
-      if (/^\s*(?:```|~~~)/.test(line)) return line;
+      if (/^\s*(?:```|~~~)/.test(line)) {
+        inFenceOut = !inFenceOut;
+        return line;
+      }
+      if (inFenceOut) return line;
       return line.replace(/\[\^([^\s\]]+)\]/g, (full, id) => {
         if (!defs.has(id)) return full;
         if (!indexById.has(id)) {
@@ -9566,7 +9585,10 @@ OUTPUT FORMAT:
     const selEnd = editorEl.selectionEnd;
     if (selEnd > selStart) {
       const selected = val.substring(selStart, selEnd).trim();
-      if (selected.includes('```mermaid') || selected.startsWith('flowchart') || selected.startsWith('sequenceDiagram')) {
+      if (
+        selected.includes('```mermaid') ||
+        /^(?:flowchart|graph|sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|gantt|pie|journey|gitGraph|mindmap|timeline|quadrantChart|requirementDiagram|C4Context|sankey-beta|xychart-beta|block-beta)\b/i.test(selected)
+      ) {
         return selected.replace(/^```mermaid\s*/i, '').replace(/```$/i, '').trim();
       }
     }
@@ -12309,8 +12331,8 @@ OUTPUT FORMAT:
     const clipped = cleaned.length > 12000 ? cleaned.slice(-12000) : cleaned;
     const isJa = lang === 'ja';
     const promptPayload = isJa
-      ? `以下のターミナル出力を読み、要点を簡潔なMarkdown箇条書きで要約してください。\n- 実行内容と結果（成功/失敗/件数など）\n- 重要な変更・警告・エラー（あれば具体的なファイル名や原因）\n- 次のアクション（必要なら）\n余計な前置きや挨拶は不要で、ノートにそのまま貼れるMarkdownのみを出力してください。\n\n\`\`\`\n${clipped}\n\`\`\``
-      : `Summarize the following terminal output as concise Markdown bullet points:\n- What ran and its outcome (pass/fail/counts)\n- Key changes, warnings, or errors (with exact file names/reasons if any)\n- Next actions (if any)\nOutput only clean Markdown ready to paste into a note, with no preamble.\n\n\`\`\`\n${clipped}\n\`\`\``;
+      ? `以下のターミナル出力を読み、要点を簡潔なMarkdown箇条書きで要約してください。\n- 結論と件数（成功/失敗/スキップ等）\n- エラーや警告がある場合は最優先でファイル名と原因を明記\n- 次のアクション（必要なら1〜2行）\n冗長なパス列挙や前置きは省き、ノートにそのまま貼れるMarkdownのみを出力してください。\n\n\`\`\`\n${clipped}\n\`\`\``
+      : `Summarize the following terminal output as concise Markdown bullet points:\n- Outcome and counts (pass/fail/skip)\n- Prioritize any errors or warnings with exact file names and reasons\n- Next actions (1-2 lines if needed)\nOmit verbose path listings and preamble; output only clean Markdown.\n\n\`\`\`\n${clipped}\n\`\`\``;
 
     if (window.backend && window.backend.queryLLMAsync) {
       window.backend.queryLLMAsync(reqId, promptPayload, JSON.stringify(config.text));
@@ -15809,6 +15831,7 @@ OUTPUT FORMAT:
 
   // App Startup Entrypoint (Zero-Latency Instant Paint)
   function initApp() {
+    bootInitializing = true;
     if (window.chrome && window.chrome.webview && typeof window.chrome.webview.postMessage === 'function') {
       try { window.chrome.webview.postMessage({ type: '__perf_trace', phase: 'init_app_start' }); } catch (_) {}
     }
@@ -15846,16 +15869,6 @@ OUTPUT FORMAT:
       if (curTab) curTab.cursorPos = endPos;
       scheduleUpdateStatusBar();
     };
-    focusEditorAtEnd(false);
-    if (typeof requestAnimationFrame === 'function') {
-      requestAnimationFrame(() => focusEditorAtEnd(true));
-    }
-    window.addEventListener('focus', () => {
-      if (document.activeElement === document.body && editorEl && !isPreviewMode) {
-        editorEl.focus();
-      }
-    });
-
     // Replay early captured shortcuts / keystrokes while app.js was loading (0ms response)
     if (typeof window.__cleanupEarlyKey === 'function') {
       window.__cleanupEarlyKey();
@@ -15878,9 +15891,22 @@ OUTPUT FORMAT:
       window.__earlyKeys = [];
       insertTextWithUndo(earlyChars, editorEl);
     }
+    bootInitializing = false;
     if (window.chrome && window.chrome.webview && typeof window.chrome.webview.postMessage === 'function') {
       try { window.chrome.webview.postMessage({ type: '__perf_trace', phase: 'app_ready' }); } catch (_) {}
     }
+    focusEditorAtEnd(false);
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => {
+        focusEditorAtEnd(true);
+        notifyTabOverflow();
+      });
+    }
+    window.addEventListener('focus', () => {
+      if (document.activeElement === document.body && editorEl && !isPreviewMode) {
+        editorEl.focus();
+      }
+    });
 
     // Defer non-critical chrome listeners (resizers, tab dock, draggable panels, cursor aura,
     // hidden modal i18n) until after first paint, editor focus, and early key/voice replay.
@@ -17170,6 +17196,14 @@ OUTPUT FORMAT:
     window.__bootDeferredLoading = true;
     const inject = () => {
       if (window.__bootDeferredLoaded || typeof document === 'undefined' || !document.head) return;
+      const cssUrl = typeof window !== 'undefined' ? window.__bootDeferredCSS : '';
+      if (cssUrl && !window.__bootDeferredCSSLoaded) {
+        window.__bootDeferredCSSLoaded = true;
+        const l = document.createElement('link');
+        l.rel = 'stylesheet';
+        l.href = cssUrl;
+        document.head.appendChild(l);
+      }
       const s = document.createElement('script');
       s.src = url;
       s.async = true;

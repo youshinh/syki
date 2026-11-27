@@ -31,7 +31,7 @@ struct CachedFile {
 struct DirCache {
     last_scan: Instant,
     slow_drive: bool,
-    root_mtime_ns: u128,
+    dir_mtimes: Vec<(PathBuf, u128)>,
     entries: Vec<Arc<CachedFile>>,
 }
 
@@ -47,7 +47,7 @@ pub fn invalidate_search_cache(scrap_dir: &Path) {
     if let Ok(mut map) = search_cache().write() {
         if let Some(dc) = map.get_mut(&resolved) {
             dc.slow_drive = false;
-            dc.root_mtime_ns = 0;
+            dc.dir_mtimes.clear();
         }
     }
 }
@@ -59,6 +59,13 @@ fn dir_mtime_ns(dir: &Path) -> u128 {
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_nanos())
         .unwrap_or(0)
+}
+
+fn all_dir_mtimes_unchanged(dir_mtimes: &[(PathBuf, u128)]) -> bool {
+    !dir_mtimes.is_empty()
+        && dir_mtimes
+            .iter()
+            .all(|(p, prev)| *prev != 0 && dir_mtime_ns(p) == *prev)
 }
 
 fn meta_mtime_len(meta: &std::fs::Metadata) -> (u128, u64) {
@@ -132,7 +139,12 @@ pub struct ScrapFilterOptions {
     pub undated: usize,
 }
 
-fn collect_md_meta_recursive(dir: &Path, out: &mut Vec<(PathBuf, u128, u64)>) {
+fn collect_md_meta_recursive(
+    dir: &Path,
+    out: &mut Vec<(PathBuf, u128, u64)>,
+    dir_mtimes: &mut Vec<(PathBuf, u128)>,
+) {
+    dir_mtimes.push((dir.to_path_buf(), dir_mtime_ns(dir)));
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
@@ -144,7 +156,7 @@ fn collect_md_meta_recursive(dir: &Path, out: &mut Vec<(PathBuf, u128, u64)>) {
         if ft.is_dir() {
             let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if !name.starts_with('.') && name != "node_modules" {
-                collect_md_meta_recursive(&p, out);
+                collect_md_meta_recursive(&p, out, dir_mtimes);
             }
         } else if ft.is_file()
             && p.extension()
@@ -199,17 +211,15 @@ fn build_cached_file(path: PathBuf, mtime_ns: u128, len: u64) -> Option<Arc<Cach
 fn load_cached_entries(scrap_dir: &Path) -> Vec<Arc<CachedFile>> {
     let resolved = ScrapStore::resolve_scrap_dir(scrap_dir);
     let now = Instant::now();
-    let root_mtime = dir_mtime_ns(&resolved);
 
     // Fast path: reuse cached directory snapshot within TTL on slow drives (e.g. Google Drive)
-    // as long as the root directory mtime has not changed.
+    // as long as the root and every tracked subdirectory mtime has not changed.
     let prev_by_path: HashMap<PathBuf, Arc<CachedFile>> = {
         if let Ok(guard) = search_cache().read() {
             if let Some(dc) = guard.get(&resolved) {
                 if dc.slow_drive
                     && now.duration_since(dc.last_scan) < SLOW_SCAN_TTL
-                    && root_mtime != 0
-                    && dc.root_mtime_ns == root_mtime
+                    && all_dir_mtimes_unchanged(&dc.dir_mtimes)
                 {
                     return dc.entries.clone();
                 }
@@ -227,7 +237,8 @@ fn load_cached_entries(scrap_dir: &Path) -> Vec<Arc<CachedFile>> {
 
     let scan_start = Instant::now();
     let mut raw_files = Vec::new();
-    collect_md_meta_recursive(&resolved, &mut raw_files);
+    let mut dir_mtimes = Vec::new();
+    collect_md_meta_recursive(&resolved, &mut raw_files, &mut dir_mtimes);
     let scan_elapsed = scan_start.elapsed();
     // Newest files first (YYYY-MM-DD.md descending).
     raw_files.sort_by(|a, b| b.0.file_name().cmp(&a.0.file_name()));
@@ -288,7 +299,7 @@ fn load_cached_entries(scrap_dir: &Path) -> Vec<Arc<CachedFile>> {
             DirCache {
                 last_scan: Instant::now(),
                 slow_drive: scan_elapsed >= SLOW_SCAN_THRESHOLD,
-                root_mtime_ns: root_mtime,
+                dir_mtimes,
                 entries: entries.clone(),
             },
         );
@@ -591,5 +602,33 @@ mod tests {
         assert!(opts.tags.iter().any(|t| t.tag == "work" && t.files == 2));
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn cache_picks_up_scrap_append_and_subdir_changes_immediately() {
+        let dir = temp_dir("cache_live");
+        std::fs::write(dir.join("2026-11-01.md"), "## [09:00] #init\ninitial line\n").unwrap();
+        let r0 = search_scraps_parallel(&dir, "initial", 10, &ScrapFilter::default());
+        assert_eq!(r0.len(), 1);
+
+        // Append via ScrapStore::append_entry must invalidate cache immediately.
+        let now = chrono::Local::now();
+        ScrapStore::append_entry(&dir, "## [10:00] #fresh\nunique_appended_token\n", now).unwrap();
+        let r1 = search_scraps_parallel(&dir, "unique_appended_token", 10, &ScrapFilter::default());
+        assert_eq!(r1.len(), 1);
+
+        // Subdirectory creation + file add + file delete must be reflected.
+        let sub = dir.join("nested");
+        std::fs::create_dir_all(&sub).unwrap();
+        let sub_file = sub.join("note.md");
+        std::fs::write(&sub_file, "# Nested\nsubdir_secret_word\n").unwrap();
+        let r2 = search_scraps_parallel(&dir, "subdir_secret_word", 10, &ScrapFilter::default());
+        assert_eq!(r2.len(), 1);
+
+        std::fs::remove_file(&sub_file).unwrap();
+        let r3 = search_scraps_parallel(&dir, "subdir_secret_word", 10, &ScrapFilter::default());
+        assert_eq!(r3.len(), 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
