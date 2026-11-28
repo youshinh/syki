@@ -14019,6 +14019,142 @@ OUTPUT FORMAT:
     });
   }
 
+  let ghostInstallReqId = '';
+  let ghostDownloading = false;
+
+  function formatGhostBytes(bytes) {
+    const n = Number(bytes || 0);
+    if (n >= 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+    if (n >= 1024) return (n / 1024).toFixed(0) + ' KB';
+    return n + ' B';
+  }
+
+  function applySykiGhostPreset(persistNow) {
+    const enEl = document.getElementById('cfg-auto-enabled');
+    const urlEl = document.getElementById('cfg-auto-base-url');
+    const modEl = document.getElementById('cfg-auto-model');
+    const keyEl = document.getElementById('cfg-auto-api-key');
+    if (enEl) enEl.checked = true;
+    if (urlEl) urlEl.value = 'syki-ghost://local';
+    if (modEl) modEl.value = 'syki-ghost';
+    if (keyEl) keyEl.value = '';
+    if (!config.autocomplete) config.autocomplete = {};
+    config.autocomplete.enabled = true;
+    config.autocomplete.baseUrl = 'syki-ghost://local';
+    config.autocomplete.model = 'syki-ghost';
+    config.autocomplete.apiKey = '';
+    config.autocomplete.delayMs = 350;
+    config.autocomplete.maxTokens = 24;
+    if (persistNow) {
+      saveConfig();
+      if (typeof refreshStatusAi === 'function') refreshStatusAi();
+    }
+  }
+
+  async function refreshGhostLocalUi() {
+    const statusEl = document.getElementById('ghost-local-status');
+    const installBtn = document.getElementById('btn-ghost-install');
+    const useBtn = document.getElementById('btn-ghost-use');
+    const cancelBtn = document.getElementById('btn-ghost-cancel');
+    const removeBtn = document.getElementById('btn-ghost-remove');
+    const progEl = document.getElementById('ghost-local-progress');
+    if (!statusEl || !window.backend || !window.backend.getGhostStatus) return;
+    try {
+      const st = await window.backend.getGhostStatus();
+      const installed = !!(st && st.installed);
+      const installing = ghostDownloading || !!(st && st.installing);
+      const isActivePreset = !!(config.autocomplete && config.autocomplete.enabled &&
+        String(config.autocomplete.baseUrl || '').toLowerCase().startsWith('syki-ghost://'));
+      if (installBtn) installBtn.hidden = installed || installing;
+      if (useBtn) useBtn.hidden = !installed || installing || isActivePreset;
+      if (cancelBtn) cancelBtn.hidden = !installing;
+      if (removeBtn) removeBtn.hidden = !installed || installing;
+      if (progEl) progEl.hidden = !installing;
+      if (!installing) {
+        if (installed) {
+          const runText = st.running ? `稼働中 (port ${st.port})` : '待機中 (入力時に自動起動 / アイドル時 0MB 休眠)';
+          statusEl.textContent = isActivePreset
+            ? `インストール済み・利用中 — ${runText}`
+            : `インストール済み — ${runText}`;
+        } else {
+          statusEl.textContent = `未インストール（合計約 ${formatGhostBytes(st.totalSize || 212239997)} / SHA-256 検証付き）`;
+        }
+      }
+    } catch (e) {
+      statusEl.textContent = `状態確認エラー: ${e && e.message ? e.message : e}`;
+    }
+  }
+
+  window.__onGhostInstall = function (reqId, stage, state, done, total, message) {
+    if (ghostInstallReqId && reqId && reqId !== ghostInstallReqId) return;
+    const statusEl = document.getElementById('ghost-local-status');
+    const progEl = document.getElementById('ghost-local-progress');
+    if (state === 'progress') {
+      ghostDownloading = true;
+      const pct = total > 0 ? Math.min(100, Math.round((done * 100) / total)) : 0;
+      if (progEl) { progEl.hidden = false; progEl.value = pct; }
+      if (statusEl) {
+        const label = stage === 'runtime' ? 'ランタイム取得中' : 'モデル取得中';
+        statusEl.textContent = `${label} (${pct}% — ${formatGhostBytes(done)} / ${formatGhostBytes(total)})`;
+      }
+      return;
+    }
+    ghostDownloading = false;
+    ghostInstallReqId = '';
+    if (progEl) progEl.hidden = true;
+    if (state === 'done') {
+      applySykiGhostPreset(true);
+      showMessage('syki-ghost のインストールが完了し、入力予測を有効化しました', 3500);
+      refreshGhostLocalUi();
+    } else if (state === 'canceled') {
+      if (statusEl) statusEl.textContent = 'ダウンロードをキャンセルしました';
+      refreshGhostLocalUi();
+    } else {
+      if (statusEl) statusEl.textContent = `インストール失敗: ${message || 'unknown error'}`;
+      refreshGhostLocalUi();
+    }
+  };
+
+  (function bindGhostLocalButtons() {
+    const installBtn = document.getElementById('btn-ghost-install');
+    const useBtn = document.getElementById('btn-ghost-use');
+    const cancelBtn = document.getElementById('btn-ghost-cancel');
+    const removeBtn = document.getElementById('btn-ghost-remove');
+    if (installBtn) {
+      installBtn.onclick = async () => {
+        if (!window.backend || !window.backend.installGhostAsync) return;
+        ghostInstallReqId = 'ghost_' + Date.now();
+        ghostDownloading = true;
+        refreshGhostLocalUi();
+        const statusEl = document.getElementById('ghost-local-status');
+        if (statusEl) statusEl.textContent = 'ダウンロード準備中...';
+        await window.backend.installGhostAsync(ghostInstallReqId);
+      };
+    }
+    if (useBtn) {
+      useBtn.onclick = () => {
+        applySykiGhostPreset(true);
+        showMessage('入力予測を syki-ghost (ローカル) に切り替えました', 2500);
+        refreshGhostLocalUi();
+      };
+    }
+    if (cancelBtn) {
+      cancelBtn.onclick = async () => {
+        if (window.backend && window.backend.cancelGhostInstall) {
+          await window.backend.cancelGhostInstall();
+        }
+      };
+    }
+    if (removeBtn) {
+      removeBtn.onclick = async () => {
+        if (!window.backend || !window.backend.removeGhost) return;
+        await window.backend.removeGhost();
+        showMessage('syki-ghost を削除しました', 2500);
+        refreshGhostLocalUi();
+      };
+    }
+  })();
+
   function openSettings() {
     const ctrl = ensureSettingsModal();
     const scrapDirEl = document.getElementById('cfg-scrap-dir');
@@ -14026,6 +14162,7 @@ OUTPUT FORMAT:
       scrapDirEl.value = (config.scraps && config.scraps.scrapDir) || config.scrap_dir || '~/Documents/syki-sok/scraps';
     }
     if (ctrl) ctrl.open();
+    refreshGhostLocalUi();
   }
 
   function closeSettings() {

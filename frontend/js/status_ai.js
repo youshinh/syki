@@ -46,6 +46,7 @@
   // True for a model server on this computer or the local network: the same rule as LlmError.isLocal (the ask bar's), used
   // only when that module is not loaded.
   function fallbackIsLocal(baseUrl) {
+    if (String(baseUrl == null ? '' : baseUrl).trim().toLowerCase().startsWith('syki-ghost://')) return true;
     const host = hostOf(baseUrl);
     if (!host) return false;
     if (host === 'localhost' || host === '::1' || /\.(local|localhost)$/.test(host)) return true;

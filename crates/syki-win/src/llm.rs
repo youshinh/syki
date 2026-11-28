@@ -239,6 +239,36 @@ fn resolve_openai_chat_url(base: &str) -> String {
     }
 }
 
+fn is_raw_completions_url(base: &str) -> bool {
+    let b = base.trim().trim_end_matches('/').to_ascii_lowercase();
+    (b.ends_with("/completions") && !b.ends_with("/chat/completions"))
+        || b.ends_with("/completion")
+}
+
+fn query_raw_completion_sync(prompt: &str, cfg: &LlmConfig) -> Result<String, String> {
+    let url = cfg.resolved_base_url();
+    let model = cfg.resolved_model();
+    let api_key = cfg.resolved_api_key();
+    let agent = http_agent_with_timeout(Duration::from_secs(15));
+    let body = json!({
+        "model": model,
+        "prompt": prompt,
+        "temperature": cfg.temperature.unwrap_or(0.0),
+        "max_tokens": cfg.max_tokens.unwrap_or(24),
+        "stop": ["\n"]
+    });
+    let mut req = agent.post(&url);
+    if !api_key.is_empty() {
+        req = req.set("Authorization", &format!("Bearer {api_key}"));
+    }
+    let val = send_json_post(req, &body)?;
+    val.pointer("/choices/0/text")
+        .or_else(|| val.get("content"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim_end_matches(['\r', '\n']).to_string())
+        .ok_or_else(|| "Completion response missing choices[0].text".to_string())
+}
+
 fn extract_gemini_text(val: &Value) -> Option<String> {
     let parts = val.pointer("/candidates/0/content/parts")?.as_array()?;
     let mut non_thought = String::new();
@@ -521,18 +551,37 @@ pub fn autocomplete_async(
     prefix: String,
     suffix: String,
     config_json: String,
+    data_dir: PathBuf,
     sender: Option<EventSender>,
 ) {
     std::thread::spawn(move || {
-        let cfg = LlmConfig::from_json_str(&config_json);
+        let mut cfg = LlmConfig::from_json_str(&config_json);
         let tail: String = prefix.chars().rev().take(1200).collect::<Vec<_>>().into_iter().rev().collect();
-        let head: String = suffix.chars().take(400).collect();
-        let prompt = format!(
-            "Continue the markdown text naturally at <CURSOR>. Reply ONLY with the continuation text (no markdown fences, no explanation).\n\n{tail}<CURSOR>{head}"
-        );
-        let (suggestion, error) = match query_llm_sync(&prompt, &cfg) {
-            Ok(text) => (text, String::new()),
-            Err(err) => (String::new(), err),
+        let (suggestion, error) = if crate::ghost::is_managed_ghost_target(&cfg.base_url, &cfg.model) {
+            match crate::ghost::ensure_running_url(&data_dir) {
+                Ok(url) => {
+                    cfg.base_url = url;
+                    match query_raw_completion_sync(&tail, &cfg) {
+                        Ok(text) => (text, String::new()),
+                        Err(err) => (String::new(), err),
+                    }
+                }
+                Err(err) => (String::new(), err),
+            }
+        } else if is_raw_completions_url(&cfg.resolved_base_url()) {
+            match query_raw_completion_sync(&tail, &cfg) {
+                Ok(text) => (text, String::new()),
+                Err(err) => (String::new(), err),
+            }
+        } else {
+            let head: String = suffix.chars().take(400).collect();
+            let prompt = format!(
+                "Continue the markdown text naturally at <CURSOR>. Reply ONLY with the continuation text (no markdown fences, no explanation).\n\n{tail}<CURSOR>{head}"
+            );
+            match query_llm_sync(&prompt, &cfg) {
+                Ok(text) => (text, String::new()),
+                Err(err) => (String::new(), err),
+            }
         };
         if let Some(tx) = sender {
             tx(RpcEvent {
@@ -1595,6 +1644,73 @@ mod tests {
             gem.resolved_base_url(),
             "https://generativelanguage.googleapis.com/v1beta/openai"
         );
+    }
+
+    #[test]
+    fn raw_completions_url_detection() {
+        assert!(is_raw_completions_url("http://127.0.0.1:8082/v1/completions"));
+        assert!(is_raw_completions_url("http://127.0.0.1:8082/v1/completions/"));
+        assert!(is_raw_completions_url("http://127.0.0.1:8082/completion"));
+        assert!(!is_raw_completions_url("http://127.0.0.1:8082/v1/chat/completions"));
+        assert!(!is_raw_completions_url("http://127.0.0.1:8082"));
+        assert!(!is_raw_completions_url("https://generativelanguage.googleapis.com/v1beta"));
+    }
+
+    #[test]
+    fn query_raw_completion_sync_works_against_local_mock() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().unwrap();
+
+        let srv = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+            let mut req_buf = Vec::new();
+            let mut tmp = [0u8; 1024];
+            while let Ok(n) = stream.read(&mut tmp) {
+                if n == 0 {
+                    break;
+                }
+                req_buf.extend_from_slice(&tmp[..n]);
+                if let Some(pos) = req_buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let hdr = String::from_utf8_lossy(&req_buf[..pos]);
+                    let content_len = hdr
+                        .lines()
+                        .find_map(|l| {
+                            let (k, v) = l.split_once(':')?;
+                            if k.trim().eq_ignore_ascii_case("content-length") {
+                                v.trim().parse::<usize>().ok()
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(0);
+                    if req_buf.len() >= pos + 4 + content_len {
+                        break;
+                    }
+                }
+            }
+            let req_text = String::from_utf8_lossy(&req_buf).to_string();
+            assert!(req_text.starts_with("POST /v1/completions "));
+            assert!(req_text.contains(r#""stop":["\n"]"#));
+            assert!(req_text.contains(r#""temperature":0.0"#));
+            assert!(req_text.contains(r#""max_tokens":24"#));
+
+            let body = r#"{"choices":[{"text":"合意を形成する。\n"}]}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(resp.as_bytes()).unwrap();
+            stream.flush().unwrap();
+        });
+
+        let cfg = LlmConfig::from_json_str(&format!(
+            r#"{{"baseUrl":"http://{addr}/v1/completions","model":"syki-ghost-sarashina2.2-1b-q4_k_m.gguf","maxTokens":24}}"#
+        ));
+        let out = query_raw_completion_sync("明日の打ち合わせでは、", &cfg).expect("raw completion");
+        assert_eq!(out, "合意を形成する。");
+        srv.join().unwrap();
     }
 
     #[test]

@@ -481,6 +481,7 @@ fn set_webview_memory_low(wv: &ICoreWebView2, low: bool) {
 }
 
 fn hide_and_suspend_window(hwnd: HWND, state: Option<&WindowState>) {
+    crate::ghost::stop_ghost_server();
     if let Some(state) = state {
         state.canvas.borrow_mut().suspend();
         if let Some(ctrl) = state.controller.borrow().as_ref() {

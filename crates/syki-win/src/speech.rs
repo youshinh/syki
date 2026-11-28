@@ -420,7 +420,7 @@ fn zip_matches_pattern(name: &str, patterns: &[&str]) -> bool {
     })
 }
 
-fn extract_zip_filtered(zip_bytes: &[u8], dest_dir: &Path, patterns: &[&str]) -> Result<(), String> {
+pub(crate) fn extract_zip_filtered(zip_bytes: &[u8], dest_dir: &Path, patterns: &[&str]) -> Result<(), String> {
     use std::io::Read;
     // Locate End of Central Directory (0x06054b50)
     let search_start = zip_bytes.len().saturating_sub(65_557);

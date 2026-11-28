@@ -70,6 +70,11 @@
     'queryDecisionAsync',
     'cancelLLMRequest',
     'autocompleteAsync',
+    'getGhostStatus',
+    'installGhostAsync',
+    'cancelGhostInstall',
+    'removeGhost',
+    'stopGhostServer',
     'queryVisionAsync',
     'generateImageAsync',
     'processDroppedMedia',
@@ -183,6 +188,11 @@
         break;
       case 'autocomplete:result':
         if (typeof win.__onAutocompleteResult === 'function') win.__onAutocompleteResult(p.reqId, p.suggestion, p.error);
+        break;
+      case 'ghost:install':
+        if (typeof win.__onGhostInstall === 'function') {
+          win.__onGhostInstall(p.reqId, p.stage, p.state, p.done, p.total, p.message);
+        }
         break;
       case 'cli:result':
         if (typeof win.__onCliFilterResult === 'function') win.__onCliFilterResult(p.reqId, p.result, p.error);

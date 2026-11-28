@@ -999,8 +999,36 @@ impl CoreState {
                 let prefix = param_str(&req.params, 1, "prefix").unwrap_or_default();
                 let suffix = param_str(&req.params, 2, "suffix").unwrap_or_default();
                 let config_json = param_str(&req.params, 3, "config").unwrap_or_default();
+                let data_dir = self.env.data_dir.clone();
                 let sender = self.event_sender.lock().expect("event_sender mutex").clone();
-                llm::autocomplete_async(req_id, prefix, suffix, config_json, sender);
+                llm::autocomplete_async(req_id, prefix, suffix, config_json, data_dir, sender);
+                RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "getGhostStatus" => {
+                RpcResponse::ok(&req.id, crate::ghost::get_ghost_status(&self.env.data_dir))
+            }
+
+            "installGhostAsync" => {
+                let req_id = param_str(&req.params, 0, "reqId").unwrap_or_default();
+                let data_dir = self.env.data_dir.clone();
+                let sender = self.event_sender.lock().expect("event_sender mutex").clone();
+                crate::ghost::install_ghost_async(data_dir, req_id, sender);
+                RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "cancelGhostInstall" => {
+                crate::ghost::cancel_ghost_install();
+                RpcResponse::ok(&req.id, json!(true))
+            }
+
+            "removeGhost" => match crate::ghost::remove_ghost(&self.env.data_dir) {
+                Ok(()) => RpcResponse::ok(&req.id, json!(true)),
+                Err(e) => RpcResponse::err(&req.id, e),
+            },
+
+            "stopGhostServer" => {
+                crate::ghost::stop_ghost_server();
                 RpcResponse::ok(&req.id, json!(true))
             }
 
