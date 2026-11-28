@@ -245,6 +245,63 @@ fn is_raw_completions_url(base: &str) -> bool {
         || b.ends_with("/completion")
 }
 
+fn sanitize_raw_completion(raw: &str, truncated: bool) -> String {
+    let mut s = raw.trim_end_matches(['\r', '\n']).to_string();
+    if s.is_empty() {
+        return s;
+    }
+
+    // 1. Cut 6+ identical consecutive characters (e.g. "000000", "      ").
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() >= 6 {
+        let mut run = 1usize;
+        for i in 1..chars.len() {
+            if chars[i] == chars[i - 1] {
+                run += 1;
+                if run >= 6 {
+                    let cut = i + 1 - run;
+                    s = chars[..cut].iter().collect();
+                    break;
+                }
+            } else {
+                run = 1;
+            }
+        }
+    }
+
+    // 2. Cut immediate repetition of any 3..=12 char phrase (2+ consecutive occurrences).
+    let chars: Vec<char> = s.chars().collect();
+    'outer: for pat_len in 3..=12 {
+        if chars.len() < pat_len * 2 {
+            continue;
+        }
+        for i in 0..=(chars.len() - pat_len * 2) {
+            if chars[i..i + pat_len] == chars[i + pat_len..i + pat_len * 2] {
+                s = chars[..i + pat_len].iter().collect();
+                break 'outer;
+            }
+        }
+    }
+
+    // 3. When hit max_tokens (truncated), trim back to last natural boundary if reasonably long.
+    if truncated {
+        let trimmed = s.trim_end();
+        let best_end = trimmed
+            .rfind(['。', '！', '？'])
+            .map(|idx| idx + trimmed[idx..].chars().next().map_or(0, char::len_utf8))
+            .or_else(|| {
+                trimmed
+                    .rfind(['、', ',', ' '])
+                    .filter(|&idx| trimmed[..idx].chars().count() >= 4)
+            });
+        if let Some(end) = best_end {
+            s = trimmed[..end].to_string();
+        }
+    }
+
+    s.trim_end_matches(['\r', '\n']).to_string()
+}
+
 fn query_raw_completion_sync(prompt: &str, cfg: &LlmConfig) -> Result<String, String> {
     let url = cfg.resolved_base_url();
     let model = cfg.resolved_model();
@@ -254,6 +311,7 @@ fn query_raw_completion_sync(prompt: &str, cfg: &LlmConfig) -> Result<String, St
         "model": model,
         "prompt": prompt,
         "temperature": cfg.temperature.unwrap_or(0.0),
+        "repeat_penalty": 1.05,
         "max_tokens": cfg.max_tokens.unwrap_or(24),
         "stop": ["\n"]
     });
@@ -262,10 +320,15 @@ fn query_raw_completion_sync(prompt: &str, cfg: &LlmConfig) -> Result<String, St
         req = req.set("Authorization", &format!("Bearer {api_key}"));
     }
     let val = send_json_post(req, &body)?;
+    let truncated = val
+        .pointer("/choices/0/finish_reason")
+        .and_then(|v| v.as_str())
+        .map(|r| r == "length")
+        .unwrap_or(false);
     val.pointer("/choices/0/text")
         .or_else(|| val.get("content"))
         .and_then(|v| v.as_str())
-        .map(|s| s.trim_end_matches(['\r', '\n']).to_string())
+        .map(|s| sanitize_raw_completion(s, truncated))
         .ok_or_else(|| "Completion response missing choices[0].text".to_string())
 }
 
@@ -1654,6 +1717,27 @@ mod tests {
         assert!(!is_raw_completions_url("http://127.0.0.1:8082/v1/chat/completions"));
         assert!(!is_raw_completions_url("http://127.0.0.1:8082"));
         assert!(!is_raw_completions_url("https://generativelanguage.googleapis.com/v1beta"));
+    }
+
+    #[test]
+    fn sanitize_raw_completion_guards_loops_and_truncation() {
+        assert_eq!(sanitize_raw_completion("議論しました。\n", false), "議論しました。");
+        assert_eq!(
+            sanitize_raw_completion("崩す試みは、デザイン・デザイン・デザイン", false),
+            "崩す試みは、デザイン・"
+        );
+        assert_eq!(
+            sanitize_raw_completion("数値は 1000000000000", false),
+            "数値は 1"
+        );
+        assert_eq!(
+            sanitize_raw_completion("テストが通ることを確認する。さらに途中の文章が切", true),
+            "テストが通ることを確認する。"
+        );
+        assert_eq!(
+            sanitize_raw_completion("確認したうえで、次のステップへ進", true),
+            "確認したうえで"
+        );
     }
 
     #[test]

@@ -24,9 +24,9 @@ use crate::rpc_dispatch::EventSender;
 
 pub const GHOST_MODEL_ID: &str = "syki-ghost";
 pub const GHOST_MODEL_VERSION: &str = "v3.1";
-pub const GHOST_MODEL_FILE: &str = "syki-ghost-v3.1.gguf";
+pub const GHOST_MODEL_FILE: &str = "syki-ghost-v3.1-IQ3_XXS.gguf";
 pub const GHOST_MODEL_URL: &str =
-    "https://huggingface.co/youyouyouyou/syki-ghost/resolve/main/syki-ghost-v3.1.gguf";
+    "https://huggingface.co/youyouyouyou/syki-ghost/resolve/main/syki-ghost-v3.1-IQ3_XXS.gguf";
 pub const GHOST_MODEL_SHA256: &str =
     "3b9ffc23b43720b922e1519f5e9ff4a2d8c0f9f697d2cbbda5e11d8e55cb56f7";
 pub const GHOST_MODEL_SIZE: u64 = 186_871_104;
